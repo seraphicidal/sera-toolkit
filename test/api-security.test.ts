@@ -337,3 +337,28 @@ describe('health', () => {
     expect(info.limits.maxFilesizeBytes).toBeGreaterThan(0);
   });
 });
+
+describe('thumbnail proxy', () => {
+  it('accepts a signed token long enough to carry a real CDN URL', async () => {
+    // Fastify's default maxParamLength is 100 characters. A thumbnail token embedding a
+    // platform CDN URL is comfortably longer, and the symptom of getting this wrong is
+    // silent: the UI falls back to a placeholder icon and nothing looks broken.
+    const info = await resolveClip();
+    expect(info.thumbnail).toBeUndefined(); // a bare MP4 has no thumbnail
+
+    const longUrl = `https://cdn.example.com/${'a'.repeat(120)}/thumb.jpg`;
+    const path = engine.resolver.thumbnailPath(longUrl);
+    expect(path.length).toBeGreaterThan(150);
+
+    const response = await app.inject({ method: 'GET', url: path });
+    // The origin does not exist, so the fetch fails — but it must reach the handler
+    // rather than being rejected by the router as an over-long parameter.
+    expect(response.statusCode).not.toBe(414);
+    expect(response.json().error.code).not.toBe('NOT_FOUND');
+  });
+
+  it('refuses a token this server did not sign', async () => {
+    const response = await app.inject({ method: 'GET', url: '/api/thumb/not-a-real-token' });
+    expect(response.statusCode).toBe(410);
+  });
+});

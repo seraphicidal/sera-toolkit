@@ -1,4 +1,29 @@
+import type { ErrorCode } from '@sera/contracts/types';
 import { seraError } from '../errors.js';
+
+/**
+ * The failures that suggest probing rather than ordinary use.
+ *
+ * This distinction is the whole point. A malformed URL, a blocked address or a forged
+ * handle is something a person almost never produces by accident, so it counts. A
+ * private post, a deleted video or a geo-block is a completely normal thing to paste,
+ * and counting those would cool down exactly the users who are trying hardest to use the
+ * service. Everything not listed here is treated as an ordinary outcome.
+ */
+const SUSPICIOUS_CODES: ReadonlySet<ErrorCode> = new Set<ErrorCode>([
+  'INVALID_URL',
+  'BLOCKED_ADDRESS',
+  'UNSUPPORTED_SOURCE',
+  // A handle that does not verify was either tampered with or replayed long after it
+  // expired; neither happens through the interface.
+  'EXPIRED',
+  'NOT_FOUND',
+]);
+
+/** Whether a failure with this code should count toward a cooldown. */
+export function countsAsAbuse(code: ErrorCode): boolean {
+  return SUSPICIOUS_CODES.has(code);
+}
 
 /**
  * A cooldown for clients that keep failing.
@@ -61,8 +86,15 @@ export class AbuseGuard {
     });
   }
 
-  /** Records a failed request, tripping the cooldown once the threshold is crossed. */
-  recordFailure(clientKey: string, now = Date.now()): void {
+  /**
+   * Records a failure, tripping the cooldown once the threshold is crossed.
+   *
+   * Pass the error code so ordinary outcomes — a private post, a deleted video — are
+   * ignored. Omitting it counts the failure unconditionally.
+   */
+  recordFailure(clientKey: string, code?: ErrorCode, now = Date.now()): void {
+    if (code !== undefined && !countsAsAbuse(code)) return;
+
     const existing = this.entries.get(clientKey);
     // A new client, or one whose window has lapsed, starts a fresh count — but the
     // threshold is still checked, so a limit of one failure means exactly that.

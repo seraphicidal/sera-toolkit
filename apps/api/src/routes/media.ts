@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { resolveRequestSchema } from '@sera/contracts';
 import type { SeraEngine } from '@sera/engine';
-import { header, safeFetch, seraError } from '@sera/engine';
+import { header, safeFetch, seraError, SeraError } from '@sera/engine';
 import { clientAbortSignal } from '../plugins/disconnect.js';
 
 /** Thumbnails are small; anything larger is not a preview image. */
@@ -48,8 +48,14 @@ export function registerMediaRoutes(app: FastifyInstance, engine: SeraEngine): v
         engine.abuse.recordSuccess(request.clientKey);
         return await reply.header('cache-control', 'no-store').send(info);
       } catch (error) {
-        // A client giving up mid-probe is not abuse, so it is not counted.
-        if (!signal.aborted) engine.abuse.recordFailure(request.clientKey);
+        // A client giving up mid-probe is not abuse, and neither is a private or
+        // deleted post; only the codes that suggest probing count.
+        if (!signal.aborted) {
+          engine.abuse.recordFailure(
+            request.clientKey,
+            error instanceof SeraError ? error.code : undefined,
+          );
+        }
         throw error;
       }
     },

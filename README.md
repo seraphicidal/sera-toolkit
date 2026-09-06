@@ -67,6 +67,27 @@ Redis — the API hosts its own worker in-process:
 docker compose -f docker-compose.standalone.yml up --build
 ```
 
+### Publicly, from your own machine
+
+For a personal instance with no hosting bill, SERA can run its production build locally
+and expose it over HTTPS through a Cloudflare quick tunnel — no account, no card, and no
+inbound port forwarding:
+
+```bash
+npm run build
+npm run serve:public
+```
+
+It prints a public `https://….trycloudflare.com` URL and writes it to
+`.data/public-url.txt`. The API binds to loopback only, so the tunnel publishes exactly
+one port: the web app, which proxies `/api` internally.
+
+What this shape is and is not: the signing secret is generated once into
+`.env.production.local` and reused, each component is supervised and restarted with a
+backoff if it crashes, and the limits are tuned for a desktop. But a quick tunnel is
+ephemeral — the hostname changes every time it restarts, and the service is only up while
+the machine is. For a stable address, use the Docker stack on a host that stays on.
+
 ### From source
 
 Requires Node 22.12 or newer.

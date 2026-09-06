@@ -88,7 +88,9 @@ export function UrlForm({
           placeholder="Paste a link…"
           value={value}
           onChange={(event) => onChange(event.target.value)}
-          className="min-w-0 flex-1 bg-transparent py-4 text-[0.9375rem] text-[var(--color-ink)] outline-none placeholder:text-[var(--color-ink-faint)] sm:text-base"
+          // 16px is not a style choice: iOS Safari zooms the whole page when a focused input
+          // is smaller, which throws the layout off the moment someone taps the field.
+          className="min-w-0 flex-1 bg-transparent py-4 text-base text-[var(--color-ink)] outline-none placeholder:text-[var(--color-ink-faint)]"
         />
 
         {value && !busy && (

@@ -28,6 +28,11 @@ export async function buildServer(engine: SeraEngine): Promise<FastifyInstance> 
     trustProxy: config.trustProxy,
     // Bodies are a URL and a handful of ids; anything larger is not a real request.
     bodyLimit: 64 * 1024,
+    // Signed handles travel as route parameters and are far longer than the router's
+    // 100-character default, which rejects them with a 414 before any handler runs. A
+    // thumbnail token carrying a long CDN URL is around 150 characters; the ceiling
+    // below covers the largest a 2048-character source URL can produce.
+    routerOptions: { maxParamLength: 4096 },
     // Fastify 6 moves this under logController, which in 5.x requires the whole
     // controller interface rather than this one field. Kept as-is until that upgrade;
     // request logging is done in an onResponse hook so URLs stay out of the log.
