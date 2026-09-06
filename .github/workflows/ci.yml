@@ -1,0 +1,137 @@
+name: CI
+
+# Every push and pull request runs the same gate the deploy job depends on, so a broken
+# commit is caught before it can become a broken production image.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Lint, typecheck, test, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24.18.1'
+          cache: npm
+
+      - name: Install
+        run: npm ci --ignore-scripts
+
+      # FFmpeg is a real dependency of the test suite: the end-to-end tests generate
+      # media with it and read every produced file back with ffprobe.
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          ffmpeg -version | head -n 1
+
+      # yt-dlp is pinned so CI exercises the same extractor as production.
+      - name: Install yt-dlp
+        run: |
+          VERSION=$(node -p "require('./scripts/tools.manifest.json').ytdlp.version")
+          curl -fsSL -o /tmp/yt-dlp \
+            "https://github.com/yt-dlp/yt-dlp/releases/download/${VERSION}/yt-dlp_linux"
+          curl -fsSL -o /tmp/SHA2-256SUMS \
+            "https://github.com/yt-dlp/yt-dlp/releases/download/${VERSION}/SHA2-256SUMS"
+          EXPECTED=$(grep ' yt-dlp_linux$' /tmp/SHA2-256SUMS | cut -d' ' -f1)
+          ACTUAL=$(sha256sum /tmp/yt-dlp | cut -d' ' -f1)
+          test -n "$EXPECTED" && test "$EXPECTED" = "$ACTUAL"
+          sudo install -m 0755 /tmp/yt-dlp /usr/local/bin/yt-dlp
+          yt-dlp --version
+
+      - name: Format
+        run: npm run format
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+  images:
+    name: Build container images
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    # Only after the code gate passes: an image built from failing code is not useful,
+    # and building it anyway would let a red build produce a green-looking artefact.
+    needs: verify
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Built but not pushed. This proves the Dockerfiles work on every commit without
+      # requiring a registry credential to exist.
+      - name: Build API image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/api.Dockerfile
+          push: false
+          load: true
+          tags: sera-api:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build web image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/web.Dockerfile
+          push: false
+          load: true
+          tags: sera-web:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # A container that starts but cannot run its tools is a deployment that fails at
+      # the first download rather than at boot, so both binaries are exercised here.
+      - name: Verify the API image has working media tools
+        run: |
+          docker run --rm --entrypoint yt-dlp sera-api:ci --version
+          docker run --rm --entrypoint ffmpeg sera-api:ci -version | head -n 1
+          docker run --rm --entrypoint ffprobe sera-api:ci -version | head -n 1
+
+      - name: Verify the API image boots and reports health
+        run: |
+          docker run -d --name sera-api-ci \
+            -e NODE_ENV=production \
+            -e SERA_SECRET=ci-smoke-secret-not-used-in-production \
+            -e SERA_QUEUE_DRIVER=memory \
+            -p 4000:4000 sera-api:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:4000/health >/dev/null 2>&1; then break; fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:4000/health | tee /tmp/health.json
+          node -e "
+            const r = require('/tmp/health.json');
+            if (r.status !== 'ok') { console.error('health not ok:', r); process.exit(1); }
+            console.log('health ok, version', r.version);
+          "
+          curl -fsS http://127.0.0.1:4000/ready | tee /dev/null
+          docker logs sera-api-ci | tail -n 20
+          docker rm -f sera-api-ci

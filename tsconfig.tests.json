@@ -1,0 +1,25 @@
+{
+  "$comment": "Type-checks the test files, which the emitting projects exclude so they stay out of dist/.",
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "composite": false,
+    "incremental": false,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "types": ["node"],
+    "paths": {
+      "@sera/contracts": ["./packages/contracts/src/index.ts"],
+      "@sera/contracts/types": ["./packages/contracts/src/types.ts"],
+      "@sera/engine": ["./packages/engine/src/index.ts"]
+    }
+  },
+  "include": [
+    "packages/*/src/**/*.test.ts",
+    "apps/api/src/**/*.test.ts",
+    "apps/worker/src/**/*.test.ts",
+    "test/**/*.ts",
+    "vitest.config.ts"
+  ]
+}

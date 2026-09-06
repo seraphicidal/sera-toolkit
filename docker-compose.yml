@@ -1,0 +1,116 @@
+# SERA.toolkit — production stack.
+#
+# Four services: the web front end, the API, one or more workers, and Redis to connect
+# them. Only the web container publishes a port; it proxies /api internally, so the whole
+# deployment is one origin and the API is never directly reachable from outside.
+#
+#   cp .env.example .env   # then set SERA_SECRET
+#   docker compose up --build
+#
+# For a single-machine install without Redis, see the `standalone` profile at the bottom.
+
+name: sera-toolkit
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
+      args:
+        SERA_API_URL: http://api:4000
+    environment:
+      SERA_API_URL: http://api:4000
+    ports:
+      - '${SERA_WEB_PORT:-3000}:3000'
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    environment:
+      NODE_ENV: production
+      SERA_SECRET: ${SERA_SECRET:?set SERA_SECRET in .env — see .env.example}
+      SERA_QUEUE_DRIVER: redis
+      SERA_REDIS_URL: redis://redis:6379
+      # Workers run in their own containers, so the API only serves HTTP.
+      SERA_EMBEDDED_WORKER: 'false'
+      SERA_DATA_DIR: /data
+      SERA_RETENTION_SECONDS: ${SERA_RETENTION_SECONDS:-1800}
+      SERA_MAX_FILESIZE_BYTES: ${SERA_MAX_FILESIZE_BYTES:-4294967296}
+      SERA_MAX_DURATION_SECONDS: ${SERA_MAX_DURATION_SECONDS:-14400}
+      # The web container is the only thing in front of the API, so its address is the
+      # one X-Forwarded-For that can be trusted.
+      SERA_TRUST_PROXY: 'true'
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - media:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    command: ['node', 'apps/worker/dist/index.js']
+    environment:
+      NODE_ENV: production
+      SERA_SECRET: ${SERA_SECRET:?set SERA_SECRET in .env — see .env.example}
+      SERA_QUEUE_DRIVER: redis
+      SERA_REDIS_URL: redis://redis:6379
+      SERA_DATA_DIR: /data
+      SERA_WORKER_CONCURRENCY: ${SERA_WORKER_CONCURRENCY:-2}
+      SERA_RETENTION_SECONDS: ${SERA_RETENTION_SECONDS:-1800}
+      SERA_MAX_FILESIZE_BYTES: ${SERA_MAX_FILESIZE_BYTES:-4294967296}
+      SERA_MAX_DURATION_SECONDS: ${SERA_MAX_DURATION_SECONDS:-14400}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      # The same volume as the API: the worker writes the file, the API serves it.
+      - media:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    # Scale with `docker compose up --scale worker=4`.
+    deploy:
+      resources:
+        limits:
+          # Transcoding is the one thing here that will happily eat a whole host.
+          cpus: '${SERA_WORKER_CPUS:-2}'
+          memory: ${SERA_WORKER_MEMORY:-2g}
+
+  redis:
+    image: redis:7.4-alpine
+    command: >
+      redis-server
+      --save ''
+      --appendonly no
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  # Deliberately not a bind mount: this holds media that is meant to be deleted, and a
+  # named volume makes `docker compose down -v` actually remove it.
+  media:

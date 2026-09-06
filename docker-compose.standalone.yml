@@ -1,0 +1,62 @@
+# SERA.toolkit — single-container deployment.
+#
+# The same image, without Redis: the API runs its own worker in-process. This is the
+# right shape for a personal or small-team instance, where a queue between two containers
+# is infrastructure without a purpose. Move to docker-compose.yml when downloads need to
+# run on more than one machine.
+#
+#   cp .env.example .env   # then set SERA_SECRET
+#   docker compose -f docker-compose.standalone.yml up --build
+
+name: sera-toolkit-standalone
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
+      args:
+        SERA_API_URL: http://api:4000
+    environment:
+      SERA_API_URL: http://api:4000
+    ports:
+      - '${SERA_WEB_PORT:-3000}:3000'
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    environment:
+      NODE_ENV: production
+      SERA_SECRET: ${SERA_SECRET:?set SERA_SECRET in .env — see .env.example}
+      # In-process queue and worker: no Redis, no second container.
+      SERA_QUEUE_DRIVER: memory
+      SERA_WORKER_CONCURRENCY: ${SERA_WORKER_CONCURRENCY:-2}
+      SERA_DATA_DIR: /data
+      SERA_RETENTION_SECONDS: ${SERA_RETENTION_SECONDS:-1800}
+      SERA_MAX_FILESIZE_BYTES: ${SERA_MAX_FILESIZE_BYTES:-4294967296}
+      SERA_MAX_DURATION_SECONDS: ${SERA_MAX_DURATION_SECONDS:-14400}
+      SERA_TRUST_PROXY: 'true'
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - media:/data
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: '${SERA_WORKER_CPUS:-2}'
+          memory: ${SERA_WORKER_MEMORY:-2g}
+
+volumes:
+  media:

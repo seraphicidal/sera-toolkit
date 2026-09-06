@@ -1,0 +1,10 @@
+{
+  "$comment": "Solution file for the Node packages. apps/web is checked separately by tsconfig.web.json, because Next.js needs noEmit and a DOM lib and so cannot participate in a composite build.",
+  "files": [],
+  "references": [
+    { "path": "./packages/contracts" },
+    { "path": "./packages/engine" },
+    { "path": "./apps/api" },
+    { "path": "./apps/worker" }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "$comment": "Pinned versions of the external tools SERA drives. Bump these deliberately: `npm run update-providers` checks for newer yt-dlp releases and rewrites this file.",
+  "ytdlp": {
+    "version": "2026.08.19",
+    "repo": "yt-dlp/yt-dlp",
+    "checksumAsset": "SHA2-256SUMS",
+    "assets": {
+      "win32-x64": "yt-dlp.exe",
+      "linux-x64": "yt-dlp_linux",
+      "linux-arm64": "yt-dlp_linux_aarch64",
+      "darwin-x64": "yt-dlp_macos",
+      "darwin-arm64": "yt-dlp_macos"
+    }
+  },
+  "ffmpeg": {
+    "version": "n8.1-latest",
+    "repo": "BtbN/FFmpeg-Builds",
+    "release": "latest",
+    "checksumAsset": "checksums.sha256",
+    "assets": {
+      "win32-x64": "ffmpeg-n8.1-latest-win64-gpl-8.1.zip",
+      "linux-x64": "ffmpeg-n8.1-latest-linux64-gpl-8.1.tar.xz",
+      "linux-arm64": "ffmpeg-n8.1-latest-linuxarm64-gpl-8.1.tar.xz"
+    }
+  }
+}

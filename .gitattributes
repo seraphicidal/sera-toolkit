@@ -1,0 +1,12 @@
+# Normalize to LF in the repository. The Dockerfiles and shell scripts in CI are read by
+# Linux tools, where a CRLF line ending is a syntax error rather than a formatting choice.
+* text=auto eol=lf
+
+# Binary assets, never munged.
+*.png binary
+*.jpg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.woff binary
+*.woff2 binary

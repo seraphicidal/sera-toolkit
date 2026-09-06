@@ -1,0 +1,32 @@
+# Everything the build does not need. Keeping this tight is what keeps the build context
+# from including gigabytes of downloaded tool binaries and test media.
+node_modules
+**/node_modules
+dist
+**/dist
+.next
+**/.next
+coverage
+**/coverage
+*.tsbuildinfo
+**/*.tsbuildinfo
+
+.tools
+.data
+tmp
+
+.git
+.github
+.gitignore
+.claude
+
+.env
+.env.*
+!.env.example
+
+*.md
+!README.md
+
+test
+**/*.test.ts
+**/*.test.tsx
