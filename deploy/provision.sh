@@ -41,7 +41,7 @@ log "Installing Docker"
 if ! command -v docker >/dev/null 2>&1; then
   # Docker's own convenience script handles arm64 and both distributions, and pins to the
   # official repository rather than whatever the distro happens to ship.
-  curl -fsSL https://get.docker.com | sh
+  curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 20 https://get.docker.com | sh
 else
   echo "Docker already present: $(docker --version)"
 fi

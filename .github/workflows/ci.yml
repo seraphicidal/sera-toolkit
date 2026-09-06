@@ -46,9 +46,9 @@ jobs:
       - name: Install yt-dlp
         run: |
           VERSION=$(node -p "require('./scripts/tools.manifest.json').ytdlp.version")
-          curl -fsSL -o /tmp/yt-dlp \
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 20 -o /tmp/yt-dlp \
             "https://github.com/yt-dlp/yt-dlp/releases/download/${VERSION}/yt-dlp_linux"
-          curl -fsSL -o /tmp/SHA2-256SUMS \
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 20 -o /tmp/SHA2-256SUMS \
             "https://github.com/yt-dlp/yt-dlp/releases/download/${VERSION}/SHA2-256SUMS"
           EXPECTED=$(grep ' yt-dlp_linux$' /tmp/SHA2-256SUMS | cut -d' ' -f1)
           ACTUAL=$(sha256sum /tmp/yt-dlp | cut -d' ' -f1)

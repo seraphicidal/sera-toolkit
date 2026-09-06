@@ -66,9 +66,9 @@ RUN set -eux; \
         arm64) YTDLP_ASSET=yt-dlp_linux_aarch64 ;; \
         *) echo "unsupported architecture: ${TARGETARCH}" >&2; exit 1 ;; \
     esac; \
-    curl -fsSL -o /usr/local/bin/yt-dlp \
+    curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 20 -o /usr/local/bin/yt-dlp \
         "https://github.com/yt-dlp/yt-dlp/releases/download/${YTDLP_VERSION}/${YTDLP_ASSET}"; \
-    curl -fsSL -o /tmp/SHA2-256SUMS \
+    curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 20 -o /tmp/SHA2-256SUMS \
         "https://github.com/yt-dlp/yt-dlp/releases/download/${YTDLP_VERSION}/SHA2-256SUMS"; \
     EXPECTED="$(grep " ${YTDLP_ASSET}\$" /tmp/SHA2-256SUMS | cut -d' ' -f1)"; \
     ACTUAL="$(sha256sum /usr/local/bin/yt-dlp | cut -d' ' -f1)"; \
