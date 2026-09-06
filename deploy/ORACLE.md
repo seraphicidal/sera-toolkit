@@ -1,69 +1,121 @@
 # Deploying SERA.toolkit on Oracle Cloud (always free)
 
-Oracle's Always Free tier includes an Ampere A1 instance — up to 4 ARM cores and 24 GB of
-RAM — that runs indefinitely at no cost. That is far more than SERA needs, and unlike a
-trial it does not expire.
+Oracle's Always Free tier includes an **Ampere A1** allowance — 4 ARM cores and 24 GB of
+RAM, split across up to four instances — that runs indefinitely at no cost. Unlike a
+trial it does not expire. It is more than enough for SERA.
 
-There are two parts. The first needs a person, because it involves creating an account and
-verifying identity. The second is one command.
+The work splits in two. Part 1 needs a person, because it involves an account, identity
+verification and a console. Part 2 is one command.
 
 ---
 
-## Part 1 — what only you can do
+## Part 1 — the console
 
-### Create the account
+### 1. The account
 
 <https://signup.cloud.oracle.com>
 
 A credit card is required **for identity verification**. Always Free resources are not
-billed against it, and a new account starts in a 30-day trial that drops to Always Free
-when it ends — the instance keeps running. To be certain you are never charged, leave
-"Upgrade to Paid" alone.
+billed against it.
 
-Pick a **home region** close to you. It cannot be changed later, and free ARM capacity
-varies by region.
+Two things worth understanding before you start, because they cause most of the confusion
+later:
 
-### Create the instance
+- A new account begins as a **30-day trial with $300 of credits**. When the trial ends,
+  anything marked _Always Free eligible_ keeps running; everything else is stopped. So
+  the label on the shape matters more than anything else in this guide.
+- **Home region cannot be changed.** Pick one near you, but be aware that free ARM
+  capacity varies a lot by region — see the capacity note below.
 
-**Compute → Instances → Create instance**
+### 2. Create the instance
 
-| Field   | Value                            |
-| ------- | -------------------------------- |
-| Image   | **Ubuntu 22.04** (or 24.04)      |
-| Shape   | **Ampere → VM.Standard.A1.Flex** |
-| OCPUs   | 2 (4 is also free; 2 is plenty)  |
-| Memory  | 12 GB                            |
-| SSH key | **Paste the public key below**   |
+**Menu (☰) → Compute → Instances → Create instance**
+
+Work through it field by field:
+
+| Field           | Value                                                 | Why                                                                                                                                              |
+| --------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Name**        | `sera`                                                | Cosmetic.                                                                                                                                        |
+| **Compartment** | leave as the default (root)                           | Nothing here needs a compartment.                                                                                                                |
+| **Placement**   | leave the suggested availability domain               | You may have to change this if capacity fails — see below.                                                                                       |
+| **Image**       | **Ubuntu 22.04** or **24.04**                         | The provisioning script supports Ubuntu and Oracle Linux; Ubuntu is the better-trodden path. Click _Change image_ — the default is Oracle Linux. |
+| **Shape**       | _Change shape_ → **Ampere** → **VM.Standard.A1.Flex** | This is the free ARM shape.                                                                                                                      |
+| **OCPUs**       | `2`                                                   | The allowance is 4; 2 leaves headroom for a second instance later.                                                                               |
+| **Memory**      | `12` GB                                               | Scales with OCPUs by default.                                                                                                                    |
+
+> **Check for the green "Always Free eligible" label** next to the shape and the boot
+> volume before continuing. If it is absent, you are provisioning something billable. The
+> AMD `VM.Standard.E2.1.Micro` shape is also free but has 1 GB of RAM — far too little for
+> FFmpeg. Use Ampere.
+
+**Networking** — the wizard creates a VCN and subnet for you. Leave the defaults, but
+confirm:
+
+- **Assign a public IPv4 address: yes.** Without it the instance has no route in.
+
+**Add SSH keys** — choose _Paste public keys_ and paste exactly this:
 
 ```
 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHVO2vHhHJ21UF3lOMEDO/wSRpbGK4Y6mTvOZjriBSFG sera-toolkit-oracle
 ```
 
-> That key was generated on your machine; the private half is at `~/.ssh/id_ed25519` and
-> never leaves it.
+The matching private key is at `~/.ssh/id_ed25519` on your machine and never leaves it.
 
-If you get **"Out of host capacity"**, that region has no free ARM available at that
-moment. It is common. Retry later, or try a different availability domain — the shape is
-in genuine demand.
+**Boot volume** — leave the default (about 50 GB). The free allowance is 200 GB of block
+storage in total, and boot volumes count against it.
 
-### Open the network
+Click **Create**. The instance reaches _Running_ in a minute or two.
 
-Oracle's firewall is separate from the instance's own, and both must allow traffic. The
-provisioning script handles the instance side; this side is yours:
+### 3. If you get "Out of host capacity"
 
-**Networking → Virtual Cloud Networks → your VCN → Security Lists → Default Security
-List → Add Ingress Rules**
+This is the single most common obstacle, and it is not something you did wrong — the free
+ARM shape is in genuine demand and regions run dry.
 
-| Source CIDR | Protocol | Destination port |
-| ----------- | -------- | ---------------- |
-| `0.0.0.0/0` | TCP      | `80`             |
-| `0.0.0.0/0` | TCP      | `443`            |
+In rough order of effort:
 
-Leave the existing SSH rule alone.
+1. **Change the availability domain** in _Placement_ and retry. Regions with AD-1, AD-2,
+   AD-3 often differ.
+2. **Retry later.** Capacity is released continuously; off-peak hours for your region
+   tend to be better.
+3. **Ask for less.** 1 OCPU / 6 GB sometimes succeeds where 2 / 12 fails, and SERA still
+   runs on it — just with one worker instead of two.
+4. **Upgrade to Pay As You Go.** This materially improves A1 availability, and Always
+   Free resources remain free on a PAYG account. It does mean a billable account, so only
+   do this if you are comfortable watching the usage.
 
-### Send me the address
+### 4. Open the ports
 
-Copy the instance's **public IP** from the console. That is all I need.
+Oracle has **two** firewalls and both must allow traffic. The provisioning script handles
+the one inside the instance. This one is yours:
+
+**Menu → Networking → Virtual Cloud Networks → your VCN → Subnets → the subnet →
+Security Lists → Default Security List → Add Ingress Rules**
+
+Add two rules:
+
+| Stateless | Source CIDR | IP Protocol | Destination Port Range |
+| --------- | ----------- | ----------- | ---------------------- |
+| unchecked | `0.0.0.0/0` | TCP         | `80`                   |
+| unchecked | `0.0.0.0/0` | TCP         | `443`                  |
+
+Leave the existing SSH rule (port 22) alone.
+
+> If your VCN uses **Network Security Groups** instead of a security list, add the same
+> two rules there. The wizard-created VCN uses a security list.
+
+### 5. Confirm you can reach it
+
+From the instance page, copy the **Public IP address**. Then, on your machine:
+
+```bash
+ssh ubuntu@<public-ip>
+```
+
+The username is `ubuntu` for Ubuntu images and `opc` for Oracle Linux. Accept the host
+fingerprint on first connect. If it hangs, the SSH ingress rule or the public IP is
+missing; if it says _permission denied_, the pasted key did not match.
+
+Type `exit` once you are in — that is all this step needed to prove.
 
 ---
 
@@ -74,24 +126,32 @@ ssh ubuntu@<public-ip>
 curl -fsSL https://raw.githubusercontent.com/seraphicidal/sera-toolkit/main/deploy/provision.sh | sudo bash
 ```
 
-That installs Docker, opens the instance firewall, pulls the prebuilt arm64 images,
-generates a signing secret, and starts the stack behind Caddy with a real Let's Encrypt
-certificate.
+That script:
+
+1. installs Docker from Docker's own repository (the distro package lags),
+2. opens 80 and 443 in the instance's iptables and persists the rules,
+3. clones the repository to `/opt/sera`,
+4. generates a signing secret and writes `/opt/sera/.env` with `chmod 600`,
+5. derives a hostname from the public IP,
+6. pulls the prebuilt **arm64** images and starts the stack,
+7. waits for the API to report healthy.
+
+It is safe to re-run: every step checks before acting.
 
 ### The address you get
 
-Without a domain, the script derives one from the instance IP using
-[sslip.io](https://sslip.io), which resolves `1-2-3-4.sslip.io` to `1.2.3.4` for anyone,
-with no account:
+With no domain, the script uses [sslip.io](https://sslip.io), a public DNS service that
+resolves `1-2-3-4.sslip.io` to `1.2.3.4` for anyone, with no account and no registration.
+Let's Encrypt will issue for that name, so:
 
 ```
 https://<your-ip-with-dashes>.sslip.io
 ```
 
-That is a genuine certificate on a genuine hostname — not a self-signed warning.
+is a real certificate on a real hostname — no browser warning.
 
-To use your own domain instead, point an A record at the instance and set `SERA_DOMAIN`
-in `/opt/sera/.env` before starting.
+To use your own domain instead, point an `A` record at the instance, then set
+`SERA_DOMAIN` in `/opt/sera/.env` and re-run `docker compose … up -d`.
 
 ---
 
@@ -99,24 +159,39 @@ in `/opt/sera/.env` before starting.
 
 ```bash
 cd /opt/sera
-docker compose -f deploy/docker-compose.oracle.yml ps
-docker compose -f deploy/docker-compose.oracle.yml logs -f worker
+COMPOSE="docker compose -f deploy/docker-compose.oracle.yml"
 
-# update to the latest published images
-docker compose -f deploy/docker-compose.oracle.yml pull
-docker compose -f deploy/docker-compose.oracle.yml up -d
+$COMPOSE ps                  # what is running
+$COMPOSE logs -f worker      # follow a download
+$COMPOSE logs caddy          # certificate problems live here
+$COMPOSE pull && $COMPOSE up -d   # update to the latest images
 ```
 
-The stack restarts itself on reboot and after a crash: every service is
-`restart: unless-stopped`, and Docker starts at boot.
+Everything is `restart: unless-stopped` and Docker starts at boot, so the stack survives
+reboots and crashes without intervention.
+
+### Troubleshooting
+
+| Symptom                              | Cause                                                                                                  |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| Site never answers, SSH works        | The **security list** ingress rules are missing. This is by far the most common.                       |
+| Browser certificate warning          | Caddy has not finished issuing. Give it a minute, then check `$COMPOSE logs caddy`.                    |
+| `no such host` for the sslip.io name | The IP in the hostname is wrong — check `/opt/sera/.env`.                                              |
+| Downloads fail immediately           | `$COMPOSE logs worker`. If the extractor is at fault, `npm run update-providers` upstream and re-pull. |
 
 ### Staying inside the free tier
 
-The Always Free allowance that matters here is **10 TB of outbound transfer per month**,
-which is generous but not unlimited — every download a visitor makes counts against it.
-The defaults in `.env` cap file size at 2 GB and retention at 30 minutes. If you publish
-the URL widely, lower `SERA_MAX_FILESIZE_BYTES` and
-`SERA_MAX_CONCURRENT_JOBS_PER_CLIENT` rather than discovering the ceiling from a bill.
+The limit that matters here is **10 TB of outbound transfer per month** — generous, but
+every download a visitor makes counts against it. The defaults cap file size at 2 GB and
+delete media after 30 minutes.
 
-Block storage is capped at 200 GB free; SERA uses a fraction of that and deletes media on
-a timer, so the practical limit is transfer, not disk.
+If you share the URL widely, lower these in `/opt/sera/.env` rather than discovering the
+ceiling from a bill:
+
+```bash
+SERA_MAX_FILESIZE_BYTES=524288000        # 500 MB
+SERA_MAX_CONCURRENT_JOBS_PER_CLIENT=1
+SERA_RATE_LIMIT_JOBS_PER_MINUTE=4
+```
+
+Then `$COMPOSE up -d` to apply.
