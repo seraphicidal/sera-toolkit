@@ -45,7 +45,13 @@ FROM node:24.18.1-bookworm-slim AS runtime
 # Pinned deliberately. `npm run update-providers` bumps this together with the manifest
 # the local toolchain uses, so a deployment and a workstation run the same extractor.
 ARG YTDLP_VERSION=2026.08.19
-ARG TARGETARCH=amd64
+
+# Declared with no default on purpose. BuildKit fills TARGETARCH in for the platform
+# being built, but giving it a default of `amd64` meant the arm64 build silently kept
+# that default and installed the x86 yt-dlp — an image that builds cleanly and then
+# cannot execute its own extractor. Left empty, a missing value hits the `*)` branch
+# below and fails loudly instead.
+ARG TARGETARCH
 
 ENV NODE_ENV=production \
     SERA_DATA_DIR=/data \
