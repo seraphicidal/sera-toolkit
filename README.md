@@ -67,6 +67,52 @@ Redis — the API hosts its own worker in-process:
 docker compose -f docker-compose.standalone.yml up --build
 ```
 
+### Can GitHub host it?
+
+Partly — it depends which GitHub product:
+
+|                        | Can it run SERA?                                                                                                                        |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| **Pages**              | No. Static files only. SERA needs a Node server for the `/api` proxy, and a backend that can execute yt-dlp and FFmpeg.                 |
+| **Actions**            | No. Runners are ephemeral, have no inbound networking, and using them as a hosting service is against GitHub's Acceptable Use Policies. |
+| **Codespaces**         | **Yes.** A real Linux container with Docker, and a forwarded port can be made public over HTTPS.                                        |
+| **Container registry** | For the images, yes — CI publishes them to `ghcr.io` (see below).                                                                       |
+
+#### Codespaces
+
+Open the repo → **Code → Codespaces → Create codespace on main**. The devcontainer
+installs FFmpeg, fetches the pinned yt-dlp and builds the workspace. Then:
+
+```bash
+npm run serve:local
+```
+
+Codespaces forwards port 3200 and gives you an `https://<name>-3200.app.github.dev`
+URL. If it prompts for a login, set the port to **Public** in the Ports panel.
+
+To run the full four-service stack with Redis instead — Docker is available in the
+container:
+
+```bash
+cp .env.example .env && echo "SERA_SECRET=$(openssl rand -hex 32)" >> .env
+docker compose up --build
+```
+
+Honest limits: a Codespace **suspends after inactivity** (30 minutes by default) and
+consumes your monthly Codespaces allowance while running, so this is a good demo or
+personal instance, not an always-on service. Check your usage under
+_Settings → Billing_ before leaving one running.
+
+#### Prebuilt images
+
+Every push to `main` publishes both images to GitHub's registry, so deploying
+anywhere is a pull rather than a build:
+
+```bash
+docker pull ghcr.io/seraphicidal/sera-api:latest
+docker pull ghcr.io/seraphicidal/sera-web:latest
+```
+
 ### Publicly, from your own machine
 
 For a personal instance with no hosting bill, SERA can run its production build locally

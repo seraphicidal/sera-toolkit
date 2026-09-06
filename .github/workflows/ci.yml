@@ -15,6 +15,7 @@ concurrency:
 
 permissions:
   contents: read
+  packages: write
 
 jobs:
   verify:
@@ -83,16 +84,29 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
-      # Built but not pushed. This proves the Dockerfiles work on every commit without
-      # requiring a registry credential to exist.
+      # Pushed only from main. A pull request still builds and boots the images, so a
+      # broken Dockerfile is caught, but a branch can never publish a tag.
+      - name: Log in to GitHub Container Registry
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Loaded locally so the verification steps below can run the image, and pushed on
+      # main so any host can deploy it without building from source.
       - name: Build API image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: docker/api.Dockerfile
-          push: false
           load: true
-          tags: sera-api:ci
+          push: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+          tags: |
+            sera-api:ci
+            ghcr.io/${{ github.repository_owner }}/sera-api:latest
+            ghcr.io/${{ github.repository_owner }}/sera-api:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -101,9 +115,12 @@ jobs:
         with:
           context: .
           file: docker/web.Dockerfile
-          push: false
           load: true
-          tags: sera-web:ci
+          push: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+          tags: |
+            sera-web:ci
+            ghcr.io/${{ github.repository_owner }}/sera-web:latest
+            ghcr.io/${{ github.repository_owner }}/sera-web:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
