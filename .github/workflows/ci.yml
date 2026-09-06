@@ -79,6 +79,13 @@ jobs:
     # and building it anyway would let a red build produce a green-looking artefact.
     needs: verify
 
+    env:
+      # Registry-qualified even when only building locally. An unqualified tag like
+      # `sera-api:ci` resolves to Docker Hub, and `push: true` then tries to publish
+      # it there and fails on auth.
+      IMAGE_API: ghcr.io/${{ github.repository_owner }}/sera-api
+      IMAGE_WEB: ghcr.io/${{ github.repository_owner }}/sera-web
+
     steps:
       - uses: actions/checkout@v5
 
@@ -104,9 +111,8 @@ jobs:
           load: true
           push: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
           tags: |
-            sera-api:ci
-            ghcr.io/${{ github.repository_owner }}/sera-api:latest
-            ghcr.io/${{ github.repository_owner }}/sera-api:${{ github.sha }}
+            ${{ env.IMAGE_API }}:latest
+            ${{ env.IMAGE_API }}:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -118,9 +124,8 @@ jobs:
           load: true
           push: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
           tags: |
-            sera-web:ci
-            ghcr.io/${{ github.repository_owner }}/sera-web:latest
-            ghcr.io/${{ github.repository_owner }}/sera-web:${{ github.sha }}
+            ${{ env.IMAGE_WEB }}:latest
+            ${{ env.IMAGE_WEB }}:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -128,9 +133,9 @@ jobs:
       # the first download rather than at boot, so both binaries are exercised here.
       - name: Verify the API image has working media tools
         run: |
-          docker run --rm --entrypoint yt-dlp sera-api:ci --version
-          docker run --rm --entrypoint ffmpeg sera-api:ci -version | head -n 1
-          docker run --rm --entrypoint ffprobe sera-api:ci -version | head -n 1
+          docker run --rm --entrypoint yt-dlp "$IMAGE_API:latest" --version
+          docker run --rm --entrypoint ffmpeg "$IMAGE_API:latest" -version | head -n 1
+          docker run --rm --entrypoint ffprobe "$IMAGE_API:latest" -version | head -n 1
 
       - name: Verify the API image boots and reports health
         run: |
@@ -138,7 +143,7 @@ jobs:
             -e NODE_ENV=production \
             -e SERA_SECRET=ci-smoke-secret-not-used-in-production \
             -e SERA_QUEUE_DRIVER=memory \
-            -p 4000:4000 sera-api:ci
+            -p 4000:4000 "$IMAGE_API:latest"
           for i in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:4000/health >/dev/null 2>&1; then break; fi
             sleep 2
