@@ -74,7 +74,8 @@ jobs:
   images:
     name: Build container images
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # The arm64 half is emulated, so it is slower than a native build by a wide margin.
+    timeout-minutes: 60
     # Only after the code gate passes: an image built from failing code is not useful,
     # and building it anyway would let a red build produce a green-looking artefact.
     needs: verify
@@ -85,57 +86,49 @@ jobs:
       # it there and fails on auth.
       IMAGE_API: ghcr.io/${{ github.repository_owner }}/sera-api
       IMAGE_WEB: ghcr.io/${{ github.repository_owner }}/sera-web
+      PUSH: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
 
     steps:
       - uses: actions/checkout@v5
 
+      # arm64 matters specifically: Oracle Cloud's always-free tier is Ampere, and an
+      # amd64-only image simply will not start there.
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
       - uses: docker/setup-buildx-action@v3
 
-      # Pushed only from main. A pull request still builds and boots the images, so a
-      # broken Dockerfile is caught, but a branch can never publish a tag.
       - name: Log in to GitHub Container Registry
-        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        if: env.PUSH == 'true'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Loaded locally so the verification steps below can run the image, and pushed on
-      # main so any host can deploy it without building from source.
-      - name: Build API image
+      # Built for this runner's architecture and loaded, so the steps below can actually
+      # execute it. `load` cannot accept a multi-platform build, which is why publishing
+      # is a separate step rather than one build doing both.
+      - name: Build API image (amd64, for verification)
         uses: docker/build-push-action@v6
         with:
           context: .
           file: docker/api.Dockerfile
+          platforms: linux/amd64
           load: true
-          push: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
-          tags: |
-            ${{ env.IMAGE_API }}:latest
-            ${{ env.IMAGE_API }}:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Build web image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: docker/web.Dockerfile
-          load: true
-          push: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
-          tags: |
-            ${{ env.IMAGE_WEB }}:latest
-            ${{ env.IMAGE_WEB }}:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          push: false
+          tags: ${{ env.IMAGE_API }}:verify
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
 
       # A container that starts but cannot run its tools is a deployment that fails at
       # the first download rather than at boot, so both binaries are exercised here.
       - name: Verify the API image has working media tools
         run: |
-          docker run --rm --entrypoint yt-dlp "$IMAGE_API:latest" --version
-          docker run --rm --entrypoint ffmpeg "$IMAGE_API:latest" -version | head -n 1
-          docker run --rm --entrypoint ffprobe "$IMAGE_API:latest" -version | head -n 1
+          docker run --rm --entrypoint yt-dlp "$IMAGE_API:verify" --version
+          docker run --rm --entrypoint ffmpeg "$IMAGE_API:verify" -version | head -n 1
+          docker run --rm --entrypoint ffprobe "$IMAGE_API:verify" -version | head -n 1
 
       - name: Verify the API image boots and reports health
         run: |
@@ -143,7 +136,7 @@ jobs:
             -e NODE_ENV=production \
             -e SERA_SECRET=ci-smoke-secret-not-used-in-production \
             -e SERA_QUEUE_DRIVER=memory \
-            -p 4000:4000 "$IMAGE_API:latest"
+            -p 4000:4000 "$IMAGE_API:verify"
           for i in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:4000/health >/dev/null 2>&1; then break; fi
             sleep 2
@@ -154,6 +147,58 @@ jobs:
             if (r.status !== 'ok') { console.error('health not ok:', r); process.exit(1); }
             console.log('health ok, version', r.version);
           "
-          curl -fsS http://127.0.0.1:4000/ready | tee /dev/null
+          curl -fsS http://127.0.0.1:4000/ready > /dev/null
           docker logs sera-api-ci | tail -n 20
           docker rm -f sera-api-ci
+
+      - name: Build web image (amd64, build check)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/web.Dockerfile
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ${{ env.IMAGE_WEB }}:verify
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web
+
+      # Published for both architectures once the amd64 build has proved itself.
+      - name: Publish API image
+        if: env.PUSH == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/api.Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.IMAGE_API }}:latest
+            ${{ env.IMAGE_API }}:${{ github.sha }}
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
+
+      - name: Publish web image
+        if: env.PUSH == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/web.Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.IMAGE_WEB }}:latest
+            ${{ env.IMAGE_WEB }}:${{ github.sha }}
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web
+
+      - name: Confirm both architectures were published
+        if: env.PUSH == 'true'
+        run: |
+          for image in "$IMAGE_API" "$IMAGE_WEB"; do
+            echo "== $image"
+            docker buildx imagetools inspect "$image:latest" \
+              | grep -E "Platform|Name:" | head -n 8
+            docker buildx imagetools inspect "$image:latest" | grep -q "linux/arm64" \
+              || { echo "arm64 missing from $image"; exit 1; }
+          done

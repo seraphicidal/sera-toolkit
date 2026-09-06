@@ -67,6 +67,24 @@ Redis — the API hosts its own worker in-process:
 docker compose -f docker-compose.standalone.yml up --build
 ```
 
+### Always-on, free: Oracle Cloud
+
+Oracle's Always Free tier includes an Ampere ARM instance that runs indefinitely at
+no cost, which is the cheapest way to keep SERA up without leaving a machine on. The
+images are published for arm64, so the server needs no build toolchain:
+
+```bash
+ssh ubuntu@<public-ip>
+curl -fsSL https://raw.githubusercontent.com/seraphicidal/sera-toolkit/main/deploy/provision.sh | sudo bash
+```
+
+That installs Docker, opens the instance firewall, pulls the images, generates a signing
+secret and starts the stack behind Caddy with a real Let's Encrypt certificate. With no
+domain it derives one from the instance IP via [sslip.io](https://sslip.io), so you get
+proper HTTPS without buying anything.
+
+Full walkthrough, including the console steps: **[deploy/ORACLE.md](./deploy/ORACLE.md)**.
+
 ### Can GitHub host it?
 
 Partly — it depends which GitHub product:

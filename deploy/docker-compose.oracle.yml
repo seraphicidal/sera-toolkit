@@ -1,0 +1,138 @@
+# SERA.toolkit — public deployment behind Caddy.
+#
+# Written for Oracle Cloud's always-free Ampere instance, but nothing here is
+# Oracle-specific: it is the standard stack with TLS termination in front, and it runs on
+# any host with Docker. The images are pulled from GitHub's registry for both amd64 and
+# arm64, so no build toolchain is needed on the server.
+#
+#   cd /opt/sera && docker compose -f deploy/docker-compose.oracle.yml up -d
+#
+# Required in .env: SERA_SECRET, SERA_DOMAIN.
+
+name: sera
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp'
+    environment:
+      SERA_DOMAIN: ${SERA_DOMAIN:?set SERA_DOMAIN, e.g. 1-2-3-4.sslip.io}
+      SERA_TLS_EMAIL: ${SERA_TLS_EMAIL:-}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificates survive restarts. Without this, every `up` re-requests from Let's
+      # Encrypt and a few restarts in a row hit the rate limit.
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - web
+    security_opt:
+      - no-new-privileges:true
+
+  web:
+    image: ${SERA_IMAGE_WEB:-ghcr.io/seraphicidal/sera-web:latest}
+    restart: unless-stopped
+    environment:
+      SERA_API_URL: http://api:4000
+    # No published port: Caddy reaches it over the compose network. The only thing
+    # listening on a public interface is Caddy.
+    expose:
+      - '3000'
+    depends_on:
+      api:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+
+  api:
+    image: ${SERA_IMAGE_API:-ghcr.io/seraphicidal/sera-api:latest}
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      SERA_SECRET: ${SERA_SECRET:?set SERA_SECRET — see .env.example}
+      SERA_QUEUE_DRIVER: redis
+      SERA_REDIS_URL: redis://redis:6379
+      # Workers run in their own containers, so the API only serves HTTP.
+      SERA_EMBEDDED_WORKER: 'false'
+      SERA_DATA_DIR: /data
+      SERA_RETENTION_SECONDS: ${SERA_RETENTION_SECONDS:-1800}
+      SERA_MAX_FILESIZE_BYTES: ${SERA_MAX_FILESIZE_BYTES:-2147483648}
+      SERA_MAX_DURATION_SECONDS: ${SERA_MAX_DURATION_SECONDS:-10800}
+      SERA_MAX_ITEMS_PER_JOB: ${SERA_MAX_ITEMS_PER_JOB:-25}
+      SERA_RATE_LIMIT_RESOLVE_PER_MINUTE: ${SERA_RATE_LIMIT_RESOLVE_PER_MINUTE:-20}
+      SERA_RATE_LIMIT_JOBS_PER_MINUTE: ${SERA_RATE_LIMIT_JOBS_PER_MINUTE:-8}
+      SERA_MAX_CONCURRENT_JOBS_PER_CLIENT: ${SERA_MAX_CONCURRENT_JOBS_PER_CLIENT:-2}
+      # Caddy and the Next proxy sit in front, so the forwarded address is the real one.
+      SERA_TRUST_PROXY: 'true'
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    expose:
+      - '4000'
+    volumes:
+      - media:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+
+  worker:
+    image: ${SERA_IMAGE_API:-ghcr.io/seraphicidal/sera-api:latest}
+    restart: unless-stopped
+    command: ['node', 'apps/worker/dist/index.js']
+    environment:
+      NODE_ENV: production
+      SERA_SECRET: ${SERA_SECRET:?set SERA_SECRET — see .env.example}
+      SERA_QUEUE_DRIVER: redis
+      SERA_REDIS_URL: redis://redis:6379
+      SERA_DATA_DIR: /data
+      SERA_WORKER_CONCURRENCY: ${SERA_WORKER_CONCURRENCY:-2}
+      SERA_RETENTION_SECONDS: ${SERA_RETENTION_SECONDS:-1800}
+      SERA_MAX_FILESIZE_BYTES: ${SERA_MAX_FILESIZE_BYTES:-2147483648}
+      SERA_MAX_DURATION_SECONDS: ${SERA_MAX_DURATION_SECONDS:-10800}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      # The same volume as the API: the worker writes the file, the API serves it.
+      - media:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          # Transcoding will otherwise take the whole machine, and on a shared-tenancy
+          # free instance that gets noticed.
+          cpus: '${SERA_WORKER_CPUS:-2}'
+          memory: ${SERA_WORKER_MEMORY:-3g}
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: >
+      redis-server
+      --save ''
+      --appendonly no
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  # Named, not a bind mount: this holds media meant to be deleted, and a named volume is
+  # actually removed by `docker compose down -v`.
+  media:
+  caddy_data:
+  caddy_config:

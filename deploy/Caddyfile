@@ -1,0 +1,46 @@
+# TLS termination for a public SERA deployment.
+#
+# Caddy obtains and renews a real Let's Encrypt certificate on its own. SERA_DOMAIN can be
+# a domain you own, or — if you have only a bare IP — an sslip.io name, which resolves
+# any `1-2-3-4.sslip.io` to 1.2.3.4 with no account and no registration. That is enough
+# for Let's Encrypt to issue, so a public HTTPS deployment needs no domain purchase.
+
+{
+	# Where expiry and renewal-failure notices go. Optional, but a certificate that
+	# silently stops renewing is a site that silently goes down in 90 days.
+	email {$SERA_TLS_EMAIL:admin@example.com}
+}
+
+{$SERA_DOMAIN} {
+	encode zstd gzip
+
+	# Everything goes to the Next server, which proxies /api to the API container. One
+	# origin, so the browser never makes a cross-site request and the app's own CSP can
+	# forbid outbound connections entirely.
+	reverse_proxy web:3000 {
+		# Media downloads are long-lived responses; the defaults would cut them off.
+		transport http {
+			read_timeout 30m
+			write_timeout 30m
+		}
+		# SSE progress must not be buffered, or the bar sits still until the job ends.
+		flush_interval -1
+	}
+
+	header {
+		Strict-Transport-Security "max-age=63072000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		X-Frame-Options "DENY"
+		# Caddy announces itself by default; there is no reason to tell anyone.
+		-Server
+	}
+
+	log {
+		output stdout
+		format console
+		# Bodies and query strings can carry the URL someone pasted, so only the method,
+		# path and status are recorded.
+		level INFO
+	}
+}
