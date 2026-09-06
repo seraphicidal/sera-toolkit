@@ -33,15 +33,15 @@ later:
 
 Work through it field by field:
 
-| Field           | Value                                                 | Why                                                                                                                                              |
-| --------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Name**        | `sera`                                                | Cosmetic.                                                                                                                                        |
-| **Compartment** | leave as the default (root)                           | Nothing here needs a compartment.                                                                                                                |
-| **Placement**   | leave the suggested availability domain               | You may have to change this if capacity fails — see below.                                                                                       |
-| **Image**       | **Ubuntu 22.04** or **24.04**                         | The provisioning script supports Ubuntu and Oracle Linux; Ubuntu is the better-trodden path. Click _Change image_ — the default is Oracle Linux. |
-| **Shape**       | _Change shape_ → **Ampere** → **VM.Standard.A1.Flex** | This is the free ARM shape.                                                                                                                      |
-| **OCPUs**       | `2`                                                   | The allowance is 4; 2 leaves headroom for a second instance later.                                                                               |
-| **Memory**      | `12` GB                                               | Scales with OCPUs by default.                                                                                                                    |
+| Field           | Value                                                 | Why                                                                                                                                                        |
+| --------------- | ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Name**        | `sera`                                                | Cosmetic.                                                                                                                                                  |
+| **Compartment** | leave as the default (root)                           | Nothing here needs a compartment.                                                                                                                          |
+| **Placement**   | leave the suggested availability domain               | You may have to change this if capacity fails — see below.                                                                                                 |
+| **Image**       | **Ubuntu 22.04** or **24.04**                         | Click _Change image_ — the default is Oracle Linux. Both work, but Ubuntu is the tested path; on Oracle Linux your SSH user is `opc` rather than `ubuntu`. |
+| **Shape**       | _Change shape_ → **Ampere** → **VM.Standard.A1.Flex** | This is the free ARM shape.                                                                                                                                |
+| **OCPUs**       | `2`                                                   | The allowance is 4; 2 leaves headroom for a second instance later.                                                                                         |
+| **Memory**      | `12` GB                                               | Scales with OCPUs by default.                                                                                                                              |
 
 > **Check for the green "Always Free eligible" label** next to the shape and the boot
 > volume before continuing. If it is absent, you are provisioning something billable. The
@@ -51,7 +51,16 @@ Work through it field by field:
 **Networking** — the wizard creates a VCN and subnet for you. Leave the defaults, but
 confirm:
 
-- **Assign a public IPv4 address: yes.** Without it the instance has no route in.
+- **Assign a public IPv4 address: yes.** Without it the instance has no route in — no SSH
+  and no website.
+
+> The wizard-created VCN is worth using rather than letting the instance form create one
+> inline. An inline subnet does not come out public, so the public-IP option stays greyed
+> out, and even when it can be forced the subnet has no Internet Gateway. Create the VCN
+> first (Networking → Virtual Cloud Networks → **Start VCN Wizard** → _Create VCN with
+> Internet Connectivity_), then choose **Select existing** for both the network and the
+> subnet here. On the review page confirm it reads , not
+> .
 
 **Add SSH keys** — choose _Paste public keys_ and paste exactly this:
 
