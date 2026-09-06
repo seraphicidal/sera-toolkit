@@ -12,6 +12,7 @@ name: sera-toolkit-standalone
 
 services:
   web:
+    image: ${SERA_IMAGE_WEB:-ghcr.io/seraphicidal/sera-web:latest}
     build:
       context: .
       dockerfile: docker/web.Dockerfile
@@ -32,6 +33,7 @@ services:
       - no-new-privileges:true
 
   api:
+    image: ${SERA_IMAGE_API:-ghcr.io/seraphicidal/sera-api:latest}
     build:
       context: .
       dockerfile: docker/api.Dockerfile

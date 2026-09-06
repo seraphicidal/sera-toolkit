@@ -109,9 +109,14 @@ Every push to `main` publishes both images to GitHub's registry, so deploying
 anywhere is a pull rather than a build:
 
 ```bash
-docker pull ghcr.io/seraphicidal/sera-api:latest
-docker pull ghcr.io/seraphicidal/sera-web:latest
+# Deploy without building anything:
+cp .env.example .env   # then set SERA_SECRET
+docker compose pull
+docker compose up -d
 ```
+
+The compose files name those images, so `docker compose pull` fetches the CI-built ones
+and `docker compose up --build` still builds from source when you have changed something.
 
 ### Publicly, from your own machine
 
