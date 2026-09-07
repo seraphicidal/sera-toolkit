@@ -183,6 +183,60 @@ the configuration changes it, and SERA deliberately ships no way around it — s
 
 ---
 
+## Sources that need configuring
+
+Three settings in `/opt/sera/.env` change what this deployment can reach. All three are
+optional and everything else works without them.
+
+| Setting                                | What it enables                                                           |
+| -------------------------------------- | ------------------------------------------------------------------------- |
+| `SERA_REDDIT_CLIENT_ID` / `_SECRET`    | Reddit. Without it Reddit says it needs credentials and refuses politely. |
+| `SERA_YOUTUBE_POT_PROVIDER_URL`        | yt-dlp's PO Token Provider. Does not lift this host's YouTube block.      |
+| `SERA_YOUTUBE_FALLBACK_URL` / `_TOKEN` | An authorized residential extraction backend for YouTube.                 |
+
+### Reddit
+
+Reddit answers `403 Blocked` to anonymous requests from hosted address ranges — both the
+page and its `.json` endpoint — which is its documented position for servers, not
+something to route around. Give it an application-only OAuth client and it works:
+
+1. Sign in at <https://www.reddit.com/prefs/apps> and **create another app**.
+2. Choose **script**, name it, and put anything valid in the redirect URI (it is unused
+   by the client-credentials grant).
+3. The id sits under the app name; the secret is labelled **secret**.
+4. Put both in `/opt/sera/.env`, then `sudo sera up -d`:
+
+```bash
+SERA_REDDIT_CLIENT_ID=your-app-id
+SERA_REDDIT_CLIENT_SECRET=your-app-secret
+```
+
+The token is fetched on demand, cached in memory, renewed a minute before it expires, and
+never written anywhere. It reads public listings and nothing else.
+
+> Measured from this host: `i.redd.it` serves it, so images and galleries download.
+> `v.redd.it` and `preview.redd.it` answer 403 to it whatever the user agent, so hosted
+> video will resolve and then fail at the download step. Credentials fix the API, not the
+> media CDN.
+
+### The YouTube PO Token Provider
+
+yt-dlp's [PO-Token-Guide](https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide) describes
+a provider plugin that supplies proof-of-origin tokens for the clients that need them. It
+ships here as an opt-in compose profile:
+
+```bash
+echo 'SERA_YOUTUBE_POT_PROVIDER_URL=http://potoken:4416' | sudo tee -a /opt/sera/.env
+sudo docker compose --project-directory /opt/sera --env-file /opt/sera/.env   -f /opt/sera/deploy/docker-compose.oracle.yml --profile potoken up -d
+```
+
+It is off by default because it was measured here and does not help: the provider loads,
+the extractor is offered tokens, and YouTube still answers `LOGIN_REQUIRED` on the
+_player_ request for every player client. PO tokens address 403s on the stream, not the
+reputation of the address asking. A host with a clean address still wants this.
+
+---
+
 ## Afterwards
 
 Provisioning installs `sera`, a wrapper around `docker compose` that points at this
