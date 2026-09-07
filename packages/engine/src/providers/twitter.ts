@@ -62,9 +62,12 @@ export class TwitterProvider extends YtdlpProvider {
 
   override async resolve(url: URL, context: ProviderContext): Promise<ResolvedMedia> {
     const tweet = await this.readTweet(url, context).catch(() => undefined);
-    const media = tweet?.mediaDetails?.filter((entry) => nonEmpty(entry?.media_url_https)) ?? [];
+    // A quote post carries its own media if it has any, and otherwise the media belongs
+    // to the post being quoted — which is what someone pasting the link is after.
+    const source = usableMedia(tweet).length ? tweet : (tweet?.quoted_tweet ?? tweet);
+    const media = usableMedia(source);
 
-    if (media.length) return this.fromEmbed(url, tweet!, media, context);
+    if (media.length) return this.fromEmbed(url, source!, media, context);
 
     // No media the embed endpoint would show — either the post has none, or it would not
     // answer. The extractor gets the last word, including on why.
@@ -161,6 +164,12 @@ interface SyndicatedTweet {
   readonly text?: string;
   readonly user?: { readonly name?: string; readonly screen_name?: string };
   readonly mediaDetails?: readonly TweetMedia[];
+  readonly quoted_tweet?: SyndicatedTweet;
+}
+
+/** Attachments the embed payload lists with a URL worth trying. */
+function usableMedia(tweet: SyndicatedTweet | undefined): readonly TweetMedia[] {
+  return tweet?.mediaDetails?.filter((entry) => nonEmpty(entry?.media_url_https)) ?? [];
 }
 
 /** `/vid/avc1/1280x720/abc.mp4` — X puts the rendition's size in the path. */

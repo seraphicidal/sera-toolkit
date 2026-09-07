@@ -169,6 +169,21 @@ describe('TwitterProvider', () => {
     expect(error?.message).toBe('That post has no media to download.');
   });
 
+  it('takes the media from the post a quote is quoting', async () => {
+    // Someone pasting a quote post wants the picture in it, which belongs to the post
+    // underneath rather than to the share.
+    const quote = {
+      id_str: '9',
+      text: 'look at this',
+      user: { name: 'Someone' },
+      mediaDetails: [],
+      quoted_tweet: photoTweet,
+    };
+    const media = await provider.resolve(url, contextWith({ json: quote }));
+    expect(media.items).toHaveLength(2);
+    expect(media.items[0]?.kind).toBe('image');
+  });
+
   it('canonicalizes the mirror front-ends and the photo permalink', () => {
     expect(provider.normalize(new URL('https://fxtwitter.com/a/status/5/photo/1')).toString()).toBe(
       'https://x.com/a/status/5',
