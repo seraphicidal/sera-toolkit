@@ -114,6 +114,27 @@ export abstract class YtdlpProvider implements MediaProvider {
       if (item) items.push(item);
     });
 
+    // The tuning that produced this format list has to produce the download too.
+    //
+    // These were reaching the probe and stopping there: a provider could ask for the
+    // player clients that expose 1080p, list them for the visitor, and then fetch with
+    // whatever the extractor defaults to — a different client, a different format list,
+    // and for YouTube a different answer about whether the request is allowed at all.
+    // The args travel with the plan so both halves of a job agree.
+    const args = this.extractorArgs(url, context);
+    if (args.length) {
+      for (const [index, item] of items.entries()) {
+        items[index] = {
+          ...item,
+          plans: item.plans.map((plan) =>
+            plan.fetch.via === 'ytdlp'
+              ? { ...plan, fetch: { ...plan.fetch, extractorArgs: args } }
+              : plan,
+          ),
+        };
+      }
+    }
+
     if (!items.length) {
       throw seraError('MEDIA_UNAVAILABLE', {
         message: 'No downloadable media was found at that link.',

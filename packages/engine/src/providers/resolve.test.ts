@@ -465,3 +465,38 @@ describe('failure handling', () => {
     ).rejects.toMatchObject({ code: 'PRIVATE_CONTENT' });
   });
 });
+
+/* -------------------------------------------------------------------------- */
+
+describe('extractor tuning reaches the download', () => {
+  it("puts a provider's extractor args on the plans it builds", async () => {
+    // These were reaching the probe and stopping there: a provider could ask for the
+    // player clients that expose 1080p, list them, and then fetch with whatever the
+    // extractor defaults to. Both halves of a job have to agree.
+    const media = await new YouTubeProvider().resolve(
+      new URL('https://www.youtube.com/watch?v=dQw4w9WgXcQ'),
+      contextFor(youtubeInfo),
+    );
+
+    const ytdlpPlans = media.items[0]!.plans.filter((plan) => plan.fetch.via === 'ytdlp');
+    expect(ytdlpPlans.length).toBeGreaterThan(0);
+    for (const plan of ytdlpPlans) {
+      expect(plan.fetch.via === 'ytdlp' && plan.fetch.extractorArgs).toContain(
+        'youtube:player_client=tv,default,web_safari',
+      );
+    }
+  });
+
+  it('leaves plans alone for a provider that declares none', async () => {
+    // The aliasing this replaced emptied the item list entirely when a provider had no
+    // args, which is most of them.
+    const media = await new TwitterProvider().resolve(
+      new URL('https://x.com/someone/status/1'),
+      contextFor(youtubeInfo),
+    );
+    expect(media.items.length).toBeGreaterThan(0);
+    for (const plan of media.items[0]!.plans) {
+      if (plan.fetch.via === 'ytdlp') expect(plan.fetch.extractorArgs).toBeUndefined();
+    }
+  });
+});
