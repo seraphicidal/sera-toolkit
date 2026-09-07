@@ -85,6 +85,23 @@ const envSchema = z.object({
    * see the YouTube backend notes — but it is the supported architecture and is what a
    * host with a clean address needs for the web clients.
    */
+  /**
+   * Player clients to ask yt-dlp for, comma-separated. Empty lets it choose.
+   *
+   * Empty is the right default and was measured, not assumed. Audited against the
+   * current extractor on 8 September 2026, one client at a time, on a 4K video:
+   *
+   *   residential   default 53 formats to 2160p · android 5 formats to 360p ·
+   *                 web, web_safari, web_embedded, mweb, tv_simply, ios all error
+   *                 with "Requested format is not available" · tv errors with
+   *                 "The page needs to be reloaded"
+   *   datacentre    every one of them, including default, answers the bot challenge
+   *
+   * So no client strategy reaches YouTube from a server, and none beats letting the
+   * extractor pick from a connection that works. The override exists to tune a
+   * deployment when that changes, not to be set on a guess.
+   */
+  SERA_YOUTUBE_PLAYER_CLIENTS: z.string().default(''),
   SERA_YOUTUBE_POT_PROVIDER_URL: z.string().default(''),
 
   /**
@@ -192,6 +209,7 @@ export interface EngineConfig {
   };
 
   readonly youtube: {
+    readonly playerClients: string;
     readonly potProviderUrl: string;
   };
 
@@ -339,6 +357,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): EngineConfig {
     },
 
     youtube: {
+      playerClients: e.SERA_YOUTUBE_PLAYER_CLIENTS.trim(),
       potProviderUrl: e.SERA_YOUTUBE_POT_PROVIDER_URL.replace(/\/+$/, ''),
     },
 

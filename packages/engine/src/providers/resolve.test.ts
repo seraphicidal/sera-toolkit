@@ -473,17 +473,34 @@ describe('extractor tuning reaches the download', () => {
     // These were reaching the probe and stopping there: a provider could ask for the
     // player clients that expose 1080p, list them, and then fetch with whatever the
     // extractor defaults to. Both halves of a job have to agree.
+    const tuned: ProviderContext = {
+      ...contextFor(youtubeInfo),
+      config: { ...config, youtube: { ...config.youtube, playerClients: 'tv,default' } },
+    };
     const media = await new YouTubeProvider().resolve(
       new URL('https://www.youtube.com/watch?v=dQw4w9WgXcQ'),
-      contextFor(youtubeInfo),
+      tuned,
     );
 
     const ytdlpPlans = media.items[0]!.plans.filter((plan) => plan.fetch.via === 'ytdlp');
     expect(ytdlpPlans.length).toBeGreaterThan(0);
     for (const plan of ytdlpPlans) {
-      expect(plan.fetch.via === 'ytdlp' && plan.fetch.extractorArgs).toContain(
-        'youtube:player_client=tv,default,web_safari',
-      );
+      const args = plan.fetch.via === 'ytdlp' ? plan.fetch.extractorArgs : undefined;
+      expect(args).toContain('youtube:player_client=tv,default');
+    }
+  });
+
+  it('asks for no player client unless the operator configures one', async () => {
+    // The audit behind SERA_YOUTUBE_PLAYER_CLIENTS measured every client the extractor
+    // offers, from both a datacentre and a residential address. No override beat letting
+    // yt-dlp choose, so the default asks for nothing rather than pinning a list that
+    // would rot the next time YouTube changes which clients answer.
+    const media = await new YouTubeProvider().resolve(
+      new URL('https://www.youtube.com/watch?v=dQw4w9WgXcQ'),
+      contextFor(youtubeInfo),
+    );
+    for (const plan of media.items[0]!.plans) {
+      if (plan.fetch.via === 'ytdlp') expect(plan.fetch.extractorArgs).toBeUndefined();
     }
   });
 
