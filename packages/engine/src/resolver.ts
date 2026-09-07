@@ -123,17 +123,37 @@ export class MediaResolver {
     const started = Date.now();
 
     let resolved: ResolvedMedia;
+    let used = provider;
     try {
-      resolved = await this.resolveCanonical(canonical, provider.id, signal);
-      this.registry.markHealthy(provider.id);
+      try {
+        resolved = await this.resolveCanonical(canonical, provider.id, signal);
+      } catch (error) {
+        // A path ending in .gif is not proof of a GIF: wikis and image hosts give
+        // file-description *pages* that extension and serve HTML. The direct provider
+        // claims the URL on its shape and can only find out by asking, so when it reports
+        // that the link is not a file, the page reader gets the same try it would have had
+        // if the extension had never been there. No new surface: an extensionless URL for
+        // the same page already reaches the generic provider.
+        const generic = this.registry.get('generic');
+        if (
+          provider.id !== 'direct' ||
+          !generic ||
+          SeraError.from(error).code !== 'UNSUPPORTED_SOURCE'
+        ) {
+          throw error;
+        }
+        resolved = await this.resolveCanonical(canonical, generic.id, signal);
+        used = generic;
+      }
+      this.registry.markHealthy(used.id);
     } catch (error) {
       const seraErr = SeraError.from(error);
       if (seraErr.code === 'PROVIDER_UNAVAILABLE') {
-        this.registry.markDegraded(provider.id, seraErr.detail ?? seraErr.message);
+        this.registry.markDegraded(used.id, seraErr.detail ?? seraErr.message);
       }
       this.logger.info(
         {
-          provider: provider.id,
+          provider: used.id,
           source: logSafeUrl(canonical),
           durationMs: Date.now() - started,
           errorCode: seraErr.code,
@@ -146,7 +166,7 @@ export class MediaResolver {
 
     this.logger.info(
       {
-        provider: provider.id,
+        provider: used.id,
         source: logSafeUrl(canonical),
         durationMs: Date.now() - started,
         items: resolved.items.length,

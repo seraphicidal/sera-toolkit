@@ -164,7 +164,11 @@ const VIDEO_EXTS = new Set(['mp4', 'm4v', 'mov', 'webm', 'mkv', 'avi', 'flv', 't
  * treating it as one produces a download of a 404 page.
  */
 export function classify(contentType: string, extension: string): MediaKind {
-  if (contentType === 'image/gif' || extension === 'gif') return 'gif';
+  // The extension only decides when the server said nothing, exactly as below. Without
+  // that guard a file-description page — commons.wikimedia.org/wiki/File:x.gif, served as
+  // text/html — was classified as a GIF, and the pipeline handed the visitor 150 KB of
+  // markup named .gif.
+  if (contentType === 'image/gif' || (!contentType && extension === 'gif')) return 'gif';
   if (contentType.startsWith('image/') || (!contentType && IMAGE_EXTS.has(extension)))
     return 'image';
   if (contentType.startsWith('video/') || (!contentType && VIDEO_EXTS.has(extension)))
