@@ -73,3 +73,16 @@ export function truncate(text: string, max: number): string {
   const lastSpace = cut.lastIndexOf(' ');
   return `${(lastSpace > max * 0.6 ? cut.slice(0, lastSpace) : cut).trimEnd()}…`;
 }
+
+/**
+ * Treats a blank string as absent.
+ *
+ * Platform metadata is full of fields that are present but empty — a display name nobody
+ * set, an alt text left blank — and `??` keeps those, producing a title that is a
+ * zero-width nothing. This makes the intent explicit at the call site.
+ */
+export function nonEmpty(value: string | undefined | null): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  return trimmed;
+}
