@@ -38,6 +38,19 @@ Adding another is one file and one registry line. See [Providers](#providers).
 
 #### Where you host it changes what works
 
+Measured against the live deployment on 7 September 2026, so this is what it does rather
+than what it aspires to:
+
+| Source                                                   | From a datacentre                                          |
+| -------------------------------------------------------- | ---------------------------------------------------------- |
+| X / Twitter                                              | Photos, video, GIFs and mixed posts — all of it            |
+| Bluesky, Mastodon                                        | Photos and video, every item in a post                     |
+| SoundCloud, direct files, pages that declare their media | Yes                                                        |
+| Instagram Reels                                          | Yes                                                        |
+| Instagram photo posts                                    | Needs an account nobody can get for someone else's post    |
+| Reddit                                                   | Needs a Reddit app; images then work, `v.redd.it` does not |
+| YouTube                                                  | Blocked on address reputation, from every cloud            |
+
 This is worth knowing before you pick a host, because it is not a bug you can fix in the
 code.
 
