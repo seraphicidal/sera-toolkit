@@ -59,8 +59,9 @@ confirm:
 > out, and even when it can be forced the subnet has no Internet Gateway. Create the VCN
 > first (Networking → Virtual Cloud Networks → **Start VCN Wizard** → _Create VCN with
 > Internet Connectivity_), then choose **Select existing** for both the network and the
-> subnet here. On the review page confirm it reads , not
-> .
+> subnet here. On the review page the Networking section should name the subnet you
+> picked (`Public Subnet-<your-vcn>`) and read **Public IPv4 address: Yes**. If it says
+> **Create new virtual cloud network**, the selection did not take.
 
 **Add SSH keys** — choose _Paste public keys_ and paste exactly this:
 
@@ -168,7 +169,7 @@ To use your own domain instead, point an `A` record at the instance, then set
 
 ```bash
 cd /opt/sera
-COMPOSE="docker compose -f deploy/docker-compose.oracle.yml"
+COMPOSE="sudo docker compose --env-file .env -f deploy/docker-compose.oracle.yml"
 
 $COMPOSE ps                  # what is running
 $COMPOSE logs -f worker      # follow a download

@@ -19,6 +19,11 @@ REPO="${SERA_REPO:-https://github.com/seraphicidal/sera-toolkit.git}"
 INSTALL_DIR="${SERA_DIR:-/opt/sera}"
 COMPOSE_FILE="deploy/docker-compose.oracle.yml"
 
+# Compose looks for .env beside the compose file, i.e. deploy/.env, which is not where
+# provisioning writes it. Naming the file explicitly is what makes every later
+# `docker compose` run from /opt/sera work instead of failing on interpolation.
+COMPOSE=(docker compose --env-file .env -f "$COMPOSE_FILE")
+
 log() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 warn() { printf '\033[1;33m !  %s\033[0m\n' "$*"; }
 die() { printf '\033[1;31m !! %s\033[0m\n' "$*" >&2; exit 1; }
@@ -154,14 +159,14 @@ set -a; . ./.env; set +a
 # ---------------------------------------------------------------------------
 
 log "Pulling images"
-docker compose -f "$COMPOSE_FILE" pull
+"${COMPOSE[@]}" pull
 
 log "Starting the stack"
-docker compose -f "$COMPOSE_FILE" up -d --remove-orphans
+"${COMPOSE[@]}" up -d --remove-orphans
 
 log "Waiting for the API to report healthy"
 for _ in $(seq 1 60); do
-  if docker compose -f "$COMPOSE_FILE" exec -T api \
+  if "${COMPOSE[@]}" exec -T api \
       node -e "fetch('http://127.0.0.1:4000/health').then(r=>r.json()).then(j=>process.exit(j.status==='ok'?0:1)).catch(()=>process.exit(1))" \
       >/dev/null 2>&1; then
     break
@@ -169,7 +174,7 @@ for _ in $(seq 1 60); do
   sleep 3
 done
 
-docker compose -f "$COMPOSE_FILE" ps
+"${COMPOSE[@]}" ps
 
 cat <<EOF
 
@@ -183,13 +188,19 @@ cat <<EOF
     1. Check the cloud firewall. On Oracle this is separate from the instance firewall:
        Networking > Virtual Cloud Networks > your VCN > Security Lists > add ingress
        rules for TCP 80 and 443 from 0.0.0.0/0.
-    2. docker compose -f ${COMPOSE_FILE} logs caddy
-    3. docker compose -f ${COMPOSE_FILE} logs api
+    2. sudo docker compose --env-file .env -f ${COMPOSE_FILE} logs caddy
+    3. sudo docker compose --env-file .env -f ${COMPOSE_FILE} logs api
 
   Useful afterwards:
 
-    docker compose -f ${COMPOSE_FILE} ps
-    docker compose -f ${COMPOSE_FILE} logs -f worker
-    docker compose -f ${COMPOSE_FILE} pull && docker compose -f ${COMPOSE_FILE} up -d   # update
+    cd /opt/sera
+    sudo docker compose --env-file .env -f ${COMPOSE_FILE} ps
+    sudo docker compose --env-file .env -f ${COMPOSE_FILE} logs -f worker
+
+  To update:
+
+    cd /opt/sera && sudo git pull
+    sudo docker compose --env-file .env -f ${COMPOSE_FILE} pull
+    sudo docker compose --env-file .env -f ${COMPOSE_FILE} up -d
 
 EOF
