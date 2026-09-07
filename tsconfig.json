@@ -5,6 +5,7 @@
     { "path": "./packages/contracts" },
     { "path": "./packages/engine" },
     { "path": "./apps/api" },
-    { "path": "./apps/worker" }
+    { "path": "./apps/worker" },
+    { "path": "./apps/extractor" }
   ]
 }

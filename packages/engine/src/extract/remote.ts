@@ -43,11 +43,25 @@ interface Waiter {
 
 interface Pending {
   readonly task: RemoteTask;
-  readonly settle: (outcome: { media?: ResolvedMedia; error?: SeraError }) => void;
+  readonly settle: (outcome: {
+    media?: ResolvedMedia;
+    files?: readonly RemoteFile[];
+    error?: SeraError;
+  }) => void;
+  /** Files uploaded so far for a `job` task, in the order the node sent them. */
+  readonly files: RemoteFile[];
   readonly onProgress?: (progress: RemoteProgress) => void;
   readonly timer: NodeJS.Timeout;
   cancelled: boolean;
   claimedAt?: number;
+}
+
+/** What a completed `job` task produces: files already written to shared storage. */
+export interface RemoteFile {
+  readonly name: string;
+  readonly mimeType: string;
+  /** Absolute path under the data directory, written by the upload endpoint. */
+  readonly path: string;
 }
 
 export interface NodeStatus {
@@ -153,6 +167,28 @@ export class ExtractionNodeRegistry {
     return true;
   }
 
+  /** Records one uploaded file. Order is preserved, which a carousel depends on. */
+  acceptFile(taskId: string, file: RemoteFile): boolean {
+    const pending = this.pending.get(taskId);
+    if (!pending) return false;
+    pending.files.push(file);
+    return true;
+  }
+
+  /** Settles a `job` task with everything the node uploaded for it. */
+  completeJob(taskId: string): boolean {
+    const pending = this.pending.get(taskId);
+    if (!pending) return false;
+    if (!pending.files.length) {
+      pending.settle({
+        error: seraError('MEDIA_UNAVAILABLE', { detail: 'remote: node uploaded no files' }),
+      });
+      return true;
+    }
+    pending.settle({ files: [...pending.files] });
+    return true;
+  }
+
   fail(taskId: string, error: SeraError): boolean {
     const pending = this.pending.get(taskId);
     if (!pending) return false;
@@ -190,55 +226,90 @@ export class ExtractionNodeRegistry {
     return [...this.nodes.values()].some((node) => now - node.seen < this.staleAfterMs);
   }
 
-  /** Queues a task and waits for a node to answer it. */
+  /** Queues a resolve and waits for a node to answer it. */
   dispatch(
     task: Omit<RemoteTask, 'id' | 'createdAt'>,
     options: { onProgress?: (progress: RemoteProgress) => void; signal?: AbortSignal } = {},
   ): Promise<ResolvedMedia> {
+    return this.enqueue(task, options).then((outcome) => {
+      if (!outcome.media) {
+        throw seraError('PROVIDER_UNAVAILABLE', { detail: 'remote: node returned no media' });
+      }
+      return outcome.media;
+    });
+  }
+
+  /** Queues a download and waits for the files the node uploads for it. */
+  dispatchJob(
+    task: Omit<RemoteTask, 'id' | 'createdAt'>,
+    options: { onProgress?: (progress: RemoteProgress) => void; signal?: AbortSignal } = {},
+  ): Promise<readonly RemoteFile[]> {
+    return this.enqueue({ ...task, kind: 'job' }, options).then((outcome) => {
+      if (!outcome.files?.length) {
+        throw seraError('MEDIA_UNAVAILABLE', { detail: 'remote: node produced no files' });
+      }
+      return outcome.files;
+    });
+  }
+
+  private enqueue(
+    task: Omit<RemoteTask, 'id' | 'createdAt'>,
+    options: { onProgress?: (progress: RemoteProgress) => void; signal?: AbortSignal } = {},
+  ): Promise<{ media?: ResolvedMedia; files?: readonly RemoteFile[] }> {
     const full: RemoteTask = { ...task, id: randomUUID().replace(/-/g, ''), createdAt: Date.now() };
 
-    return new Promise<ResolvedMedia>((resolve, reject) => {
-      const finish = (outcome: { media?: ResolvedMedia; error?: SeraError }): void => {
-        const pending = this.pending.get(full.id);
-        if (!pending) return;
-        clearTimeout(pending.timer);
-        this.pending.delete(full.id);
-        if (outcome.media) resolve(outcome.media);
-        else
-          reject(
-            outcome.error ?? seraError('PROVIDER_UNAVAILABLE', { detail: 'remote: no result' }),
-          );
-      };
+    return new Promise<{ media?: ResolvedMedia; files?: readonly RemoteFile[] }>(
+      (resolve, reject) => {
+        const finish = (outcome: {
+          media?: ResolvedMedia;
+          files?: readonly RemoteFile[];
+          error?: SeraError;
+        }): void => {
+          const pending = this.pending.get(full.id);
+          if (!pending) return;
+          clearTimeout(pending.timer);
+          this.pending.delete(full.id);
+          if (outcome.error) {
+            reject(outcome.error);
+            return;
+          }
+          resolve({
+            ...(outcome.media ? { media: outcome.media } : {}),
+            ...(outcome.files ? { files: outcome.files } : {}),
+          });
+        };
 
-      const timer = setTimeout(() => {
-        finish({
-          error: seraError('TIMEOUT', {
-            detail: `remote: no node answered within ${Math.round(this.taskTimeoutMs / 1000)}s`,
-          }),
+        const timer = setTimeout(() => {
+          finish({
+            error: seraError('TIMEOUT', {
+              detail: `remote: no node answered within ${Math.round(this.taskTimeoutMs / 1000)}s`,
+            }),
+          });
+        }, this.taskTimeoutMs);
+        timer.unref();
+
+        const pending: Pending = {
+          task: full,
+          settle: finish,
+          ...(options.onProgress ? { onProgress: options.onProgress } : {}),
+          files: [],
+          timer,
+          cancelled: false,
+        };
+        this.pending.set(full.id, pending);
+
+        options.signal?.addEventListener('abort', () => {
+          pending.cancelled = true;
+          // Remove it if no node has taken it yet; a node that has will see the flag.
+          const queued = this.queue.indexOf(full);
+          if (queued !== -1) this.queue.splice(queued, 1);
+          finish({ error: seraError('CANCELLED') });
         });
-      }, this.taskTimeoutMs);
-      timer.unref();
 
-      const pending: Pending = {
-        task: full,
-        settle: finish,
-        ...(options.onProgress ? { onProgress: options.onProgress } : {}),
-        timer,
-        cancelled: false,
-      };
-      this.pending.set(full.id, pending);
-
-      options.signal?.addEventListener('abort', () => {
-        pending.cancelled = true;
-        // Remove it if no node has taken it yet; a node that has will see the flag.
-        const queued = this.queue.indexOf(full);
-        if (queued !== -1) this.queue.splice(queued, 1);
-        finish({ error: seraError('CANCELLED') });
-      });
-
-      this.queue.push(full);
-      this.wakeOne();
-    });
+        this.queue.push(full);
+        this.wakeOne();
+      },
+    );
   }
 
   private wakeOne(): void {

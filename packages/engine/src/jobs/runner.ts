@@ -11,6 +11,7 @@ import type { DownloadPlan, ResolvedItem, ResolvedMedia } from '../providers/typ
 import { planKey } from '../providers/types.js';
 import { contradicts, sniffContainer, SNIFF_BYTES } from '../util/sniff.js';
 import type { MediaResolver } from '../resolver.js';
+import type { ExtractionNodeRegistry } from '../extract/remote.js';
 import { mimeTypeFor, type Workspace, type WorkspaceManager } from '../storage/workspace.js';
 import { dedupeFilename, mediaFilename, sanitizeStem } from '../util/filename.js';
 import { createZip } from './zip.js';
@@ -57,6 +58,14 @@ export interface JobRunnerDependencies {
   readonly logger: Logger;
   readonly resolver: MediaResolver;
   readonly workspaces: WorkspaceManager;
+  /**
+   * Extraction nodes on other networks.
+   *
+   * Only consulted for a resolution that came from one. A media URL signed for one
+   * address is refused from another, so a job whose plans were made elsewhere has to be
+   * carried out elsewhere too.
+   */
+  readonly remote?: ExtractionNodeRegistry;
 }
 
 /** Share of a single file's progress attributed to the download, versus conversion. */
@@ -90,46 +99,89 @@ export class JobRunner {
     const produced: { path: string; name: string }[] = [];
     const taken = new Set<string>();
 
-    for (const [index, { item, plan }] of matched.entries()) {
-      if (signal?.aborted) throw seraError('CANCELLED');
-
-      const fileProgress = (fraction: number, extra: Partial<JobProgress> = {}): JobProgress => ({
-        percent: Math.min(99, ((index + Math.min(fraction, 1)) / totalFiles) * 100),
-        ...(totalFiles > 1 ? { currentFile: index + 1, totalFiles } : {}),
-        ...extra,
-      });
-
-      const downloaded = await this.fetchOne({
-        workspace,
-        resolved,
-        item,
-        plan,
-        index,
-        report,
-        fileProgress,
-        ...(signal ? { signal } : {}),
-      });
-
-      const converted = plan.convert
-        ? await this.convertOne({
-            input: downloaded,
-            spec: plan.convert,
-            workspace,
-            index,
-            report,
-            fileProgress,
-            ...(item.duration !== undefined ? { durationSeconds: item.duration } : {}),
-            ...(signal ? { signal } : {}),
-          })
-        : downloaded;
-
-      const name = dedupeFilename(
-        this.nameFor(spec, resolved, item, plan, converted, totalFiles),
-        taken,
+    // A resolution the local network could not produce cannot be downloaded here
+    // either: YouTube binds a media URL to the address that asked for it. The node that
+    // resolved this owns the whole job.
+    const remoteBackend = resolved.metadata?.extractionBackend;
+    if (remoteBackend && this.deps.remote) {
+      report({ state: 'downloading', step: 'Downloading', progress: { percent: 0 } });
+      const files = await this.deps.remote.dispatchJob(
+        {
+          kind: 'job',
+          url: spec.url,
+          providerId: spec.provider,
+          planKeys: matched.map(({ plan }) => planKey(plan)),
+          ...(spec.filename ? { filename: spec.filename } : {}),
+        },
+        {
+          onProgress: (progress) =>
+            report({
+              state: 'downloading',
+              step: progress.step,
+              // Capped below 100 so the terminal states remain the runner's to set.
+              progress: { percent: Math.min(99, progress.percent) },
+            }),
+          ...(signal ? { signal } : {}),
+        },
       );
-      const destination = workspace.outputPath(name);
-      await rename(converted, destination);
-      produced.push({ path: destination, name });
+
+      for (const file of files) {
+        const destination = workspace.outputPath(file.name);
+        await rename(file.path, destination);
+        produced.push({ path: destination, name: file.name });
+      }
+
+      logger.info(
+        {
+          jobId: spec.jobId,
+          provider: spec.provider,
+          extractionBackend: remoteBackend,
+          files: produced.length,
+        },
+        'job completed on a remote extraction backend',
+      );
+    } else {
+      for (const [index, { item, plan }] of matched.entries()) {
+        if (signal?.aborted) throw seraError('CANCELLED');
+
+        const fileProgress = (fraction: number, extra: Partial<JobProgress> = {}): JobProgress => ({
+          percent: Math.min(99, ((index + Math.min(fraction, 1)) / totalFiles) * 100),
+          ...(totalFiles > 1 ? { currentFile: index + 1, totalFiles } : {}),
+          ...extra,
+        });
+
+        const downloaded = await this.fetchOne({
+          workspace,
+          resolved,
+          item,
+          plan,
+          index,
+          report,
+          fileProgress,
+          ...(signal ? { signal } : {}),
+        });
+
+        const converted = plan.convert
+          ? await this.convertOne({
+              input: downloaded,
+              spec: plan.convert,
+              workspace,
+              index,
+              report,
+              fileProgress,
+              ...(item.duration !== undefined ? { durationSeconds: item.duration } : {}),
+              ...(signal ? { signal } : {}),
+            })
+          : downloaded;
+
+        const name = dedupeFilename(
+          this.nameFor(spec, resolved, item, plan, converted, totalFiles),
+          taken,
+        );
+        const destination = workspace.outputPath(name);
+        await rename(converted, destination);
+        produced.push({ path: destination, name });
+      }
     }
 
     const result = await this.package(spec, resolved, workspace, produced, report, signal);

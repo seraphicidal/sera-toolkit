@@ -13,7 +13,7 @@
     "apps/*"
   ],
   "scripts": {
-    "build": "npm run build --workspace @sera/contracts && npm run build --workspace @sera/engine && npm run build --workspace @sera/api && npm run build --workspace @sera/worker && npm run build --workspace @sera/web",
+    "build": "npm run build --workspace @sera/contracts && npm run build --workspace @sera/engine && npm run build --workspace @sera/api && npm run build --workspace @sera/worker && npm run build --workspace @sera/extractor && npm run build --workspace @sera/web",
     "clean": "node scripts/clean.mjs",
     "dev": "node scripts/dev.mjs",
     "dev:api": "npm run dev --workspace @sera/api",

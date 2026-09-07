@@ -3,6 +3,7 @@ import type { HealthCheck, HealthReport, ServiceInfo } from '@sera/contracts/typ
 import type { Dispatcher } from 'undici';
 import { loadConfig, VERSION, type EngineConfig } from './config.js';
 import { ffmpegVersion } from './convert/ffmpeg.js';
+import { ExtractionNodeRegistry, remoteBackend } from './extract/remote.js';
 import { version as ytdlpVersion } from './extract/ytdlp.js';
 import { JobService } from './jobs/service.js';
 import { createLogger, type Logger } from './logging.js';
@@ -34,6 +35,8 @@ export class SeraEngine {
   readonly config: EngineConfig;
   readonly logger: Logger;
   readonly registry: ProviderRegistry;
+  /** Extraction nodes on other networks. Empty unless one has dialled in. */
+  readonly extractionNodes: ExtractionNodeRegistry;
   readonly resolver: MediaResolver;
   readonly workspaces: WorkspaceManager;
   readonly backend: JobBackend;
@@ -54,6 +57,7 @@ export class SeraEngine {
     config: EngineConfig;
     logger: Logger;
     registry: ProviderRegistry;
+    extractionNodes: ExtractionNodeRegistry;
     resolver: MediaResolver;
     workspaces: WorkspaceManager;
     backend: JobBackend;
@@ -62,6 +66,7 @@ export class SeraEngine {
     this.config = parts.config;
     this.logger = parts.logger;
     this.registry = parts.registry;
+    this.extractionNodes = parts.extractionNodes;
     this.resolver = parts.resolver;
     this.workspaces = parts.workspaces;
     this.backend = parts.backend;
@@ -81,21 +86,36 @@ export class SeraEngine {
     await mkdir(config.dataDir, { recursive: true });
 
     const registry = new ProviderRegistry();
+    // Nodes on other networks, if any ever connect. The router asks this at call time,
+    // so one that dials in later is usable without restarting the API.
+    const extractionNodes = new ExtractionNodeRegistry(logger);
     const resolver = new MediaResolver({
       config,
       logger,
       registry,
+      remoteBackends: () =>
+        config.extractionNodes.enabled && extractionNodes.hasHealthyNode()
+          ? [remoteBackend(extractionNodes)]
+          : [],
       ...(options.dispatcher ? { dispatcher: options.dispatcher } : {}),
       ...(options.probe ? { probe: options.probe } : {}),
     });
     const workspaces = new WorkspaceManager(config.dataDir, config.retentionSeconds, logger);
     const backend = options.backend ?? (await createBackend(config, logger));
-    const jobs = new JobService({ config, logger, resolver, workspaces, backend });
+    const jobs = new JobService({
+      config,
+      logger,
+      resolver,
+      workspaces,
+      backend,
+      remote: extractionNodes,
+    });
 
     const engine = new SeraEngine({
       config,
       logger,
       registry,
+      extractionNodes,
       resolver,
       workspaces,
       backend,
