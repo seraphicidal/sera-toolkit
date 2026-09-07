@@ -4,6 +4,7 @@ import type { Dispatcher } from 'undici';
 import type { EngineConfig } from './config.js';
 import { seraError, SeraError } from './errors.js';
 import { dumpInfo, version as ytdlpVersion } from './extract/ytdlp.js';
+import { ExtractionRouter, type ExtractionBackend } from './extract/router.js';
 import type { YtdlpInfo } from './extract/ytdlp-types.js';
 import { createLogger, logSafeUrl, type Logger } from './logging.js';
 import { normalizeForProvider, ProviderRegistry } from './providers/index.js';
@@ -61,6 +62,11 @@ export interface ResolverDependencies {
   readonly logger?: Logger;
   readonly registry?: ProviderRegistry;
   readonly dispatcher?: Dispatcher;
+  /**
+   * Extraction backends on other networks, consulted at call time so a node that dials
+   * in later is usable without restarting the API.
+   */
+  readonly remoteBackends?: () => readonly ExtractionBackend[];
   /** Overridable so tests can exercise the whole pipeline with no yt-dlp installed. */
   readonly probe?: (
     url: string,
@@ -90,6 +96,20 @@ export class MediaResolver {
       deps.logger ??
       createLogger({ level: deps.config.logLevel, pretty: !deps.config.isProduction });
     this.registry = deps.registry ?? new ProviderRegistry();
+
+    // The primary backend is this worker doing exactly what it did before the router
+    // existed; everything else the router knows about dials in from another network.
+    this.router = new ExtractionRouter({
+      primary: {
+        id: 'local',
+        kind: 'local',
+        providers: [],
+        isHealthy: () => true,
+        resolve: (url, providerId, signal) => this.runProvider(url, providerId, signal),
+      },
+      logger: this.logger,
+      fallbacks: deps.remoteBackends ?? (() => []),
+    });
     this.dispatcher =
       deps.dispatcher ??
       createSafeDispatcher({ allowPrivateAddresses: deps.config.allowPrivateAddresses });
@@ -123,6 +143,8 @@ export class MediaResolver {
     this.cachedExtractorVersion = resolved;
     return resolved;
   }
+
+  private readonly router: ExtractionRouter;
 
   /** Resolves user input into the client model. */
   async resolve(input: string, signal?: AbortSignal): Promise<MediaInfo> {
@@ -235,10 +257,39 @@ export class MediaResolver {
     const cached = this.cache.get(cacheKey);
     if (cached) return cached;
 
-    const resolved = await provider.resolve(canonical, this.providerContext(signal));
+    // Through the router rather than straight to the provider, so the job-time
+    // re-resolution takes the same backend the analysis did. It has to: a media URL
+    // signed for one address is refused from another, so a resolution and its download
+    // belong to the same network.
+    const outcome = await this.router.resolve(canonical, providerId, signal);
+    const resolved = outcome.fallbackUsed
+      ? {
+          ...outcome.media,
+          metadata: { ...outcome.media.metadata, extractionBackend: outcome.backend },
+        }
+      : outcome.media;
+
     if (!resolved.items.length) throw seraError('MEDIA_UNAVAILABLE');
     this.cache.set(cacheKey, resolved);
     return resolved;
+  }
+
+  /** One attempt on this worker. The router decides whether it is the only one. */
+  private async runProvider(
+    canonical: URL,
+    providerId: string,
+    signal?: AbortSignal,
+  ): Promise<ResolvedMedia> {
+    const provider = this.registry.get(providerId);
+    if (!provider) {
+      throw seraError('UNSUPPORTED_SOURCE', { detail: `unknown provider ${providerId}` });
+    }
+    return provider.resolve(canonical, this.providerContext(signal));
+  }
+
+  /** What the health endpoint reports about where extraction can run. */
+  extractionBackends(): ReturnType<ExtractionRouter['describe']> {
+    return this.router.describe();
   }
 
   private providerContext(signal?: AbortSignal): ProviderContext {
