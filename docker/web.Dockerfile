@@ -30,7 +30,14 @@ COPY apps/web/ apps/web/
 # path mapping, so only the types package needs building here.
 RUN npm run build --workspace @sera/contracts
 
-# Baked into the server bundle at build time; overridden at runtime by the same variable.
+# Where the API lives. This is a BUILD-time setting and cannot be changed afterwards:
+# Next resolves rewrites() when it builds and writes the destination into the standalone
+# bundle, so the runtime environment has no effect on where /api/* is proxied. Setting a
+# different value at runtime produces 500s and an ENOTFOUND for the baked host.
+#
+# The same variable IS read at runtime by server components, so it must be set to the
+# SAME value in both places — which is why the compose file names its API service `api`.
+# .github/workflows/ci.yml checks that the two agree.
 ARG SERA_API_URL=http://api:4000
 ENV SERA_API_URL=${SERA_API_URL} \
     NEXT_TELEMETRY_DISABLED=1

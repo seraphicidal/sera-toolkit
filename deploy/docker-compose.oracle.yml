@@ -38,6 +38,9 @@ services:
     image: ${SERA_IMAGE_WEB:-ghcr.io/seraphicidal/sera-web:latest}
     restart: unless-stopped
     environment:
+      # Must match the value the image was BUILT with, because Next bakes the /api/*
+      # rewrite destination into the standalone bundle and only server components read
+      # this at runtime. That is also why the service above is named exactly `api`.
       SERA_API_URL: http://api:4000
     # No published port: Caddy reaches it over the compose network. The only thing
     # listening on a public interface is Caddy.
