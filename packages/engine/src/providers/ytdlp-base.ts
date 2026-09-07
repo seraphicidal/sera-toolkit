@@ -1,4 +1,5 @@
 import type { ContainerFormat, MediaInfoType, ProviderCapabilities } from '@sera/contracts/types';
+import { declare } from './capabilities.js';
 import { seraError } from '../errors.js';
 import type { YtdlpInfo, YtdlpThumbnail } from '../extract/ytdlp-types.js';
 import { num, str } from '../extract/ytdlp-types.js';
@@ -42,13 +43,7 @@ export abstract class YtdlpProvider implements MediaProvider {
    * it cannot reach, audio it has none of — overrides this rather than leaving the
    * client to find out one link at a time.
    */
-  readonly capabilities: ProviderCapabilities = {
-    video: true,
-    image: false,
-    carousel: false,
-    audioExtraction: true,
-    gif: false,
-  };
+  readonly capabilities: ProviderCapabilities = declare();
 
   canHandle(_url: URL, host: string): boolean {
     return hostMatchesAny(host, this.hosts);

@@ -1,4 +1,5 @@
 import type { ContainerFormat, ProviderCapabilities } from '@sera/contracts/types';
+import { declare } from './capabilities.js';
 import { seraError } from '../errors.js';
 import { ensureRecommendations } from '../normalize/plans.js';
 import { nonEmpty, truncate } from '../util/format.js';
@@ -42,14 +43,15 @@ export class RedditProvider extends YtdlpProvider {
    * this host can actually take — and the one that carries the audio track Reddit stores
    * separately.
    */
-  override readonly capabilities: ProviderCapabilities = {
-    video: true,
+  override readonly capabilities: ProviderCapabilities = declare({
     image: true,
     carousel: true,
-    audioExtraction: true,
     gif: true,
+    // An app registration, not a person's account: the client-credentials grant.
+    authenticatedMode: true,
+    requiresOauth: true,
     authRequiredFor: ['everything — Reddit refuses anonymous requests from servers'],
-  };
+  });
 
   override normalize(url: URL): URL {
     const out = new URL(url.toString());

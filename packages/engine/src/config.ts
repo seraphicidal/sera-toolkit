@@ -127,6 +127,16 @@ const envSchema = z.object({
   SERA_EXTRACTION_NODE_TOKEN: z.string().default(''),
   /** How long a node's request for work is held open before it asks again. */
   SERA_EXTRACTION_CLAIM_HOLD_SECONDS: seconds.default(25),
+  /**
+   * What kind of connection this installation extracts from.
+   *
+   * Only routing order depends on it, and only for a provider that declares no
+   * datacentre extraction — YouTube, measured. Saying `datacenter` on a deployment with
+   * a node connected sends YouTube to the node first instead of paying for a refusal
+   * whose outcome is already known. The default says nothing, because SERA running on
+   * someone's home connection must not be demoted by a measurement taken on Oracle.
+   */
+  SERA_NETWORK_CLASS: z.enum(['datacenter', 'residential', 'unknown']).default('unknown'),
 
   SERA_QUEUE_DRIVER: z.enum(['memory', 'redis']).default('memory'),
   SERA_REDIS_URL: z.string().default('redis://127.0.0.1:6379'),
@@ -202,6 +212,9 @@ export interface EngineConfig {
     readonly enabled: boolean;
     readonly claimHoldMs: number;
   };
+
+  /** The connection this installation extracts from. See SERA_NETWORK_CLASS. */
+  readonly networkClass: 'datacenter' | 'residential' | 'unknown';
 
   readonly instagram: {
     readonly sessionId: string;
@@ -350,6 +363,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): EngineConfig {
       enabled: e.SERA_EXTRACTION_NODE_TOKEN.length > 0,
       claimHoldMs: e.SERA_EXTRACTION_CLAIM_HOLD_SECONDS * 1000,
     },
+
+    networkClass: e.SERA_NETWORK_CLASS,
 
     instagram: {
       sessionId: e.SERA_INSTAGRAM_SESSION_ID,

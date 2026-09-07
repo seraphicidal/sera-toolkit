@@ -5,6 +5,7 @@ import { normalizeContainer } from './direct.js';
 import { nonEmpty, truncate } from '../util/format.js';
 import type { DownloadPlan, ProviderContext, ResolvedItem, ResolvedMedia } from './types.js';
 import { YtdlpProvider } from './ytdlp-base.js';
+import { declare } from './capabilities.js';
 
 /**
  * Bluesky posts.
@@ -27,13 +28,10 @@ export class BlueskyProvider extends YtdlpProvider {
   /**
    * Photographs through the AppView API, video through the extractor.
    */
-  override readonly capabilities: ProviderCapabilities = {
-    video: true,
+  override readonly capabilities: ProviderCapabilities = declare({
     image: true,
     carousel: true,
-    audioExtraction: true,
-    gif: false,
-  };
+  });
 
   override canHandle(url: URL, host: string): boolean {
     return super.canHandle(url, host) && url.pathname.includes('/post/');

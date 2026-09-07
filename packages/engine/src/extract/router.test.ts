@@ -1,8 +1,10 @@
+import type { ProviderCapabilities } from '@sera/contracts/types';
 import { describe, expect, it } from 'vitest';
 import { seraError, SeraError } from '../errors.js';
 import { silentLogger } from '../logging.js';
+import { declare } from '../providers/capabilities.js';
 import type { ResolvedMedia } from '../providers/types.js';
-import { ExtractionRouter, type ExtractionBackend } from './router.js';
+import { ExtractionRouter, type ExtractionBackend, type NetworkClass } from './router.js';
 
 const media: ResolvedMedia = {
   provider: 'youtube',
@@ -30,11 +32,18 @@ const media: ResolvedMedia = {
 
 function backend(
   id: string,
-  behaviour: { healthy?: boolean; providers?: string[]; result?: 'ok' | SeraError },
+  behaviour: {
+    healthy?: boolean;
+    providers?: string[];
+    result?: 'ok' | SeraError;
+    networkClass?: NetworkClass;
+  },
 ): ExtractionBackend & { calls: number } {
+  const local = id === 'oracle';
   const impl = {
     id,
-    kind: id === 'oracle' ? ('local' as const) : ('remote' as const),
+    kind: local ? ('local' as const) : ('remote' as const),
+    networkClass: behaviour.networkClass ?? (local ? 'datacenter' : 'residential'),
     providers: behaviour.providers ?? [],
     calls: 0,
     isHealthy: () => behaviour.healthy !== false,
@@ -48,6 +57,12 @@ function backend(
   return impl;
 }
 
+/** A provider that behaves like YouTube unless a test says otherwise. */
+const caps =
+  (differences: Partial<ProviderCapabilities> = {}) =>
+  () =>
+    declare(differences);
+
 const url = new URL('https://www.youtube.com/watch?v=x');
 
 describe('ExtractionRouter', () => {
@@ -58,6 +73,7 @@ describe('ExtractionRouter', () => {
       primary,
       logger: silentLogger(),
       fallbacks: () => [home],
+      capabilitiesOf: caps(),
     });
 
     const outcome = await router.resolve(url, 'youtube');
@@ -74,6 +90,7 @@ describe('ExtractionRouter', () => {
       primary,
       logger: silentLogger(),
       fallbacks: () => [home],
+      capabilitiesOf: caps(),
     });
 
     const outcome = await router.resolve(url, 'youtube');
@@ -91,6 +108,7 @@ describe('ExtractionRouter', () => {
         primary,
         logger: silentLogger(),
         fallbacks: () => [home],
+        capabilitiesOf: caps(),
       });
 
       const error = await router.resolve(url, 'youtube').then(
@@ -110,6 +128,7 @@ describe('ExtractionRouter', () => {
       primary,
       logger: silentLogger(),
       fallbacks: () => [down, wrongProvider],
+      capabilitiesOf: caps(),
     });
 
     await expect(router.resolve(url, 'youtube')).rejects.toMatchObject({
@@ -128,6 +147,7 @@ describe('ExtractionRouter', () => {
       primary,
       logger: silentLogger(),
       fallbacks: () => [home],
+      capabilitiesOf: caps(),
     });
 
     await expect(router.resolve(url, 'youtube')).rejects.toMatchObject({
@@ -145,6 +165,7 @@ describe('ExtractionRouter', () => {
       primary,
       logger: silentLogger(),
       fallbacks: () => connected,
+      capabilitiesOf: caps(),
     });
 
     await expect(router.resolve(url, 'youtube')).rejects.toMatchObject({ code: 'SOURCE_BLOCKED' });
@@ -157,10 +178,129 @@ describe('ExtractionRouter', () => {
       primary: backend('oracle', {}),
       logger: silentLogger(),
       fallbacks: () => [backend('residential', { healthy: false, providers: ['youtube'] })],
+      capabilitiesOf: caps(),
     });
     expect(router.describe()).toEqual([
-      { id: 'oracle', kind: 'local', healthy: true, providers: [] },
-      { id: 'residential', kind: 'remote', healthy: false, providers: ['youtube'] },
+      { id: 'oracle', kind: 'local', networkClass: 'datacenter', healthy: true, providers: [] },
+      {
+        id: 'residential',
+        kind: 'remote',
+        networkClass: 'residential',
+        healthy: false,
+        providers: ['youtube'],
+      },
     ]);
+  });
+});
+
+describe('the capability matrix decides where work may go', () => {
+  it('never sends a provider that declares no residential fallback', async () => {
+    // The generic and direct-file providers claim whatever host nothing else wanted, so
+    // their URL is the visitor's. A node exists to get past a platform that refuses
+    // datacentres; it is not there to fetch arbitrary addresses from someone's house,
+    // and a bot challenge on an arbitrary host must not turn it into one.
+    const primary = backend('oracle', { result: seraError('SOURCE_BLOCKED') });
+    const home = backend('residential', { result: 'ok' });
+    const router = new ExtractionRouter({
+      primary,
+      logger: silentLogger(),
+      fallbacks: () => [home],
+      capabilitiesOf: caps({ residentialFallback: false }),
+    });
+
+    await expect(router.resolve(url, 'generic')).rejects.toMatchObject({ code: 'SOURCE_BLOCKED' });
+    expect(home.calls).toBe(0);
+  });
+
+  it('treats a provider it has never heard of as local-only', async () => {
+    const primary = backend('oracle', { result: seraError('SOURCE_BLOCKED') });
+    const home = backend('residential', { result: 'ok' });
+    const router = new ExtractionRouter({
+      primary,
+      logger: silentLogger(),
+      fallbacks: () => [home],
+      capabilitiesOf: () => undefined,
+    });
+
+    await expect(router.resolve(url, 'unknown')).rejects.toMatchObject({ code: 'SOURCE_BLOCKED' });
+    expect(home.calls).toBe(0);
+  });
+
+  it('asks the node first when the datacentre has already been measured as refused', async () => {
+    // YouTube from Oracle is refused on every player client yt-dlp offers. Paying for
+    // that refusal before asking a connected node is a delay with a known outcome.
+    const primary = backend('oracle', { result: 'ok' });
+    const home = backend('residential', { result: 'ok' });
+    const router = new ExtractionRouter({
+      primary,
+      logger: silentLogger(),
+      fallbacks: () => [home],
+      capabilitiesOf: caps({ cloudExtraction: false }),
+    });
+
+    const outcome = await router.resolve(url, 'youtube');
+    expect(outcome.backend).toBe('residential');
+    expect(primary.calls).toBe(0);
+  });
+
+  it('does not reorder when the operator has not said what their network is', async () => {
+    // SERA on a home connection has a primary that is not a datacentre. A measurement
+    // taken on Oracle must not demote it.
+    const primary = backend('oracle', { result: 'ok', networkClass: 'unknown' });
+    const home = backend('residential', { result: 'ok' });
+    const router = new ExtractionRouter({
+      primary,
+      logger: silentLogger(),
+      fallbacks: () => [home],
+      capabilitiesOf: caps({ cloudExtraction: false }),
+    });
+
+    expect((await router.resolve(url, 'youtube')).backend).toBe('oracle');
+    expect(home.calls).toBe(0);
+  });
+
+  it('still tries the datacentre when no node is connected', async () => {
+    // A measurement is not a reason to invent a refusal SERA could have avoided.
+    const primary = backend('oracle', { result: 'ok' });
+    const router = new ExtractionRouter({
+      primary,
+      logger: silentLogger(),
+      fallbacks: () => [],
+      capabilitiesOf: caps({ cloudExtraction: false }),
+    });
+
+    expect((await router.resolve(url, 'youtube')).backend).toBe('oracle');
+  });
+
+  it('comes home when a node drops mid-request', async () => {
+    // The node going away is the deployment's problem, not the visitor's.
+    const primary = backend('oracle', { result: 'ok' });
+    const home = backend('residential', { result: seraError('NETWORK_ERROR') });
+    const router = new ExtractionRouter({
+      primary,
+      logger: silentLogger(),
+      fallbacks: () => [home],
+      capabilitiesOf: caps({ cloudExtraction: false }),
+    });
+
+    const outcome = await router.resolve(url, 'youtube');
+    expect(outcome.backend).toBe('oracle');
+    expect(home.calls).toBe(1);
+  });
+
+  it('does not come home when the node reported something an address cannot fix', async () => {
+    const primary = backend('oracle', { result: 'ok' });
+    const home = backend('residential', { result: seraError('PRIVATE_CONTENT') });
+    const router = new ExtractionRouter({
+      primary,
+      logger: silentLogger(),
+      fallbacks: () => [home],
+      capabilitiesOf: caps({ cloudExtraction: false }),
+    });
+
+    await expect(router.resolve(url, 'youtube')).rejects.toMatchObject({
+      code: 'PRIVATE_CONTENT',
+    });
+    expect(primary.calls).toBe(0);
   });
 });

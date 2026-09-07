@@ -31,6 +31,7 @@ import {
  *   SERA_EXTRACTION_NODE_TOKEN=<the same secret the API has>
  *   SERA_NODE_ID=home            (optional)
  *   SERA_NODE_PROVIDERS=youtube  (optional; empty means every provider)
+ *   SERA_NODE_NETWORK_CLASS=residential  (optional; datacenter for a second cloud node)
  */
 
 interface RemoteTask {
@@ -52,6 +53,7 @@ class Node {
   private readonly apiUrl: string;
   private readonly token: string;
   private readonly nodeId: string;
+  private readonly networkClass: string;
   private readonly providers: string[];
   private stopping = false;
 
@@ -64,6 +66,7 @@ class Node {
     this.apiUrl = (process.env.SERA_API_URL ?? '').replace(/\/+$/, '');
     this.token = process.env.SERA_EXTRACTION_NODE_TOKEN ?? '';
     this.nodeId = process.env.SERA_NODE_ID ?? 'residential';
+    this.networkClass = process.env.SERA_NODE_NETWORK_CLASS ?? 'residential';
     this.providers = (process.env.SERA_NODE_PROVIDERS ?? '')
       .split(',')
       .map((entry) => entry.trim())
@@ -88,7 +91,12 @@ class Node {
   async run(): Promise<void> {
     let backoff = ERROR_BACKOFF_MS;
     this.logger.info(
-      { api: this.apiUrl, node: this.nodeId, providers: this.providers },
+      {
+        api: this.apiUrl,
+        node: this.nodeId,
+        providers: this.providers,
+        networkClass: this.networkClass,
+      },
       'extraction node started',
     );
 
@@ -116,6 +124,7 @@ class Node {
       nodeId: this.nodeId,
       providers: this.providers,
       capacity: 1,
+      networkClass: this.networkClass,
     });
     if (response.status === 204) {
       await sleep(IDLE_BACKOFF_MS);

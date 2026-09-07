@@ -1,4 +1,5 @@
 import type { ContainerFormat, MediaKind, ProviderCapabilities } from '@sera/contracts/types';
+import { declare } from './capabilities.js';
 import { seraError } from '../errors.js';
 import { MEDIA_EXTENSIONS, urlExtension } from '../security/url.js';
 import { formatBytes } from '../util/format.js';
@@ -31,13 +32,13 @@ export class DirectFileProvider implements MediaProvider {
    * Whatever the server hands over. Audio can be pulled out of a video file and a GIF
    * turned into one, but a lone file is never a carousel.
    */
-  readonly capabilities: ProviderCapabilities = {
-    video: true,
+  readonly capabilities: ProviderCapabilities = declare({
     image: true,
-    carousel: false,
-    audioExtraction: true,
     gif: true,
-  };
+    // The URL is whatever the visitor typed. A node exists to get past a platform that
+    // refuses datacentres, not to fetch arbitrary addresses from a home connection.
+    residentialFallback: false,
+  });
 
   canHandle(url: URL): boolean {
     const extension = urlExtension(url);

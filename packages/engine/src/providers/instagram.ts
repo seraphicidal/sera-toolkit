@@ -1,4 +1,5 @@
 import type { ProviderCapabilities } from '@sera/contracts/types';
+import { declare } from './capabilities.js';
 import type { EngineConfig } from '../config.js';
 import { SeraError, seraError } from '../errors.js';
 import {
@@ -49,14 +50,14 @@ export class InstagramProvider extends YtdlpProvider {
   constructor(config?: EngineConfig) {
     super();
     const withSession = config?.instagram.configured === true;
-    this.capabilities = {
-      video: true,
+    this.capabilities = declare({
       image: withSession,
       carousel: withSession,
-      audioExtraction: true,
-      gif: false,
+      // The operator may configure a session of their own. Whether one is set is the
+      // line above; this says the mechanism exists.
+      authenticatedMode: true,
       ...(withSession ? {} : { authRequiredFor: ['photo posts', 'carousels'] }),
-    };
+    });
   }
 
   override normalize(url: URL): URL {

@@ -1,4 +1,5 @@
 import type { MediaKind, ProviderCapabilities } from '@sera/contracts/types';
+import { declare } from './capabilities.js';
 import { seraError } from '../errors.js';
 import { discoverMedia, type DiscoveredMedia } from '../extract/html.js';
 import { ensureRecommendations } from '../normalize/plans.js';
@@ -34,13 +35,13 @@ export class GenericProvider implements MediaProvider {
    * Whatever a page declares for its embeds and previews, which is often several
    * images. Audio extraction only applies when what it found was a video.
    */
-  readonly capabilities: ProviderCapabilities = {
-    video: true,
+  readonly capabilities: ProviderCapabilities = declare({
     image: true,
     carousel: true,
-    audioExtraction: true,
-    gif: false,
-  };
+    // Same reason as the direct-file provider: this one claims every host no other
+    // provider wanted, so its URL is unconstrained. Never a node's problem.
+    residentialFallback: false,
+  });
 
   private readonly delegate = new (class extends YtdlpProvider {
     readonly id = 'generic';

@@ -1,4 +1,5 @@
-import type { MediaInfoType } from '@sera/contracts/types';
+import type { MediaInfoType, ProviderCapabilities } from '@sera/contracts/types';
+import { declare } from './capabilities.js';
 import { hostMatches } from '../security/url.js';
 import { YtdlpProvider } from './ytdlp-base.js';
 
@@ -13,6 +14,12 @@ export class BandcampProvider extends YtdlpProvider {
   readonly label = 'Bandcamp';
   readonly hosts = ['bandcamp.com'];
   override readonly priority = 30;
+
+  override readonly capabilities: ProviderCapabilities = declare({
+    video: false,
+    audio: true,
+    gallery: true,
+  });
 
   override canHandle(_url: URL, host: string): boolean {
     return hostMatches(host, 'bandcamp.com');

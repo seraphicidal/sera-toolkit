@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { seraError, SeraError } from '../errors.js';
 import { silentLogger } from '../logging.js';
 import type { ResolvedMedia } from '../providers/types.js';
-import { ExtractionNodeRegistry, remoteBackend } from './remote.js';
+import { ExtractionNodeRegistry, remoteBackend, remoteBackends } from './remote.js';
 
 const media: ResolvedMedia = {
   provider: 'youtube',
@@ -151,6 +151,76 @@ describe('ExtractionNodeRegistry', () => {
   });
 });
 
+describe('matching a task to a node', () => {
+  it('does not hand a waiting node work it said it would not take', async () => {
+    // The bug this pins: a node's provider list was checked when it found a task already
+    // queued, and not when a task arrived while it was waiting. Since waiting is the
+    // normal state — the request is held open as a heartbeat — the check that mattered
+    // was the one that was missing, and a node told to do YouTube alone could be handed
+    // Instagram and refuse it as an extractor bug.
+    const nodes = registry();
+    const waiting = nodes.claim('youtube-only', ['youtube'], 1, 400);
+
+    nodes
+      .dispatch({ kind: 'resolve', url: 'https://www.instagram.com/p/A/', providerId: 'instagram' })
+      .catch(() => undefined);
+
+    expect(await waiting).toBeUndefined();
+  });
+
+  it('wakes the node that wants the task, not the one that asked first', async () => {
+    const nodes = registry();
+    const youtube = nodes.claim('youtube-only', ['youtube'], 1, 600);
+    const instagram = nodes.claim('instagram-only', ['instagram'], 1, 600);
+
+    nodes
+      .dispatch({ kind: 'resolve', url: 'https://www.instagram.com/p/A/', providerId: 'instagram' })
+      .catch(() => undefined);
+
+    expect((await instagram)?.providerId).toBe('instagram');
+    expect(await youtube).toBeUndefined();
+  });
+
+  it('keeps a task on the kind of connection it was routed to', async () => {
+    const nodes = registry();
+    nodes
+      .dispatch({
+        kind: 'resolve',
+        url: media.url,
+        providerId: 'youtube',
+        networkClass: 'residential',
+      })
+      .catch(() => undefined);
+
+    // A second cloud node is a legitimate node, and it is not the answer to a refusal
+    // that was about being in a datacentre in the first place.
+    expect(await nodes.claim('cloud', ['youtube'], 1, 120, 'datacenter')).toBeUndefined();
+    expect((await nodes.claim('home', ['youtube'], 1, 120, 'residential'))?.providerId).toBe(
+      'youtube',
+    );
+  });
+
+  it('counts work per node rather than in total', async () => {
+    const nodes = registry();
+    nodes
+      .dispatch({ kind: 'resolve', url: media.url, providerId: 'youtube' })
+      .catch(() => undefined);
+    await nodes.claim('first', ['youtube'], 1, 200);
+
+    nodes
+      .dispatch({ kind: 'resolve', url: media.url, providerId: 'youtube' })
+      .catch(() => undefined);
+    // The busy node is at capacity; the idle one takes it. Counting every claimed task
+    // against every node made the second one look busy too.
+    expect(await nodes.claim('first', ['youtube'], 1, 120)).toBeUndefined();
+    expect(await nodes.claim('second', ['youtube'], 1, 120)).toBeDefined();
+
+    const status = new Map(nodes.status().map((node) => [node.id, node]));
+    expect(status.get('first')?.inFlight).toBe(1);
+    expect(status.get('second')?.inFlight).toBe(1);
+  });
+});
+
 describe('remoteBackend', () => {
   it('is unhealthy until a node has actually connected', () => {
     const nodes = registry();
@@ -162,5 +232,20 @@ describe('remoteBackend', () => {
     nodes.register('home', ['youtube', 'instagram'], 1);
     expect(backend.isHealthy()).toBe(true);
     expect(backend.providers).toEqual(['youtube', 'instagram']);
+  });
+
+  it('is one backend per kind of connection, so the router can tell them apart', () => {
+    const nodes = registry();
+    expect(remoteBackends(nodes)).toEqual([]);
+
+    nodes.register('home', ['youtube'], 1, 'residential');
+    nodes.register('other-cloud', ['vimeo'], 1, 'datacenter');
+
+    const backends = new Map(
+      remoteBackends(nodes).map((backend) => [backend.networkClass, backend]),
+    );
+    expect([...backends.keys()].sort()).toEqual(['datacenter', 'residential']);
+    expect(backends.get('residential')?.providers).toEqual(['youtube']);
+    expect(backends.get('datacenter')?.providers).toEqual(['vimeo']);
   });
 });

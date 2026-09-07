@@ -103,12 +103,16 @@ export class MediaResolver {
       primary: {
         id: 'local',
         kind: 'local',
+        networkClass: deps.config.networkClass,
         providers: [],
         isHealthy: () => true,
         resolve: (url, providerId, signal) => this.runProvider(url, providerId, signal),
       },
       logger: this.logger,
       fallbacks: deps.remoteBackends ?? (() => []),
+      // What each provider says about itself, rather than a conditional in the router
+      // that knows about failure classes and nothing about platforms.
+      capabilitiesOf: (providerId) => this.registry.get(providerId)?.capabilities,
     });
     this.dispatcher =
       deps.dispatcher ??

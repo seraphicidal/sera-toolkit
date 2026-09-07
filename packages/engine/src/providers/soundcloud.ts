@@ -1,5 +1,6 @@
 import type { MediaInfoType, ProviderCapabilities } from '@sera/contracts/types';
 import { YtdlpProvider } from './ytdlp-base.js';
+import { declare } from './capabilities.js';
 
 /**
  * SoundCloud tracks and sets.
@@ -17,13 +18,13 @@ export class SoundCloudProvider extends YtdlpProvider {
   /**
    * Audio only. Offering a video quality here would be a button that always fails.
    */
-  override readonly capabilities: ProviderCapabilities = {
+  override readonly capabilities: ProviderCapabilities = declare({
     video: false,
-    image: false,
-    carousel: false,
-    audioExtraction: true,
-    gif: false,
-  };
+    // Audio is the media here, not something lifted off a video.
+    audio: true,
+    // A set or a user's tracks expand into their entries.
+    gallery: true,
+  });
 
   override normalize(url: URL): URL {
     const out = new URL(url.toString());

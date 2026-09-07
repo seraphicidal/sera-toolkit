@@ -24,6 +24,9 @@ const claimSchema = z.object({
   nodeId: z.string().min(1).max(64),
   providers: z.array(z.string().min(1).max(32)).max(50),
   capacity: z.coerce.number().int().min(1).max(8).default(1),
+  // A node says what kind of connection it is on. The default is the reason nodes
+  // exist; an operator running a second cloud node says so and is routed accordingly.
+  networkClass: z.enum(['datacenter', 'residential', 'unknown']).default('residential'),
 });
 
 const progressSchema = z.object({
@@ -92,12 +95,13 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
           });
         }
 
-        const { nodeId, providers, capacity } = parsed.data;
+        const { nodeId, providers, capacity, networkClass } = parsed.data;
         const task = await extractionNodes.claim(
           nodeId,
           providers,
           capacity,
           config.extractionNodes.claimHoldMs,
+          networkClass,
         );
         if (!task) return reply.status(204).send();
         return reply.send(task);

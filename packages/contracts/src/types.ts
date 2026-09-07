@@ -295,12 +295,49 @@ export type JobEvent =
  * honest about a provider that is only half available.
  */
 export interface ProviderCapabilities {
+  /* ---- what the platform serves ---- */
+
   readonly video: boolean;
   readonly image: boolean;
-  /** More than one media item behind a single link. */
-  readonly carousel: boolean;
+  /** Audio as media in its own right — a track, not a soundtrack lifted off a video. */
+  readonly audio: boolean;
+  /** An audio-only file can be produced from this provider's video. */
   readonly audioExtraction: boolean;
+  /** More than one media item behind a single link, in a fixed order: a post's slides. */
+  readonly carousel: boolean;
+  /** More than one media item behind a link that is a container, not a post: a board. */
+  readonly gallery: boolean;
   readonly gif: boolean;
+  /** Streams still in progress. Refused everywhere so far, and declared so on purpose. */
+  readonly live: boolean;
+
+  /* ---- what it takes to reach it ---- */
+
+  /**
+   * The provider has an operator-credential mode at all — a session or an app
+   * registration the operator may configure. Says nothing about whether one is set.
+   */
+  readonly authenticatedMode: boolean;
+  /** Nothing works without operator credentials, as opposed to some of it. */
+  readonly requiresOauth: boolean;
+
+  /* ---- where extraction can run ---- */
+
+  /**
+   * Whether a node on a residential connection could succeed where a datacentre did
+   * not. False is the interesting value: it means the refusal is about credentials or
+   * the content, so spending someone's home connection on it would reach the same
+   * answer more slowly. Measured per provider, not assumed.
+   */
+  readonly residentialFallback: boolean;
+  /**
+   * Whether extraction from a datacentre address is expected to work. False routes to a
+   * node first when one is connected, instead of paying for a refusal that has already
+   * been measured. With no node connected it changes nothing — the attempt is made
+   * anyway, because a wrong guess must never turn into a refusal SERA invented.
+   */
+  readonly cloudExtraction: boolean;
+
   /**
    * Present when part of this provider needs credentials the installation lacks. Names
    * the part, so "Reels work, photos do not" can be said plainly.
