@@ -220,6 +220,33 @@ never written anywhere. It reads public listings and nothing else.
 > video goes through the manifest — which is also the only route that carries the audio
 > Reddit stores separately. `preview.redd.it` is refused outright.
 
+### Instagram photo posts
+
+Instagram serves photographs to logged-in clients only. That is not a datacentre problem —
+measured from a home connection too, the post page is a shell, `?__a=1` is a 404, the
+media endpoint redirects to a login and GraphQL answers `require_login`. No extraction
+node fixes it, and there is no supported API that returns another account's posts.
+
+You can give the server a session of your own:
+
+```bash
+SERA_INSTAGRAM_SESSION_ID=<the sessionid cookie from a logged-in browser>
+```
+
+Photo posts and carousels then work. Before doing this on a deployment other people can
+reach, three things are true and worth saying plainly:
+
+- **Every visitor's request is then made as that account.** Someone else's download
+  becomes your account's activity.
+- **Instagram suspends accounts for automated access.** Use one you can afford to lose,
+  never your main one.
+- **It is a bearer credential.** Anyone who can read `/opt/sera/.env` can act as that
+  account until you log the session out.
+
+It is off by default, and on a public deployment leaving it off is the reasonable choice.
+With no session the capability model reports Instagram images and carousels as unavailable
+and the app says so, rather than offering a button that fails.
+
 ### The YouTube PO Token Provider
 
 yt-dlp's [PO-Token-Guide](https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide) describes

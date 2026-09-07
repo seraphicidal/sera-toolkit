@@ -86,10 +86,12 @@ services:
       # A yt-dlp PO Token Provider. Start one with `--profile potoken`; measured on this
       # host it does not lift YouTube's datacentre challenge, so it is off by default.
       SERA_YOUTUBE_POT_PROVIDER_URL: ${SERA_YOUTUBE_POT_PROVIDER_URL:-}
-      # An authorized residential extraction backend, used only when YouTube reports the
-      # datacentre block. Empty means there is no fallback, which is the honest default.
-      SERA_YOUTUBE_FALLBACK_URL: ${SERA_YOUTUBE_FALLBACK_URL:-}
-      SERA_YOUTUBE_FALLBACK_TOKEN: ${SERA_YOUTUBE_FALLBACK_TOKEN:-}
+      # Lets an extraction node on another network claim work. Empty leaves the
+      # endpoints unmounted entirely. See deploy/EXTRACTION-NODE.md.
+      SERA_EXTRACTION_NODE_TOKEN: ${SERA_EXTRACTION_NODE_TOKEN:-}
+      # An Instagram session for photo posts. Read the warning in deploy/ORACLE.md
+      # before setting this on a deployment other people can reach.
+      SERA_INSTAGRAM_SESSION_ID: ${SERA_INSTAGRAM_SESSION_ID:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     expose:
       - '4000'
@@ -122,10 +124,12 @@ services:
       # A yt-dlp PO Token Provider. Start one with `--profile potoken`; measured on this
       # host it does not lift YouTube's datacentre challenge, so it is off by default.
       SERA_YOUTUBE_POT_PROVIDER_URL: ${SERA_YOUTUBE_POT_PROVIDER_URL:-}
-      # An authorized residential extraction backend, used only when YouTube reports the
-      # datacentre block. Empty means there is no fallback, which is the honest default.
-      SERA_YOUTUBE_FALLBACK_URL: ${SERA_YOUTUBE_FALLBACK_URL:-}
-      SERA_YOUTUBE_FALLBACK_TOKEN: ${SERA_YOUTUBE_FALLBACK_TOKEN:-}
+      # Lets an extraction node on another network claim work. Empty leaves the
+      # endpoints unmounted entirely. See deploy/EXTRACTION-NODE.md.
+      SERA_EXTRACTION_NODE_TOKEN: ${SERA_EXTRACTION_NODE_TOKEN:-}
+      # An Instagram session for photo posts. Read the warning in deploy/ORACLE.md
+      # before setting this on a deployment other people can reach.
+      SERA_INSTAGRAM_SESSION_ID: ${SERA_INSTAGRAM_SESSION_ID:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     volumes:
       # The same volume as the API: the worker writes the file, the API serves it.
