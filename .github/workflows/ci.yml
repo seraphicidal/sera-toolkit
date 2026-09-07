@@ -93,6 +93,17 @@ jobs:
       # in a way nothing in the test suite can see: a Caddyfile Caddy refuses means the
       # site has no TLS terminator at all. Both states are checked because the bug that
       # prompted this was in the one where the optional ACME contact is absent.
+      # SERA_API_URL is baked into the web bundle at build time and read again at run
+      # time by server components. If the Dockerfile default and the compose value ever
+      # disagree, /api/* proxies to a host that does not exist and every request 500s.
+      - name: Check the API URL is the same at build time and run time
+        run: |
+          baked=$(grep -oP '^ARG SERA_API_URL=K.*' docker/web.Dockerfile)
+          runtime=$(grep -oP '^s+SERA_API_URL:s*KS+' deploy/docker-compose.oracle.yml | head -n 1)
+          echo "built with: $baked"
+          echo "run with:   $runtime"
+          test -n "$baked" && test "$baked" = "$runtime"
+
       - name: Validate the Caddyfile
         run: |
           mkdir -p /tmp/globals-none /tmp/globals-email
@@ -226,9 +237,17 @@ jobs:
         run: |
           docker network create sera-web-ci >/dev/null
           docker run -d --name sera-redis-web-ci --network sera-web-ci redis:7.4-alpine >/dev/null
-          docker run -d --name sera-api-web-ci --network sera-web-ci -e NODE_ENV=production -e SERA_SECRET=ci-smoke-secret-not-used-in-production -e SERA_QUEUE_DRIVER=redis -e SERA_REDIS_URL=redis://sera-redis-web-ci:6379 "$IMAGE_API:verify" >/dev/null
+          # The alias matters: Next baked "http://api:4000" into the rewrite at build time,
+          # so the API has to answer to that name.
+          docker run -d --name sera-api-web-ci --network sera-web-ci --network-alias api -e NODE_ENV=production -e SERA_SECRET=ci-smoke-secret-not-used-in-production -e SERA_QUEUE_DRIVER=redis -e SERA_REDIS_URL=redis://sera-redis-web-ci:6379 "$IMAGE_API:verify" >/dev/null
           docker run -d --name sera-web-ci --network sera-web-ci -e SERA_API_URL=http://sera-api-web-ci:4000 --read-only --tmpfs /tmp --tmpfs /app/apps/web/.next/cache -p 3000:3000 "$IMAGE_WEB:verify" >/dev/null
 
+          # The web root is static and answers before the API is listening, so waiting on
+          # it alone proves nothing about the proxy.
+          for _ in $(seq 1 40); do
+            if docker exec sera-api-web-ci node -e "fetch('http://127.0.0.1:4000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" >/dev/null 2>&1; then break; fi
+            sleep 2
+          done
           for _ in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:3000/ >/dev/null 2>&1; then break; fi
             sleep 2
