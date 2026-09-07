@@ -36,6 +36,9 @@ export default async function AboutPage() {
   const service = await loadServiceInfo();
   const providers = service?.providers ?? [];
   const degraded = providers.filter((provider) => provider.status !== 'ok');
+  // Some sources only work in part from a given server. Saying which, once, beats
+  // letting every visitor discover it a link at a time.
+  const partial = providers.filter((provider) => provider.capabilities?.authRequiredFor?.length);
 
   return (
     <article className="flex flex-col gap-10 pt-4 pb-16">
@@ -83,6 +86,17 @@ export default async function AboutPage() {
                 </li>
               ))}
             </ul>
+            {partial.length > 0 && (
+              <ul className="flex flex-col gap-1.5 text-[0.8125rem] text-[var(--color-ink-muted)]">
+                {partial.map((provider) => (
+                  <li key={`auth-${provider.id}`}>
+                    <span className="text-[var(--color-ink)]">{provider.label}</span>:{' '}
+                    {provider.capabilities.authRequiredFor!.join(' and ')} need an account this
+                    server does not have. Everything else from it works.
+                  </li>
+                ))}
+              </ul>
+            )}
             {degraded.length > 0 && (
               <p className="rounded-xl border border-[var(--color-line)] bg-[var(--color-sunken)] px-3.5 py-3 text-[0.875rem]">
                 {degraded.map((provider) => provider.label).join(', ')}{' '}
