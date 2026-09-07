@@ -4,6 +4,7 @@ import Fastify, { type FastifyBaseLogger, type FastifyInstance } from 'fastify';
 import type { SeraEngine } from '@sera/engine';
 import { clientKeyPlugin } from './plugins/client.js';
 import { errorHandlerPlugin } from './plugins/errors.js';
+import { registerExtractionNodeRoutes } from './routes/extraction-node.js';
 import { registerJobRoutes } from './routes/jobs.js';
 import { registerMediaRoutes } from './routes/media.js';
 import { registerMetaRoutes } from './routes/meta.js';
@@ -90,6 +91,9 @@ export async function buildServer(engine: SeraEngine): Promise<FastifyInstance> 
   registerMetaRoutes(app, engine);
   registerMediaRoutes(app, engine);
   registerJobRoutes(app, engine);
+  // Mounted only when a node token is configured; a deployment with no node should not
+  // have an endpoint that accepts one.
+  registerExtractionNodeRoutes(app, engine);
 
   return app;
 }

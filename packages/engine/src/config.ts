@@ -92,6 +92,15 @@ const envSchema = z.object({
    * shared secret. Empty means there is no fallback and a blocked datacentre simply
    * reports that it is blocked, which is the honest default for a public deployment.
    */
+  /**
+   * Shared secret an extraction node presents to claim work. Empty disables the whole
+   * remote-extraction surface, which is the default: a deployment with no node should
+   * not have an endpoint that accepts one.
+   */
+  SERA_EXTRACTION_NODE_TOKEN: z.string().default(''),
+  /** How long a node's request for work is held open before it asks again. */
+  SERA_EXTRACTION_CLAIM_HOLD_SECONDS: seconds.default(25),
+
   SERA_YOUTUBE_FALLBACK_URL: z.string().default(''),
   SERA_YOUTUBE_FALLBACK_TOKEN: z.string().default(''),
 
@@ -162,6 +171,12 @@ export interface EngineConfig {
     readonly clientSecret: string;
     /** True when this installation can talk to Reddit's Data API at all. */
     readonly configured: boolean;
+  };
+
+  readonly extractionNodes: {
+    readonly token: string;
+    readonly enabled: boolean;
+    readonly claimHoldMs: number;
   };
 
   readonly youtube: {
@@ -300,6 +315,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): EngineConfig {
       clientId: e.SERA_REDDIT_CLIENT_ID,
       clientSecret: e.SERA_REDDIT_CLIENT_SECRET,
       configured: Boolean(e.SERA_REDDIT_CLIENT_ID && e.SERA_REDDIT_CLIENT_SECRET),
+    },
+
+    extractionNodes: {
+      token: e.SERA_EXTRACTION_NODE_TOKEN,
+      enabled: e.SERA_EXTRACTION_NODE_TOKEN.length > 0,
+      claimHoldMs: e.SERA_EXTRACTION_CLAIM_HOLD_SECONDS * 1000,
     },
 
     youtube: {

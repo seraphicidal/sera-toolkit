@@ -5,6 +5,7 @@ import { seraError, SeraError } from '../errors.js';
 import { logSafeUrl, type Logger } from '../logging.js';
 import type { MediaResolver } from '../resolver.js';
 import type { WorkspaceManager } from '../storage/workspace.js';
+import type { ExtractionNodeRegistry } from '../extract/remote.js';
 import { newJobId } from '../util/tokens.js';
 import type { JobBackend, JobRecord, WorkerHandle } from '../queue/types.js';
 import { toPublicJob } from '../queue/types.js';
@@ -25,6 +26,8 @@ export interface JobServiceDependencies {
   readonly resolver: MediaResolver;
   readonly workspaces: WorkspaceManager;
   readonly backend: JobBackend;
+  /** Extraction nodes, for a job whose plans were made on another network. */
+  readonly remote?: ExtractionNodeRegistry;
   readonly runner?: JobRunner;
 }
 
@@ -44,6 +47,7 @@ export class JobService {
         logger: deps.logger,
         resolver: deps.resolver,
         workspaces: deps.workspaces,
+        ...(deps.remote ? { remote: deps.remote } : {}),
       });
   }
 
