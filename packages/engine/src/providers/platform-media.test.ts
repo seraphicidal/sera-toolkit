@@ -4,7 +4,7 @@ import { SeraError, seraError } from '../errors.js';
 import { silentLogger } from '../logging.js';
 import { InstagramProvider } from './instagram.js';
 import { createProviders, ProviderRegistry } from './index.js';
-import { itemsFrom, postIdFrom, RedditProvider } from './reddit.js';
+import { itemsFrom, manifestUrlFor, postIdFrom, RedditProvider } from './reddit.js';
 import { RedditTokenSource, type RedditPost } from './reddit-api.js';
 import { TwitterProvider } from './twitter.js';
 import type { ProviderContext } from './types.js';
@@ -283,6 +283,37 @@ describe('RedditProvider', () => {
       via: 'direct',
       url: 'https://i.redd.it/a.jpg?width=1&format=pjpg',
     });
+  });
+
+  it('takes hosted video from the manifest, not the file this host is refused', () => {
+    // Measured against the live host: v.redd.it serves DASHPlaylist.mpd and
+    // HLSPlaylist.m3u8 with a 206 and refuses DASH_720.mp4?source=fallback with a 403.
+    // The manifest is also the only route that carries the separate audio stream.
+    const withManifest: RedditPost = {
+      secure_media: {
+        reddit_video: {
+          fallback_url: 'https://v.redd.it/a/DASH_720.mp4?source=fallback',
+          hls_url: 'https://v.redd.it/a/HLSPlaylist.m3u8',
+          dash_url: 'https://v.redd.it/a/DASHPlaylist.mpd',
+        },
+      },
+    };
+    expect(itemsFrom(withManifest, 50)[0]?.plans[0]?.fetch).toEqual({
+      via: 'ytdlp',
+      selector: 'best',
+      merge: 'mp4',
+    });
+    expect(manifestUrlFor(withManifest)).toBe('https://v.redd.it/a/HLSPlaylist.m3u8');
+
+    // With no manifest offered there is nothing else to try, so the file it is.
+    const onlyFile: RedditPost = {
+      secure_media: { reddit_video: { fallback_url: 'https://v.redd.it/b/DASH_720.mp4' } },
+    };
+    expect(itemsFrom(onlyFile, 50)[0]?.plans[0]?.fetch).toEqual({
+      via: 'direct',
+      url: 'https://v.redd.it/b/DASH_720.mp4',
+    });
+    expect(manifestUrlFor(onlyFile)).toBeUndefined();
   });
 
   it('says when hosted video has no sound instead of letting it be discovered later', () => {
