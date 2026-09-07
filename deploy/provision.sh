@@ -86,7 +86,10 @@ if command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active --quiet firewa
   echo "firewalld updated"
 elif command -v iptables >/dev/null 2>&1; then
   for port in 80 443; do
-    if ! iptables -C INPUT -p tcp --dport "$port" -j ACCEPT 2>/dev/null; then
+    # The -C test has to name the rule exactly as it is inserted, conntrack match
+    # included. Omitting it made the test never match, so every re-run stacked another
+    # copy of both rules.
+    if ! iptables -C INPUT -p tcp --dport "$port" -m conntrack --ctstate NEW -j ACCEPT 2>/dev/null; then
       # Inserted at the top: the default rule set ends in a REJECT that would otherwise
       # match first.
       iptables -I INPUT 1 -p tcp --dport "$port" -m conntrack --ctstate NEW -j ACCEPT
