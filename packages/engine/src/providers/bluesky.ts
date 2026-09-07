@@ -1,5 +1,7 @@
+import type { ContainerFormat } from '@sera/contracts/types';
 import { SeraError, seraError } from '../errors.js';
 import { ensureRecommendations } from '../normalize/plans.js';
+import { normalizeContainer } from './direct.js';
 import { nonEmpty, truncate } from '../util/format.js';
 import type { DownloadPlan, ProviderContext, ResolvedItem, ResolvedMedia } from './types.js';
 import { YtdlpProvider } from './ytdlp-base.js';
@@ -68,16 +70,22 @@ export class BlueskyProvider extends YtdlpProvider {
     const text = typeof post.record?.text === 'string' ? post.record.text.trim() : '';
     const title = text ? truncate(text, 200) : `Post by ${author ?? 'Bluesky user'}`;
 
+    // The CDN's URLs end in `@jpeg` and it serves WebP, so the extension is no guide.
+    // One HEAD settles it for the whole post: every image in a post comes from the same
+    // CDN through the same pipeline, and asking once is cheaper than asking twenty times
+    // for a carousel. If it will not answer, the download still corrects the file itself.
+    const container = await this.containerOf(images[0]!.fullsize, context);
+
     const items: ResolvedItem[] = images
       .slice(0, context.config.maxItemsPerJob)
       .map((image, index) => {
         const plans: DownloadPlan[] = [
           {
             kind: 'image',
-            container: 'jpg',
+            container,
             label: 'Original',
             detail: [
-              'JPG',
+              container.toUpperCase(),
               image.aspectRatio
                 ? `${image.aspectRatio.width} × ${image.aspectRatio.height}`
                 : undefined,
@@ -103,7 +111,7 @@ export class BlueskyProvider extends YtdlpProvider {
           thumbnailUrl: image.thumb ?? image.fullsize,
           ...(image.aspectRatio?.width ? { width: image.aspectRatio.width } : {}),
           ...(image.aspectRatio?.height ? { height: image.aspectRatio.height } : {}),
-          container: 'jpg' as const,
+          container,
           plans: ensureRecommendations(plans),
         };
       });
@@ -120,6 +128,17 @@ export class BlueskyProvider extends YtdlpProvider {
       items,
       metadata: { images: String(images.length) },
     };
+  }
+
+  private async containerOf(url: string, context: ProviderContext): Promise<ContainerFormat> {
+    try {
+      const head = await context.head(new URL(url));
+      const contentType = (head.contentType ?? '').split(';')[0]?.trim().toLowerCase() ?? '';
+      const container = normalizeContainer(contentType, '');
+      return container === 'bin' ? 'jpg' : container;
+    } catch {
+      return 'jpg';
+    }
   }
 
   private async resolveHandle(handle: string, context: ProviderContext): Promise<string> {

@@ -1,4 +1,4 @@
-import { mkdir, readdir, rename, stat } from 'node:fs/promises';
+import { mkdir, open, readdir, rename, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { JobProgress, JobResult, JobState, PackagingMode } from '@sera/contracts/types';
 import type { EngineConfig } from '../config.js';
@@ -9,6 +9,7 @@ import { download as ytdlpDownload } from '../extract/ytdlp.js';
 import { logSafeUrl, type Logger } from '../logging.js';
 import type { DownloadPlan, ResolvedItem, ResolvedMedia } from '../providers/types.js';
 import { planKey } from '../providers/types.js';
+import { contradicts, sniffContainer, SNIFF_BYTES } from '../util/sniff.js';
 import type { MediaResolver } from '../resolver.js';
 import { mimeTypeFor, type Workspace, type WorkspaceManager } from '../storage/workspace.js';
 import { dedupeFilename, mediaFilename, sanitizeStem } from '../util/filename.js';
@@ -200,7 +201,11 @@ export class JobRunner {
           });
         },
       });
-      return destination;
+      // The provider named this format before it had the file, from a URL or a header,
+      // and either can be wrong — Bluesky's CDN serves WebP from URLs ending in `@jpeg`.
+      // Renaming here is enough to correct everything downstream, because the produced
+      // file's own extension is what names the download.
+      return renameToActualFormat(destination, plan.container);
     }
 
     const fetchPlan = plan.fetch;
@@ -577,3 +582,31 @@ async function findSingleFile(directory: string): Promise<string> {
 }
 
 export { SeraError };
+
+/**
+ * Corrects a downloaded file's extension to whatever its bytes say it is.
+ *
+ * Returns the path to use. A file whose format cannot be recognised keeps the name it
+ * was given: guessing wrong twice is worse than guessing wrong once.
+ */
+async function renameToActualFormat(path: string, claimed: string): Promise<string> {
+  let head: Buffer;
+  try {
+    const handle = await open(path, 'r');
+    try {
+      head = Buffer.alloc(SNIFF_BYTES);
+      await handle.read(head, 0, SNIFF_BYTES, 0);
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return path;
+  }
+
+  const actual = sniffContainer(head);
+  if (!actual || !contradicts(claimed, actual)) return path;
+
+  const corrected = path.replace(/.[^.]+$/, `.${actual}`);
+  await rename(path, corrected);
+  return corrected;
+}
