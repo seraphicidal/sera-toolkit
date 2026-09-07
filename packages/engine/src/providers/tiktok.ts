@@ -1,3 +1,5 @@
+import type { ProviderCapabilities } from '@sera/contracts/types';
+import { declare } from './capabilities.js';
 import { YtdlpProvider } from './ytdlp-base.js';
 
 /**
@@ -12,6 +14,15 @@ export class TikTokProvider extends YtdlpProvider {
   readonly label = 'TikTok';
   readonly hosts = ['tiktok.com', 'vm.tiktok.com', 'vt.tiktok.com', 'm.tiktok.com'];
   override readonly priority = 20;
+
+  // A photo post is images, and a slideshow is several of them in order — the default
+  // inherited from the base class said neither, which is how a platform ends up
+  // described as video-only in a service that downloads its slideshows fine.
+  override readonly capabilities: ProviderCapabilities = declare({
+    image: true,
+    carousel: true,
+    gif: true,
+  });
 
   override normalize(url: URL): URL {
     const out = new URL(url.toString());

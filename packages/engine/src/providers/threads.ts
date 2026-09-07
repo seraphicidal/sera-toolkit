@@ -1,3 +1,5 @@
+import type { ProviderCapabilities } from '@sera/contracts/types';
+import { declare } from './capabilities.js';
 import { YtdlpProvider } from './ytdlp-base.js';
 
 /**
@@ -11,6 +13,11 @@ export class ThreadsProvider extends YtdlpProvider {
   readonly label = 'Threads';
   readonly hosts = ['threads.net', 'threads.com'];
   override readonly priority = 30;
+
+  override readonly capabilities: ProviderCapabilities = declare({
+    image: true,
+    carousel: true,
+  });
 
   override normalize(url: URL): URL {
     const out = new URL(url.toString());

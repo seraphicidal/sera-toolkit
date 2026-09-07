@@ -427,6 +427,9 @@ describe('InstagramProvider', () => {
 describe('provider capabilities', () => {
   const registry = new ProviderRegistry(createProviders());
   const byId = new Map(registry.summarize().map((entry) => [entry.id, entry]));
+  // The direct-file and generic providers claim no hosts, so they are absent from the
+  // public summary — and they are the two whose routing rule matters most.
+  const capabilitiesOf = (id: string) => registry.get(id)?.capabilities;
 
   it('every listed provider declares what it can do', () => {
     for (const summary of registry.summarize()) {
@@ -450,5 +453,66 @@ describe('provider capabilities', () => {
     // X needs none of it any more.
     expect(byId.get('twitter')?.capabilities.authRequiredFor).toBeUndefined();
     expect(byId.get('twitter')?.capabilities.image).toBe(true);
+  });
+
+  it('answers every question in the matrix, for every provider', () => {
+    // The router reads this to decide where work may go, so a provider that forgot a
+    // field would be routed on `undefined`. Declaring through `declare` makes that
+    // impossible; this is the test that says so out loud.
+    const questions = [
+      'video',
+      'image',
+      'audio',
+      'audioExtraction',
+      'carousel',
+      'gallery',
+      'gif',
+      'live',
+      'authenticatedMode',
+      'requiresOauth',
+      'residentialFallback',
+      'cloudExtraction',
+    ] as const;
+
+    for (const provider of registry.list()) {
+      for (const question of questions) {
+        expect(typeof provider.capabilities[question], `${provider.id}.${question}`).toBe(
+          'boolean',
+        );
+      }
+    }
+  });
+
+  it('keeps an unconstrained URL off a connection that is not ours', () => {
+    // These two claim whatever host no dedicated provider wanted, so the address comes
+    // from the visitor. A node exists to get past a platform that refuses datacentres;
+    // routing arbitrary hosts through a home connection is the shape of an open relay
+    // even when each request is individually legitimate.
+    for (const id of ['generic', 'direct', 'mastodon']) {
+      expect(capabilitiesOf(id)?.residentialFallback, id).toBe(false);
+    }
+    expect(capabilitiesOf('youtube')?.residentialFallback).toBe(true);
+  });
+
+  it('says where a datacentre has already been measured as refused', () => {
+    // Only YouTube, and only because every player client yt-dlp offers was tried from
+    // Oracle and answered with a bot challenge.
+    const refused = registry
+      .list()
+      .filter((provider) => !provider.capabilities.cloudExtraction)
+      .map((provider) => provider.id);
+    expect(refused).toEqual(['youtube']);
+  });
+
+  it('describes a platform by what it serves, not by what the base class assumed', () => {
+    // TikTok, Threads and Tumblr inherited "video only" from the base class while
+    // happily downloading slideshows, which is how a service ends up describing itself
+    // wrongly in the one place a visitor goes to read about it.
+    for (const id of ['tiktok', 'threads', 'tumblr']) {
+      expect(byId.get(id)?.capabilities.image, id).toBe(true);
+      expect(byId.get(id)?.capabilities.carousel, id).toBe(true);
+    }
+    expect(byId.get('bandcamp')?.capabilities.audio).toBe(true);
+    expect(byId.get('bandcamp')?.capabilities.video).toBe(false);
   });
 });

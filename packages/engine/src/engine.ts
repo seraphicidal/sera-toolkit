@@ -3,7 +3,7 @@ import type { HealthCheck, HealthReport, ServiceInfo } from '@sera/contracts/typ
 import type { Dispatcher } from 'undici';
 import { loadConfig, VERSION, type EngineConfig } from './config.js';
 import { ffmpegVersion } from './convert/ffmpeg.js';
-import { ExtractionNodeRegistry, remoteBackend } from './extract/remote.js';
+import { ExtractionNodeRegistry, remoteBackends } from './extract/remote.js';
 import { version as ytdlpVersion } from './extract/ytdlp.js';
 import { JobService } from './jobs/service.js';
 import { createLogger, type Logger } from './logging.js';
@@ -93,10 +93,7 @@ export class SeraEngine {
       config,
       logger,
       registry,
-      remoteBackends: () =>
-        config.extractionNodes.enabled && extractionNodes.hasHealthyNode()
-          ? [remoteBackend(extractionNodes)]
-          : [],
+      remoteBackends: () => (config.extractionNodes.enabled ? remoteBackends(extractionNodes) : []),
       ...(options.dispatcher ? { dispatcher: options.dispatcher } : {}),
       ...(options.probe ? { probe: options.probe } : {}),
     });
@@ -185,8 +182,12 @@ export class SeraEngine {
         name: 'extraction-nodes',
         status: nodes.length === 0 ? 'error' : healthy.length ? 'ok' : 'error',
         detail: nodes.length
-          ? healthy.map((node) => `${node.id} (${node.providers.join(',') || 'any'})`).join(', ') ||
-            'all nodes are stale'
+          ? healthy
+              .map(
+                (node) =>
+                  `${node.id} [${node.networkClass}] (${node.providers.join(',') || 'any'})`,
+              )
+              .join(', ') || 'all nodes are stale'
           : 'none connected',
       });
     }

@@ -4,6 +4,7 @@ import { ensureRecommendations } from '../normalize/plans.js';
 import { formatBytes, nonEmpty, qualityLabel, truncate } from '../util/format.js';
 import type { DownloadPlan, ProviderContext, ResolvedItem, ResolvedMedia } from './types.js';
 import { YtdlpProvider } from './ytdlp-base.js';
+import { declare } from './capabilities.js';
 
 /**
  * X, formerly Twitter, plus the legacy and mobile hostnames.
@@ -38,13 +39,11 @@ export class TwitterProvider extends YtdlpProvider {
    * through the embed endpoint. What the interface calls a GIF is a silent MP4, and is
    * offered as both.
    */
-  override readonly capabilities: ProviderCapabilities = {
-    video: true,
+  override readonly capabilities: ProviderCapabilities = declare({
     image: true,
     carousel: true,
-    audioExtraction: true,
     gif: true,
-  };
+  });
 
   override normalize(url: URL): URL {
     const out = new URL(url.toString());

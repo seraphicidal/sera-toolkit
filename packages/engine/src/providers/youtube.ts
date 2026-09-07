@@ -4,6 +4,7 @@ import { SeraError } from '../errors.js';
 import { classifyFailure } from '../extract/failure.js';
 import type { ProviderContext, ResolvedMedia } from './types.js';
 import { YtdlpProvider } from './ytdlp-base.js';
+import { declare } from './capabilities.js';
 
 /**
  * YouTube, including Shorts, Music and the youtu.be shortener.
@@ -38,13 +39,20 @@ export class YouTubeProvider extends YtdlpProvider {
    * it is already resolved as part of every extraction — offering it costs one more
    * option rather than a second round trip.
    */
-  override readonly capabilities: ProviderCapabilities = {
-    video: true,
+  override readonly capabilities: ProviderCapabilities = declare({
+    // The thumbnail is offered as an image option, so a link with no downloadable video
+    // still produces something.
     image: true,
-    carousel: false,
-    audioExtraction: true,
-    gif: false,
-  };
+    // A playlist URL is expanded into its entries.
+    gallery: true,
+    // Measured on this deployment, on every player client yt-dlp offers: the player
+    // request from Oracle answers "Sign in to confirm you're not a bot", and the same
+    // link from a residential address returns 53 formats up to 2160p. So a connected
+    // node is asked first rather than after a refusal nobody needs to pay for — and
+    // with no node connected the datacentre still tries, because a measurement is not
+    // a reason to invent a refusal.
+    cloudExtraction: false,
+  });
 
   override normalize(url: URL): URL {
     const out = new URL(url.toString());

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { seraError, type SeraError } from '../errors.js';
 import type { Logger } from '../logging.js';
 import type { ResolvedMedia } from '../providers/types.js';
-import type { ExtractionBackend } from './router.js';
+import type { ExtractionBackend, NetworkClass } from './router.js';
 
 /**
  * Work handed to an extraction node on another network.
@@ -23,6 +23,8 @@ export interface RemoteTask {
   readonly kind: RemoteTaskKind;
   readonly url: string;
   readonly providerId: string;
+  /** When set, only a node on this kind of connection may take it. */
+  readonly networkClass?: NetworkClass;
   /** For a job: which plan to produce, by the same key the local runner uses. */
   readonly planKeys?: readonly string[];
   readonly filename?: string;
@@ -37,8 +39,18 @@ export interface RemoteProgress {
 }
 
 interface Waiter {
+  /** Which node is waiting, so a task is only ever handed to a node that accepts it. */
+  readonly node: NodeRecord;
   readonly resolve: (task: RemoteTask | undefined) => void;
   readonly timer: NodeJS.Timeout;
+}
+
+interface NodeRecord {
+  readonly id: string;
+  providers: string[];
+  capacity: number;
+  networkClass: NetworkClass;
+  seen: number;
 }
 
 interface Pending {
@@ -54,6 +66,8 @@ interface Pending {
   readonly timer: NodeJS.Timeout;
   cancelled: boolean;
   claimedAt?: number;
+  /** Which node took it, so concurrency is counted per node rather than in total. */
+  claimedBy?: string;
 }
 
 /** What a completed `job` task produces: files already written to shared storage. */
@@ -67,6 +81,7 @@ export interface RemoteFile {
 export interface NodeStatus {
   readonly id: string;
   readonly providers: readonly string[];
+  readonly networkClass: NetworkClass;
   readonly capacity: number;
   readonly inFlight: number;
   readonly lastSeenMs: number;
@@ -85,10 +100,7 @@ export class ExtractionNodeRegistry {
   private readonly queue: RemoteTask[] = [];
   private readonly waiting: Waiter[] = [];
   private readonly pending = new Map<string, Pending>();
-  private readonly nodes = new Map<
-    string,
-    { providers: string[]; capacity: number; seen: number }
-  >();
+  private readonly nodes = new Map<string, NodeRecord>();
 
   constructor(
     private readonly logger: Logger,
@@ -101,16 +113,49 @@ export class ExtractionNodeRegistry {
   /* ----------------------------------------------------------- node side */
 
   /** Records that a node is alive and asking for work. */
-  register(nodeId: string, providers: readonly string[], capacity: number): void {
+  register(
+    nodeId: string,
+    providers: readonly string[],
+    capacity: number,
+    networkClass: NetworkClass = 'residential',
+  ): NodeRecord {
     const known = this.nodes.get(nodeId);
-    this.nodes.set(nodeId, {
+    const record: NodeRecord = {
+      id: nodeId,
       providers: [...providers],
       capacity: Math.max(1, capacity),
+      networkClass,
       seen: Date.now(),
-    });
+    };
+    this.nodes.set(nodeId, record);
     if (!known) {
-      this.logger.info({ node: nodeId, providers, capacity }, 'extraction node connected');
+      this.logger.info(
+        { node: nodeId, providers, capacity, networkClass },
+        'extraction node connected',
+      );
     }
+    return record;
+  }
+
+  /**
+   * Whether this node may take this task.
+   *
+   * Three questions, and the first two used to be asked in only one of the two places a
+   * task can reach a node. A task queued while a node was already waiting went out with
+   * neither check, so a node told to do YouTube alone could be handed Instagram.
+   */
+  private accepts(node: NodeRecord, task: RemoteTask): boolean {
+    if (node.providers.length && !node.providers.includes(task.providerId)) return false;
+    if (task.networkClass && task.networkClass !== node.networkClass) return false;
+    return this.inFlightFor(node.id) < node.capacity;
+  }
+
+  private inFlightFor(nodeId: string): number {
+    let count = 0;
+    for (const pending of this.pending.values()) {
+      if (pending.claimedBy === nodeId) count += 1;
+    }
+    return count;
   }
 
   /**
@@ -124,20 +169,20 @@ export class ExtractionNodeRegistry {
     providers: readonly string[],
     capacity: number,
     holdMs: number,
+    networkClass: NetworkClass = 'residential',
   ): Promise<RemoteTask | undefined> {
-    this.register(nodeId, providers, capacity);
+    const node = this.register(nodeId, providers, capacity, networkClass);
 
-    const ready = this.queue.findIndex(
-      (task) => providers.length === 0 || providers.includes(task.providerId),
-    );
+    const ready = this.queue.findIndex((task) => this.accepts(node, task));
     if (ready !== -1) {
       const [task] = this.queue.splice(ready, 1);
-      this.markClaimed(task!);
+      this.markClaimed(task!, node.id);
       return Promise.resolve(task);
     }
 
     return new Promise((resolve) => {
       const waiter: Waiter = {
+        node,
         resolve,
         timer: setTimeout(() => {
           const index = this.waiting.indexOf(waiter);
@@ -200,30 +245,42 @@ export class ExtractionNodeRegistry {
 
   status(): NodeStatus[] {
     const now = Date.now();
-    return [...this.nodes.entries()].map(([id, node]) => ({
-      id,
+    return [...this.nodes.values()].map((node) => ({
+      id: node.id,
       providers: node.providers,
+      networkClass: node.networkClass,
       capacity: node.capacity,
-      inFlight: [...this.pending.values()].filter((p) => p.claimedAt !== undefined).length,
+      inFlight: this.inFlightFor(node.id),
       lastSeenMs: now - node.seen,
       healthy: now - node.seen < this.staleAfterMs,
     }));
   }
 
-  /** Providers at least one live node will take. */
-  availableProviders(): string[] {
-    const now = Date.now();
+  /** Providers at least one live node will take, optionally on one kind of connection. */
+  availableProviders(networkClass?: NetworkClass): string[] {
     const providers = new Set<string>();
-    for (const node of this.nodes.values()) {
-      if (now - node.seen >= this.staleAfterMs) continue;
+    for (const node of this.live(networkClass)) {
       for (const provider of node.providers) providers.add(provider);
     }
     return [...providers];
   }
 
-  hasHealthyNode(): boolean {
+  hasHealthyNode(networkClass?: NetworkClass): boolean {
+    return this.live(networkClass).length > 0;
+  }
+
+  /** The kinds of connection currently represented, so a backend exists per network. */
+  networkClasses(): NetworkClass[] {
+    return [...new Set(this.live().map((node) => node.networkClass))];
+  }
+
+  private live(networkClass?: NetworkClass): NodeRecord[] {
     const now = Date.now();
-    return [...this.nodes.values()].some((node) => now - node.seen < this.staleAfterMs);
+    return [...this.nodes.values()].filter(
+      (node) =>
+        now - node.seen < this.staleAfterMs &&
+        (networkClass === undefined || node.networkClass === networkClass),
+    );
   }
 
   /** Queues a resolve and waits for a node to answer it. */
@@ -312,18 +369,33 @@ export class ExtractionNodeRegistry {
     );
   }
 
+  /**
+   * Gives queued work to whichever waiting node will take it.
+   *
+   * Both sides are matched here, not just the front of each list: a node holding a
+   * request open for YouTube keeps holding it while an Instagram task goes to a node
+   * that wants Instagram, instead of being handed work it declared it would not do.
+   */
   private wakeOne(): void {
-    const waiter = this.waiting.shift();
-    if (!waiter) return;
-    const task = this.queue.shift();
-    clearTimeout(waiter.timer);
-    if (task) this.markClaimed(task);
-    waiter.resolve(task);
+    for (const waiter of [...this.waiting]) {
+      const index = this.queue.findIndex((task) => this.accepts(waiter.node, task));
+      if (index === -1) continue;
+
+      const [task] = this.queue.splice(index, 1);
+      this.waiting.splice(this.waiting.indexOf(waiter), 1);
+      clearTimeout(waiter.timer);
+      this.markClaimed(task!, waiter.node.id);
+      waiter.resolve(task);
+      return;
+    }
   }
 
-  private markClaimed(task: RemoteTask): void {
+  private markClaimed(task: RemoteTask, nodeId: string): void {
     const pending = this.pending.get(task.id);
-    if (pending) pending.claimedAt = Date.now();
+    if (pending) {
+      pending.claimedAt = Date.now();
+      pending.claimedBy = nodeId;
+    }
   }
 }
 
@@ -332,19 +404,25 @@ export class ExtractionNodeRegistry {
  */
 export function remoteBackend(
   registry: ExtractionNodeRegistry,
-  id = 'residential',
+  networkClass: NetworkClass = 'residential',
 ): ExtractionBackend {
   return {
-    id,
+    id: networkClass,
     kind: 'remote',
+    networkClass,
     get providers() {
-      return registry.availableProviders();
+      return registry.availableProviders(networkClass);
     },
-    isHealthy: () => registry.hasHealthyNode(),
+    isHealthy: () => registry.hasHealthyNode(networkClass),
     resolve: (url, providerId, signal) =>
       registry.dispatch(
-        { kind: 'resolve', url: url.toString(), providerId },
+        { kind: 'resolve', url: url.toString(), providerId, networkClass },
         signal ? { signal } : {},
       ),
   };
+}
+
+/** One backend per kind of connection currently connected. */
+export function remoteBackends(registry: ExtractionNodeRegistry): ExtractionBackend[] {
+  return registry.networkClasses().map((networkClass) => remoteBackend(registry, networkClass));
 }

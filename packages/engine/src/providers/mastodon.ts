@@ -6,6 +6,7 @@ import { nonEmpty, truncate } from '../util/format.js';
 import { normalizeContainer } from './direct.js';
 import type { DownloadPlan, ProviderContext, ResolvedItem, ResolvedMedia } from './types.js';
 import { YtdlpProvider } from './ytdlp-base.js';
+import { declare } from './capabilities.js';
 
 /**
  * Mastodon and other fediverse servers.
@@ -41,13 +42,16 @@ export class MastodonProvider extends YtdlpProvider {
    * Every attachment kind the fediverse carries: photographs, video, audio, and the
    * looping `gifv` that is worth offering as a real GIF.
    */
-  override readonly capabilities: ProviderCapabilities = {
-    video: true,
+  override readonly capabilities: ProviderCapabilities = declare({
     image: true,
     carousel: true,
-    audioExtraction: true,
     gif: true,
-  };
+    // This provider claims a status path on an instance it has never heard of, so the
+    // host comes from the visitor. Handing that to someone's home connection is the
+    // shape of an open relay even when each individual request is legitimate, and no
+    // Mastodon instance refuses a datacentre anyway.
+    residentialFallback: false,
+  });
 
   /** `/@name/123456` or `/users/name/statuses/123456`. */
   private static readonly STATUS_PATH = /^\/(@[^/]+\/\d+|users\/[^/]+\/statuses\/\d+)\/?$/;
