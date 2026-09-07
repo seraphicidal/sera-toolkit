@@ -298,6 +298,23 @@ export function classifyYtdlpFailure(stderr: string, exitCode: number): SeraErro
   if (has('drm', 'protected by widevine', 'encrypted')) {
     return seraError('DRM_PROTECTED', { detail });
   }
+  // Checked before the sign-in branch below, whose phrases this text also contains.
+  // "Sign in to confirm you're not a bot" is not a statement about the media: the link is
+  // public and resolves fine from a residential connection. It is the platform refusing
+  // the address the request came from, and telling the visitor their video needs an
+  // account sends them looking for the wrong thing.
+  if (
+    has(
+      "you're not a bot",
+      'you’re not a bot',
+      'not a bot',
+      'confirm you are not a bot',
+      'unusual traffic',
+      'suspicious activity',
+    )
+  ) {
+    return seraError('SOURCE_BLOCKED', { detail });
+  }
   if (
     has(
       'sign in to confirm',

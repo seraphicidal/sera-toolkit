@@ -148,7 +148,10 @@ export class MediaResolver {
       this.registry.markHealthy(used.id);
     } catch (error) {
       const seraErr = SeraError.from(error);
-      if (seraErr.code === 'PROVIDER_UNAVAILABLE') {
+      // A source that refuses this server refuses it for everyone using this instance, so
+      // it belongs in the degraded list that /api/info reports — better that the About page
+      // says so once than that every visitor discovers it one link at a time.
+      if (seraErr.code === 'PROVIDER_UNAVAILABLE' || seraErr.code === 'SOURCE_BLOCKED') {
         this.registry.markDegraded(used.id, seraErr.detail ?? seraErr.message);
       }
       this.logger.info(
