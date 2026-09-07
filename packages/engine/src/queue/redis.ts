@@ -1,5 +1,6 @@
 import { Queue, Worker, type Job as BullJob } from 'bullmq';
 import { Redis } from 'ioredis';
+import { isTerminalJobState } from '@sera/contracts/types';
 import type { Logger } from '../logging.js';
 import {
   isActive,
@@ -95,6 +96,12 @@ export class RedisJobBackend implements JobBackend {
   async patch(id: string, patch: JobPatch): Promise<JobRecord | undefined> {
     const current = await this.get(id);
     if (!current) return undefined;
+
+    // A settled job stays settled. Without this, a worker that is still unwinding when a
+    // cancellation lands writes 'failed' over it a moment later, and the user watches
+    // "Cancelled" turn into "Failed" — which is exactly what the distributed deployment
+    // did, because the abort reaches the worker asynchronously.
+    if (isTerminalJobState(current.state)) return current;
 
     const next: JobRecord = {
       ...current,
