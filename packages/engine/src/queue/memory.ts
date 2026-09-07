@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { isTerminalJobState } from '@sera/contracts/types';
 import type { Logger } from '../logging.js';
 import {
   isActive,
@@ -53,6 +54,12 @@ export class MemoryJobBackend implements JobBackend {
   patch(id: string, patch: JobPatch): Promise<JobRecord | undefined> {
     const current = this.records.get(id);
     if (!current) return Promise.resolve(undefined);
+
+    // A settled job stays settled. Without this, a worker that is still unwinding when a
+    // cancellation lands writes 'failed' over it a moment later, and the user watches
+    // "Cancelled" turn into "Failed" — which is exactly what the distributed deployment
+    // did, because the abort reaches the worker asynchronously.
+    if (isTerminalJobState(current.state)) return Promise.resolve(current);
 
     const next: JobRecord = {
       ...current,

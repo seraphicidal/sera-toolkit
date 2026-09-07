@@ -166,6 +166,32 @@ describe.skipIf(!REDIS_URL)('RedisJobBackend against a live Redis', () => {
     await worker.close();
   }, 20_000);
 
+  it('refuses to move a job out of a terminal state', async () => {
+    await backend.submit(record('b7'));
+    await backend.patch('b7', { state: 'cancelled', step: 'Cancelled' });
+    const late = await backend.patch('b7', { state: 'failed', step: 'Failed' });
+    expect(late?.state).toBe('cancelled');
+    expect((await backend.get('b7'))?.state).toBe('cancelled');
+  });
+
+  it('carries a cancellation to a second process', async () => {
+    // The deployment shape this exists for: the API that handles DELETE /api/jobs/:id is
+    // not the container running the job. Cancelling has to reach the worker over Redis,
+    // or the worker keeps going, finds its workspace deleted, and reports a failure.
+    const worker = new RedisJobBackend(REDIS_URL!, silentLogger());
+    try {
+      await backend.submit(record('b8'));
+
+      const seen: string[] = [];
+      worker.subscribe('b8', (r) => seen.push(r.state));
+
+      await backend.patch('b8', { state: 'cancelled', step: 'Cancelled' });
+      await until(() => seen.includes('cancelled'), 5000);
+    } finally {
+      await worker.close();
+    }
+  });
+
   it('reports the waiting count', async () => {
     expect(await backend.waitingCount()).toBeGreaterThanOrEqual(0);
   });

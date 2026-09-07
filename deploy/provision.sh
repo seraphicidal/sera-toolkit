@@ -222,8 +222,8 @@ cat <<EOF
     2. sudo sera logs caddy
     3. sudo sera logs api
 
-  Useful afterwards — `sera` wraps docker compose for this deployment and works from
-  any directory:
+  Useful afterwards. The sera command wraps docker compose for this deployment and
+  works from any directory:
 
     sudo sera ps
     sudo sera logs -f worker

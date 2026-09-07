@@ -49,6 +49,21 @@ describe('MemoryJobBackend', () => {
     await backend.close();
   });
 
+  it('refuses to move a job out of a terminal state', async () => {
+    // A cancelled job that a still-unwinding worker then reports as failed used to end
+    // up "Failed" in front of the user, seconds after they were told it was cancelled.
+    const backend = new MemoryJobBackend(silentLogger());
+    await backend.submit(record('a-terminal'));
+
+    await backend.patch('a-terminal', { state: 'cancelled', step: 'Cancelled' });
+    const late = await backend.patch('a-terminal', { state: 'failed', step: 'Failed' });
+
+    expect(late?.state).toBe('cancelled');
+    expect(late?.step).toBe('Cancelled');
+    expect((await backend.get('a-terminal'))?.state).toBe('cancelled');
+    await backend.close();
+  });
+
   it('never lets progress move backwards', async () => {
     // Streams report independently, and a late update from a slower one must not rewind
     // a bar the user has already watched advance.

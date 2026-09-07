@@ -207,6 +207,14 @@ export class JobService {
     const controller = new AbortController();
     this.inFlight.set(record.id, controller);
 
+    // Cancellation has to cross the process boundary. `inFlight` only reaches jobs
+    // running in this process, and in the distributed deployment the API that handles the
+    // DELETE is not the worker holding the job — so the worker learns about it the same
+    // way a browser does, off the backend's update channel.
+    const unwatch = backend.subscribe(record.id, (updated) => {
+      if (updated.state === 'cancelled') controller.abort();
+    });
+
     const timeout = setTimeout(() => controller.abort(), this.deps.config.jobTimeoutSeconds * 1000);
     timeout.unref();
 
@@ -276,6 +284,7 @@ export class JobService {
       );
     } finally {
       clearTimeout(timeout);
+      unwatch();
       this.inFlight.delete(record.id);
     }
   }
