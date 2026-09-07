@@ -85,7 +85,7 @@ export class SeraEngine {
 
     await mkdir(config.dataDir, { recursive: true });
 
-    const registry = new ProviderRegistry();
+    const registry = new ProviderRegistry(undefined, config);
     // Nodes on other networks, if any ever connect. The router asks this at call time,
     // so one that dials in later is usable without restarting the API.
     const extractionNodes = new ExtractionNodeRegistry(logger);

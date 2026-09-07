@@ -88,21 +88,28 @@ const envSchema = z.object({
   SERA_YOUTUBE_POT_PROVIDER_URL: z.string().default(''),
 
   /**
-   * An authorized residential extraction backend for YouTube, reached over HTTPS with a
-   * shared secret. Empty means there is no fallback and a blocked datacentre simply
-   * reports that it is blocked, which is the honest default for a public deployment.
+   * An Instagram session the operator supplies for their own server.
+   *
+   * Instagram serves photo posts to logged-in clients only — every anonymous endpoint
+   * redirects to a login or answers `require_login`, from a residential address as much
+   * as from a datacentre, so no extraction node fixes this. With a session here, photo
+   * posts and carousels work; without one they are refused with an explanation.
+   *
+   * Off by default, and worth leaving off on a public deployment: every visitor's
+   * request is then made as that account, and Instagram suspends accounts for automated
+   * access. Never logged, never returned to a client, never in an image or in Git.
    */
+  SERA_INSTAGRAM_SESSION_ID: z.string().default(''),
+
   /**
-   * Shared secret an extraction node presents to claim work. Empty disables the whole
-   * remote-extraction surface, which is the default: a deployment with no node should
-   * not have an endpoint that accepts one.
+   * Shared secret an extraction node presents to claim work.
+   *
+   * Empty disables the whole remote-extraction surface, which is the default: a
+   * deployment with no node should not have an endpoint that accepts one.
    */
   SERA_EXTRACTION_NODE_TOKEN: z.string().default(''),
   /** How long a node's request for work is held open before it asks again. */
   SERA_EXTRACTION_CLAIM_HOLD_SECONDS: seconds.default(25),
-
-  SERA_YOUTUBE_FALLBACK_URL: z.string().default(''),
-  SERA_YOUTUBE_FALLBACK_TOKEN: z.string().default(''),
 
   SERA_QUEUE_DRIVER: z.enum(['memory', 'redis']).default('memory'),
   SERA_REDIS_URL: z.string().default('redis://127.0.0.1:6379'),
@@ -179,10 +186,13 @@ export interface EngineConfig {
     readonly claimHoldMs: number;
   };
 
+  readonly instagram: {
+    readonly sessionId: string;
+    readonly configured: boolean;
+  };
+
   readonly youtube: {
     readonly potProviderUrl: string;
-    readonly fallbackUrl: string;
-    readonly fallbackToken: string;
   };
 
   readonly queueDriver: 'memory' | 'redis';
@@ -323,10 +333,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): EngineConfig {
       claimHoldMs: e.SERA_EXTRACTION_CLAIM_HOLD_SECONDS * 1000,
     },
 
+    instagram: {
+      sessionId: e.SERA_INSTAGRAM_SESSION_ID,
+      configured: e.SERA_INSTAGRAM_SESSION_ID.length > 0,
+    },
+
     youtube: {
       potProviderUrl: e.SERA_YOUTUBE_POT_PROVIDER_URL.replace(/\/+$/, ''),
-      fallbackUrl: e.SERA_YOUTUBE_FALLBACK_URL.replace(/\/+$/, ''),
-      fallbackToken: e.SERA_YOUTUBE_FALLBACK_TOKEN,
     },
 
     queueDriver: e.SERA_QUEUE_DRIVER,

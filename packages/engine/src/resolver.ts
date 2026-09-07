@@ -95,7 +95,7 @@ export class MediaResolver {
     this.logger =
       deps.logger ??
       createLogger({ level: deps.config.logLevel, pretty: !deps.config.isProduction });
-    this.registry = deps.registry ?? new ProviderRegistry();
+    this.registry = deps.registry ?? new ProviderRegistry(undefined, deps.config);
 
     // The primary backend is this worker doing exactly what it did before the router
     // existed; everything else the router knows about dials in from another network.
@@ -298,11 +298,12 @@ export class MediaResolver {
       logger: this.logger,
       ...(signal ? { signal } : {}),
       probe: (url, options) => this.probeImpl(url, { ...options, ...(signal ? { signal } : {}) }),
-      fetchText: async (url, maxBytes) => {
+      fetchText: async (url, maxBytes, options) => {
         const response = await safeFetch(url, {
           dispatcher: this.dispatcher,
           timeoutMs: this.config.resolveTimeoutSeconds * 1000,
           maxBytes: maxBytes ?? 2 * 1024 * 1024,
+          ...(options?.headers ? { headers: options.headers } : {}),
           ...(signal ? { signal } : {}),
         });
         if (response.status >= 400) {

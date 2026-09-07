@@ -67,7 +67,15 @@ export interface ProviderContext {
     },
   ) => Promise<YtdlpInfo>;
   /** Fetches a URL through the SSRF-guarded client. */
-  readonly fetchText: (url: URL, maxBytes?: number) => Promise<{ body: string; url: string }>;
+  readonly fetchText: (
+    url: URL,
+    maxBytes?: number,
+    /**
+     * Extra request headers. The only caller is a provider sending a credential the
+     * operator configured for their own server, so these never reach a log line.
+     */
+    options?: { readonly headers?: Readonly<Record<string, string>> },
+  ) => Promise<{ body: string; url: string }>;
   /** Issues a HEAD request through the SSRF-guarded client. */
   readonly head: (
     url: URL,
