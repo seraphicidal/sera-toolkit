@@ -6,9 +6,16 @@
 # for Let's Encrypt to issue, so a public HTTPS deployment needs no domain purchase.
 
 {
-	# Where expiry and renewal-failure notices go. Optional, but a certificate that
-	# silently stops renewing is a site that silently goes down in 90 days.
-	email {$SERA_TLS_EMAIL:admin@example.com}
+	# Global options that only apply sometimes. Provisioning writes email.caddy here when
+	# SERA_TLS_EMAIL is set, so ACME renewal notices have somewhere to go; with no email
+	# the glob matches nothing and Caddy registers an anonymous ACME account, which is
+	# fine.
+	#
+	# The obvious spelling — `email {$SERA_TLS_EMAIL:...}` — does not work. Caddy applies
+	# the default only when the variable is *unset*, and Compose always passes it, so an
+	# unconfigured deployment got a bare `email` directive and Caddy refused the whole
+	# config. A conditional line has to be a conditional file.
+	import /etc/caddy/globals/*.caddy
 }
 
 {$SERA_DOMAIN} {

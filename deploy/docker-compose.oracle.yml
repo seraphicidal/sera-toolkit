@@ -21,9 +21,10 @@ services:
       - '443:443/udp'
     environment:
       SERA_DOMAIN: ${SERA_DOMAIN:?set SERA_DOMAIN, e.g. 1-2-3-4.sslip.io}
-      SERA_TLS_EMAIL: ${SERA_TLS_EMAIL:-}
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Optional global options, written by provisioning. Empty is the normal case.
+      - ./deploy/caddy.globals:/etc/caddy/globals:ro
       # Certificates survive restarts. Without this, every `up` re-requests from Let's
       # Encrypt and a few restarts in a row hit the rate limit.
       - caddy_data:/data
@@ -48,6 +49,10 @@ services:
     read_only: true
     tmpfs:
       - /tmp
+      # /about revalidates, and Next writes the incremental cache to disk when it does.
+      # Without this the only writable path is /tmp and the render logs EROFS every
+      # minute.
+      - /app/apps/web/.next/cache
     security_opt:
       - no-new-privileges:true
 
