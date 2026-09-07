@@ -113,5 +113,18 @@ export {
 } from './util/filename.js';
 export { formatBytes, formatDuration, qualityLabel, codecLabel, truncate } from './util/format.js';
 export { signToken, verifyToken, newJobId } from './util/tokens.js';
+export {
+  ExtractionRouter,
+  type ExtractionBackend,
+  type ExtractionOutcome,
+} from './extract/router.js';
+export { classifyFailure, isEgressProblem, type FailureClass } from './extract/failure.js';
+export {
+  ExtractionNodeRegistry,
+  remoteBackend,
+  type NodeStatus,
+  type RemoteProgress,
+  type RemoteTask,
+} from './extract/remote.js';
 export { TtlCache } from './util/cache.js';
 export { run, type RunOptions, type RunResult } from './util/spawn.js';
