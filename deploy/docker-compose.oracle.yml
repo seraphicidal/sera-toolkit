@@ -124,12 +124,17 @@ services:
   redis:
     image: redis:7.4-alpine
     restart: unless-stopped
+    # noeviction, not an LRU policy: this Redis holds a work queue, not a cache. Under
+    # allkeys-lru it would evict live job records and BullMQ's own bookkeeping to stay
+    # under the cap — jobs vanishing mid-download with nothing in the logs. BullMQ warns
+    # about it on every worker connection, and it is right to. With noeviction a full
+    # Redis refuses new writes instead, which surfaces as a job that would not start.
     command: >
       redis-server
       --save ''
       --appendonly no
       --maxmemory 256mb
-      --maxmemory-policy allkeys-lru
+      --maxmemory-policy noeviction
     healthcheck:
       test: ['CMD', 'redis-cli', 'ping']
       interval: 10s

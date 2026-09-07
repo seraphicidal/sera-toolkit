@@ -104,6 +104,14 @@ jobs:
           echo "run with:   $runtime"
           test -n "$baked" && test "$baked" = "$runtime"
 
+      # A queue is not a cache. An eviction policy here would drop live jobs to stay
+      # under the memory cap, and the only sign of it is a warning in the worker log.
+      - name: Check Redis cannot evict the queue
+        run: |
+          policy=$(sed -n 's/.*--maxmemory-policy[[:space:]]*//p' deploy/docker-compose.oracle.yml | head -n 1)
+          echo "maxmemory-policy: $policy"
+          test "$policy" = noeviction
+
       - name: Validate the Caddyfile
         run: |
           mkdir -p /tmp/globals-none /tmp/globals-email
