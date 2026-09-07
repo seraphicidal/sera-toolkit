@@ -215,9 +215,10 @@ The token is fetched on demand, cached in memory, renewed a minute before it exp
 never written anywhere. It reads public listings and nothing else.
 
 > Measured from this host: `i.redd.it` serves it, so images and galleries download.
-> `v.redd.it` and `preview.redd.it` answer 403 to it whatever the user agent, so hosted
-> video will resolve and then fail at the download step. Credentials fix the API, not the
-> media CDN.
+> `v.redd.it` refuses the progressive `DASH_720.mp4?source=fallback` file with a 403 and
+> serves its `HLSPlaylist.m3u8` and `DASHPlaylist.mpd` manifests with a 206, so hosted
+> video goes through the manifest — which is also the only route that carries the audio
+> Reddit stores separately. `preview.redd.it` is refused outright.
 
 ### The YouTube PO Token Provider
 

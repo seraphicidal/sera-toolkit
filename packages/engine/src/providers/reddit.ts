@@ -35,10 +35,12 @@ export class RedditProvider extends YtdlpProvider {
   /**
    * Images and galleries reach the datacentre; `v.redd.it` does not.
    *
-   * Measured from this deployment: `i.redd.it` answers 200 while `v.redd.it` and
-   * `preview.redd.it` answer 403 whatever the user agent. So hosted video is offered
-   * only where the media host will actually serve it, and the capability says so rather
-   * than presenting a button that fails at the download step.
+   * Measured from this deployment: `i.redd.it` answers 200, `preview.redd.it` answers
+   * 403, and `v.redd.it` answers 403 for the progressive `DASH_720.mp4?source=fallback`
+   * file while serving its `DASHPlaylist.mpd` and `HLSPlaylist.m3u8` manifests with a
+   * 206. So hosted video goes through the manifest, which is the only route to it that
+   * this host can actually take — and the one that carries the audio track Reddit stores
+   * separately.
    */
   override readonly capabilities: ProviderCapabilities = {
     video: true,
@@ -99,10 +101,15 @@ export class RedditProvider extends YtdlpProvider {
     }
 
     const author = nonEmpty(post.author);
+    // The runner hands `url` to the extractor for a ytdlp plan. For a video post that
+    // has to be the manifest: the post page is refused to this host, and the manifest is
+    // what carries both streams.
+    const extractFrom = manifestUrlFor(source) ?? url.toString();
+
     return {
       provider: this.id,
       providerLabel: this.label,
-      url: url.toString(),
+      url: extractFrom,
       type: items.length > 1 ? 'collection' : 'single',
       title: nonEmpty(post.title) ? truncate(post.title!, 200) : 'Reddit post',
       ...(author ? { author: `u/${author}` } : {}),
@@ -256,11 +263,41 @@ function galleryItems(post: RedditPost, limit: number): ResolvedItem[] {
   return items;
 }
 
-function videoItem(video: RedditVideo, post: RedditPost): ResolvedItem | undefined {
+/**
+ * The URL a Reddit video is actually reachable at, and how to fetch it.
+ *
+ * The progressive file the API points at first is refused to this host; the manifests
+ * beside it are not. A manifest also carries the separate audio track, which is the
+ * single most common complaint about tools that take the fallback and hand back a silent
+ * video.
+ */
+function videoSource(video: RedditVideo): { url: string; viaManifest: boolean } | undefined {
+  const manifest = nonEmpty(video.hls_url) ?? nonEmpty(video.dash_url);
+  if (manifest) return { url: unescapeUrl(manifest), viaManifest: true };
   const fallback = nonEmpty(video.fallback_url);
-  if (!fallback) return undefined;
-  const url = unescapeUrl(fallback);
+  if (fallback) return { url: unescapeUrl(fallback), viaManifest: false };
+  return undefined;
+}
+
+/** The manifest a video post is assembled from, when it is one. */
+export function manifestUrlFor(post: RedditPost): string | undefined {
+  const video = post.secure_media?.reddit_video ?? post.media?.reddit_video;
+  const preview = post.preview?.reddit_video_preview;
+  const source = videoSource(video ?? preview ?? {});
+  return source?.viaManifest ? source.url : undefined;
+}
+
+function videoItem(video: RedditVideo, post: RedditPost): ResolvedItem | undefined {
+  const source = videoSource(video);
+  if (!source) return undefined;
+  const { url, viaManifest } = source;
   const isGif = video.is_gif === true;
+
+  // A manifest is a playlist, not bytes: the extractor assembles it and merges the audio.
+  // A progressive file is just a file.
+  const fetchPlan: DownloadPlan['fetch'] = viaManifest
+    ? { via: 'ytdlp', selector: 'best', merge: 'mp4' }
+    : { via: 'direct', url };
 
   const plans: DownloadPlan[] = [
     {
@@ -270,8 +307,8 @@ function videoItem(video: RedditVideo, post: RedditPost): ResolvedItem | undefin
       detail: [
         'MP4',
         video.width && video.height ? `${video.width} × ${video.height}` : undefined,
-        // Reddit stores sound as a separate DASH stream. Saying so is better than
-        // letting someone discover it after the download.
+        // Reddit stores sound as a separate stream. Saying so is better than letting
+        // someone discover it after the download.
         video.has_audio === false || isGif ? 'silent' : undefined,
       ]
         .filter(Boolean)
@@ -280,7 +317,7 @@ function videoItem(video: RedditVideo, post: RedditPost): ResolvedItem | undefin
       ...(video.height ? { height: video.height } : {}),
       requiresConversion: false,
       recommended: true,
-      fetch: { via: 'direct', url },
+      fetch: fetchPlan,
     },
   ];
 
@@ -292,7 +329,7 @@ function videoItem(video: RedditVideo, post: RedditPost): ResolvedItem | undefin
       detail: 'Converted from the silent video Reddit stores',
       requiresConversion: true,
       recommended: false,
-      fetch: { via: 'direct', url },
+      fetch: fetchPlan,
       convert: { kind: 'gif' },
     });
   }
