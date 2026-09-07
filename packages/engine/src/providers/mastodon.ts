@@ -1,3 +1,4 @@
+import type { ProviderCapabilities } from '@sera/contracts/types';
 import { SeraError } from '../errors.js';
 import { ensureRecommendations } from '../normalize/plans.js';
 import { hostMatchesAny, urlExtension } from '../security/url.js';
@@ -35,6 +36,18 @@ export class MastodonProvider extends YtdlpProvider {
     'mas.to',
   ];
   override readonly priority = 40;
+
+  /**
+   * Every attachment kind the fediverse carries: photographs, video, audio, and the
+   * looping `gifv` that is worth offering as a real GIF.
+   */
+  override readonly capabilities: ProviderCapabilities = {
+    video: true,
+    image: true,
+    carousel: true,
+    audioExtraction: true,
+    gif: true,
+  };
 
   /** `/@name/123456` or `/users/name/statuses/123456`. */
   private static readonly STATUS_PATH = /^\/(@[^/]+\/\d+|users\/[^/]+\/statuses\/\d+)\/?$/;

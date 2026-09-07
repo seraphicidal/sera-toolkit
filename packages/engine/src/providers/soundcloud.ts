@@ -1,4 +1,4 @@
-import type { MediaInfoType } from '@sera/contracts/types';
+import type { MediaInfoType, ProviderCapabilities } from '@sera/contracts/types';
 import { YtdlpProvider } from './ytdlp-base.js';
 
 /**
@@ -13,6 +13,17 @@ export class SoundCloudProvider extends YtdlpProvider {
   readonly label = 'SoundCloud';
   readonly hosts = ['soundcloud.com', 'snd.sc', 'm.soundcloud.com', 'on.soundcloud.com'];
   override readonly priority = 30;
+
+  /**
+   * Audio only. Offering a video quality here would be a button that always fails.
+   */
+  override readonly capabilities: ProviderCapabilities = {
+    video: false,
+    image: false,
+    carousel: false,
+    audioExtraction: true,
+    gif: false,
+  };
 
   override normalize(url: URL): URL {
     const out = new URL(url.toString());

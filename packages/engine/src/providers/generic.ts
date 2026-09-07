@@ -1,4 +1,4 @@
-import type { MediaKind } from '@sera/contracts/types';
+import type { MediaKind, ProviderCapabilities } from '@sera/contracts/types';
 import { seraError } from '../errors.js';
 import { discoverMedia, type DiscoveredMedia } from '../extract/html.js';
 import { ensureRecommendations } from '../normalize/plans.js';
@@ -29,6 +29,18 @@ export class GenericProvider implements MediaProvider {
   readonly label = 'Web page';
   readonly hosts: readonly string[] = [];
   readonly priority = 1000;
+
+  /**
+   * Whatever a page declares for its embeds and previews, which is often several
+   * images. Audio extraction only applies when what it found was a video.
+   */
+  readonly capabilities: ProviderCapabilities = {
+    video: true,
+    image: true,
+    carousel: true,
+    audioExtraction: true,
+    gif: false,
+  };
 
   private readonly delegate = new (class extends YtdlpProvider {
     readonly id = 'generic';

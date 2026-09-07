@@ -79,6 +79,17 @@ services:
       SERA_MAX_CONCURRENT_JOBS_PER_CLIENT: ${SERA_MAX_CONCURRENT_JOBS_PER_CLIENT:-2}
       # Caddy and the Next proxy sit in front, so the forwarded address is the real one.
       SERA_TRUST_PROXY: 'true'
+      # Reddit's Data API. Without these Reddit reports that it needs credentials
+      # instead of failing per link — it refuses anonymous requests from servers.
+      SERA_REDDIT_CLIENT_ID: ${SERA_REDDIT_CLIENT_ID:-}
+      SERA_REDDIT_CLIENT_SECRET: ${SERA_REDDIT_CLIENT_SECRET:-}
+      # A yt-dlp PO Token Provider. Start one with `--profile potoken`; measured on this
+      # host it does not lift YouTube's datacentre challenge, so it is off by default.
+      SERA_YOUTUBE_POT_PROVIDER_URL: ${SERA_YOUTUBE_POT_PROVIDER_URL:-}
+      # An authorized residential extraction backend, used only when YouTube reports the
+      # datacentre block. Empty means there is no fallback, which is the honest default.
+      SERA_YOUTUBE_FALLBACK_URL: ${SERA_YOUTUBE_FALLBACK_URL:-}
+      SERA_YOUTUBE_FALLBACK_TOKEN: ${SERA_YOUTUBE_FALLBACK_TOKEN:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     expose:
       - '4000'
@@ -104,6 +115,17 @@ services:
       SERA_RETENTION_SECONDS: ${SERA_RETENTION_SECONDS:-1800}
       SERA_MAX_FILESIZE_BYTES: ${SERA_MAX_FILESIZE_BYTES:-2147483648}
       SERA_MAX_DURATION_SECONDS: ${SERA_MAX_DURATION_SECONDS:-10800}
+      # Reddit's Data API. Without these Reddit reports that it needs credentials
+      # instead of failing per link — it refuses anonymous requests from servers.
+      SERA_REDDIT_CLIENT_ID: ${SERA_REDDIT_CLIENT_ID:-}
+      SERA_REDDIT_CLIENT_SECRET: ${SERA_REDDIT_CLIENT_SECRET:-}
+      # A yt-dlp PO Token Provider. Start one with `--profile potoken`; measured on this
+      # host it does not lift YouTube's datacentre challenge, so it is off by default.
+      SERA_YOUTUBE_POT_PROVIDER_URL: ${SERA_YOUTUBE_POT_PROVIDER_URL:-}
+      # An authorized residential extraction backend, used only when YouTube reports the
+      # datacentre block. Empty means there is no fallback, which is the honest default.
+      SERA_YOUTUBE_FALLBACK_URL: ${SERA_YOUTUBE_FALLBACK_URL:-}
+      SERA_YOUTUBE_FALLBACK_TOKEN: ${SERA_YOUTUBE_FALLBACK_TOKEN:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     volumes:
       # The same volume as the API: the worker writes the file, the API serves it.
@@ -120,6 +142,23 @@ services:
           # free instance that gets noticed.
           cpus: '${SERA_WORKER_CPUS:-2}'
           memory: ${SERA_WORKER_MEMORY:-3g}
+
+  # yt-dlp's PO Token Provider, as described in its PO-Token-Guide. Off unless asked
+  # for: `sudo sera --profile potoken up -d`, with
+  # SERA_YOUTUBE_POT_PROVIDER_URL=http://potoken:4416 in .env.
+  #
+  # It was measured on this deployment and does not lift the "Sign in to confirm you're
+  # not a bot" challenge, which YouTube applies to the player request on address
+  # reputation. PO tokens address 403s on the stream. A host with a clean address still
+  # wants this for the web clients.
+  potoken:
+    image: brainicism/bgutil-ytdlp-pot-provider:latest
+    profiles: ['potoken']
+    restart: unless-stopped
+    expose:
+      - '4416'
+    security_opt:
+      - no-new-privileges:true
 
   redis:
     image: redis:7.4-alpine

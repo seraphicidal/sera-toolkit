@@ -203,6 +203,12 @@ export type ErrorCode =
   | 'AGE_RESTRICTED'
   | 'LOGIN_REQUIRED'
   | 'SOURCE_BLOCKED'
+  /** This installation has no credentials for a source that now requires them. */
+  | 'PROVIDER_AUTH_REQUIRED'
+  /** Credentials exist but the source rejected them, or a setting is wrong. */
+  | 'PROVIDER_CONFIGURATION_ERROR'
+  /** The site's robots.txt asks automated clients not to read the page. */
+  | 'ROBOTS_DISALLOWED'
   | 'DRM_PROTECTED'
   | 'LIVE_IN_PROGRESS'
   | 'RATE_LIMITED'
@@ -280,12 +286,35 @@ export type JobEvent =
 /*  Meta                                                                      */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * What a source can actually produce here.
+ *
+ * The picker is built from an item's own options, so this is not what decides which
+ * buttons appear — it is what lets a client say "Instagram photos need credentials this
+ * server does not have" before anyone pastes a link, and what keeps the About page
+ * honest about a provider that is only half available.
+ */
+export interface ProviderCapabilities {
+  readonly video: boolean;
+  readonly image: boolean;
+  /** More than one media item behind a single link. */
+  readonly carousel: boolean;
+  readonly audioExtraction: boolean;
+  readonly gif: boolean;
+  /**
+   * Present when part of this provider needs credentials the installation lacks. Names
+   * the part, so "Reels work, photos do not" can be said plainly.
+   */
+  readonly authRequiredFor?: readonly string[];
+}
+
 export interface ProviderSummary {
   readonly id: string;
   readonly label: string;
   /** Example hostnames the provider claims, for the About page. */
   readonly hosts: readonly string[];
   readonly status: 'ok' | 'degraded' | 'unavailable';
+  readonly capabilities: ProviderCapabilities;
 }
 
 export interface ServiceInfo {

@@ -408,13 +408,28 @@ describe('SoundCloud track', () => {
 
 describe('failure handling', () => {
   it('reports a link with nothing downloadable rather than returning an empty result', async () => {
+    // Reddit used to stand in here and no longer can: it now refuses before probing,
+    // because a server has no anonymous path to it at all. Any extractor-backed
+    // provider makes the same point about an empty format list.
+    const empty: YtdlpInfo = { id: 'x', title: 'nothing here', formats: [] };
+    await expect(
+      new YouTubeProvider().resolve(
+        new URL('https://www.youtube.com/watch?v=x'),
+        contextFor(empty),
+      ),
+    ).rejects.toMatchObject({ code: 'MEDIA_UNAVAILABLE' });
+  });
+
+  it('refuses Reddit before spending a probe on it', async () => {
+    // Reddit answers 403 Blocked to anonymous requests from hosted ranges, so a probe
+    // is a guaranteed waste of the one worker this instance has.
     const empty: YtdlpInfo = { id: 'x', title: 'nothing here', formats: [] };
     await expect(
       new RedditProvider().resolve(
         new URL('https://www.reddit.com/r/a/comments/b/c'),
         contextFor(empty),
       ),
-    ).rejects.toMatchObject({ code: 'MEDIA_UNAVAILABLE' });
+    ).rejects.toMatchObject({ code: 'PROVIDER_AUTH_REQUIRED' });
   });
 
   it('surfaces a probe failure unchanged', async () => {

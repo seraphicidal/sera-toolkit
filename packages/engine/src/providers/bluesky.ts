@@ -1,4 +1,4 @@
-import type { ContainerFormat } from '@sera/contracts/types';
+import type { ContainerFormat, ProviderCapabilities } from '@sera/contracts/types';
 import { SeraError, seraError } from '../errors.js';
 import { ensureRecommendations } from '../normalize/plans.js';
 import { normalizeContainer } from './direct.js';
@@ -23,6 +23,17 @@ export class BlueskyProvider extends YtdlpProvider {
   readonly label = 'Bluesky';
   readonly hosts = ['bsky.app', 'bsky.social'];
   override readonly priority = 30;
+
+  /**
+   * Photographs through the AppView API, video through the extractor.
+   */
+  override readonly capabilities: ProviderCapabilities = {
+    video: true,
+    image: true,
+    carousel: true,
+    audioExtraction: true,
+    gif: false,
+  };
 
   override canHandle(url: URL, host: string): boolean {
     return super.canHandle(url, host) && url.pathname.includes('/post/');

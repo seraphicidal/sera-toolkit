@@ -1,4 +1,4 @@
-import type { ContainerFormat, MediaInfoType } from '@sera/contracts/types';
+import type { ContainerFormat, MediaInfoType, ProviderCapabilities } from '@sera/contracts/types';
 import { seraError } from '../errors.js';
 import type { YtdlpInfo, YtdlpThumbnail } from '../extract/ytdlp-types.js';
 import { num, str } from '../extract/ytdlp-types.js';
@@ -37,6 +37,19 @@ export abstract class YtdlpProvider implements MediaProvider {
   abstract readonly hosts: readonly string[];
   readonly priority: number = 100;
 
+  /**
+   * What most extractor-backed providers do. A provider whose platform differs — photos
+   * it cannot reach, audio it has none of — overrides this rather than leaving the
+   * client to find out one link at a time.
+   */
+  readonly capabilities: ProviderCapabilities = {
+    video: true,
+    image: false,
+    carousel: false,
+    audioExtraction: true,
+    gif: false,
+  };
+
   canHandle(_url: URL, host: string): boolean {
     return hostMatchesAny(host, this.hosts);
   }
@@ -51,8 +64,14 @@ export abstract class YtdlpProvider implements MediaProvider {
     return false;
   }
 
-  /** Site-specific tuning passed to yt-dlp as `--extractor-args`. */
-  protected extractorArgs(_url: URL): readonly string[] {
+  /**
+   * Site-specific tuning passed to yt-dlp as `--extractor-args`.
+   *
+   * These were declared by providers and then dropped on the floor: nothing forwarded
+   * them to the probe, so YouTube's own comment about keeping 1080p visible described
+   * something that was not happening.
+   */
+  protected extractorArgs(_url: URL, _context: ProviderContext): readonly string[] {
     return [];
   }
 
@@ -74,7 +93,11 @@ export abstract class YtdlpProvider implements MediaProvider {
   }
 
   async resolve(url: URL, context: ProviderContext): Promise<ResolvedMedia> {
-    const info = await context.probe(url.toString(), { playlist: this.wantsPlaylist(url) });
+    const info = await context.probe(url.toString(), {
+      playlist: this.wantsPlaylist(url),
+      extractorArgs: this.extractorArgs(url, context),
+      timeoutMs: context.config.resolveTimeoutMsFor(this.id),
+    });
     return this.toResolvedMedia(info, url, context);
   }
 
