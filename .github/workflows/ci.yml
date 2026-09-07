@@ -98,8 +98,8 @@ jobs:
       # disagree, /api/* proxies to a host that does not exist and every request 500s.
       - name: Check the API URL is the same at build time and run time
         run: |
-          baked=$(grep -oP '^ARG SERA_API_URL=K.*' docker/web.Dockerfile)
-          runtime=$(grep -oP '^s+SERA_API_URL:s*KS+' deploy/docker-compose.oracle.yml | head -n 1)
+          baked=$(sed -n 's/^ARG SERA_API_URL=//p' docker/web.Dockerfile)
+          runtime=$(sed -n 's/^[[:space:]]*SERA_API_URL:[[:space:]]*//p' deploy/docker-compose.oracle.yml | head -n 1)
           echo "built with: $baked"
           echo "run with:   $runtime"
           test -n "$baked" && test "$baked" = "$runtime"
@@ -263,7 +263,7 @@ jobs:
           sleep 2
           curl -fsS http://127.0.0.1:3000/about >/dev/null
           docker logs sera-web-ci 2>&1 | tail -n 20
-          docker logs sera-web-ci 2>&1 | grep -qi 'EROFS|read-only file system' && { echo 'web wrote to a read-only path'; exit 1; }
+          docker logs sera-web-ci 2>&1 | grep -qiE 'EROFS|read-only file system' && { echo 'web wrote to a read-only path'; exit 1; }
 
           running=$(docker inspect -f '{{.State.Running}}' sera-web-ci)
           test "$running" = true || { echo 'web container is not running'; exit 1; }
