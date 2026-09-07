@@ -1,4 +1,5 @@
 import type { ProviderSummary } from '@sera/contracts/types';
+import type { EngineConfig } from '../config.js';
 import { BandcampProvider } from './bandcamp.js';
 import { BlueskyProvider } from './bluesky.js';
 import { DailymotionProvider } from './dailymotion.js';
@@ -31,12 +32,12 @@ export { YtdlpProvider } from './ytdlp-base.js';
  * generic fallbacks. Adding a platform is one import and one entry here — nothing in the
  * API, the worker or the UI changes, because they all speak `MediaInfo`.
  */
-export function createProviders(): MediaProvider[] {
+export function createProviders(config?: EngineConfig): MediaProvider[] {
   return [
     new YouTubeProvider(),
     new TwitterProvider(),
     new TikTokProvider(),
-    new InstagramProvider(),
+    new InstagramProvider(config),
     new RedditProvider(),
     new TwitchProvider(),
     new VimeoProvider(),
@@ -61,7 +62,12 @@ export class ProviderRegistry {
   /** Providers reported as broken at runtime, so one bad extractor degrades alone. */
   private readonly degraded = new Map<string, { until: number; reason: string }>();
 
-  constructor(providers: readonly MediaProvider[] = createProviders()) {
+  constructor(
+    providers?: readonly MediaProvider[],
+    /** Passed to the providers whose capabilities depend on it. */
+    config?: EngineConfig,
+  ) {
+    providers ??= createProviders(config);
     this.providers = [...providers].sort((a, b) => a.priority - b.priority);
     this.byId = new Map(this.providers.map((p) => [p.id, p]));
   }

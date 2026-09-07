@@ -1,5 +1,7 @@
-import type { MediaInfoType } from '@sera/contracts/types';
-import { SeraError, seraError } from '../errors.js';
+import type { MediaInfoType, ProviderCapabilities } from '@sera/contracts/types';
+import { ensureRecommendations } from '../normalize/plans.js';
+import { SeraError } from '../errors.js';
+import { classifyFailure } from '../extract/failure.js';
 import type { ProviderContext, ResolvedMedia } from './types.js';
 import { YtdlpProvider } from './ytdlp-base.js';
 
@@ -30,6 +32,19 @@ export class YouTubeProvider extends YtdlpProvider {
   readonly label = 'YouTube';
   readonly hosts = ['youtube.com', 'youtu.be', 'youtube-nocookie.com', 'music.youtube.com'];
   override readonly priority = 10;
+
+  /**
+   * Thumbnails are the image half. A video's cover art is a real image people want, and
+   * it is already resolved as part of every extraction — offering it costs one more
+   * option rather than a second round trip.
+   */
+  override readonly capabilities: ProviderCapabilities = {
+    video: true,
+    image: true,
+    carousel: false,
+    audioExtraction: true,
+    gif: false,
+  };
 
   override normalize(url: URL): URL {
     const out = new URL(url.toString());
@@ -91,7 +106,7 @@ export class YouTubeProvider extends YtdlpProvider {
     const potStatus = context.config.youtube.potProviderUrl ? 'configured' : 'not-configured';
 
     try {
-      const media = await super.resolve(url, context);
+      const media = withThumbnailOption(await super.resolve(url, context));
       context.logger.info(
         {
           provider: this.id,
@@ -115,131 +130,59 @@ export class YouTubeProvider extends YtdlpProvider {
       };
     } catch (error) {
       const failure = SeraError.from(error);
-      const backend = context.config.youtube;
-
-      // Only the address block is worth a second backend. A private video is private
-      // from every connection, and retrying it elsewhere just wastes someone's time.
-      if (failure.code !== 'SOURCE_BLOCKED' || !backend.fallbackUrl) {
-        context.logger.info(
-          {
-            provider: this.id,
-            extractionBackend: 'direct',
-            poTokenStatus: potStatus,
-            fallbackUsed: false,
-            failureClass: failure.code,
-            detail: failure.detail,
-            durationMs: Date.now() - started,
-          },
-          'youtube extraction failed',
-        );
-        throw failure;
-      }
-
-      return this.viaResidential(url, context, failure, potStatus, started);
-    }
-  }
-
-  /**
-   * Hands the URL to an authorized extraction backend on a residential connection.
-   *
-   * The backend answers with the same resolved shape this provider would have produced,
-   * so nothing downstream knows or cares which one ran. The shared secret goes in a
-   * header and is never logged.
-   */
-  private async viaResidential(
-    url: URL,
-    context: ProviderContext,
-    blocked: SeraError,
-    potStatus: string,
-    started: number,
-  ): Promise<ResolvedMedia> {
-    const { fallbackUrl, fallbackToken } = context.config.youtube;
-    const healthy = await backendIsHealthy(fallbackUrl, fallbackToken);
-    if (!healthy) {
-      context.logger.warn(
+      // Whether anywhere else is worth trying is the router's decision, not this
+      // provider's: the router is the only thing that knows which backends exist and
+      // which failures a different network could actually fix.
+      context.logger.info(
         {
           provider: this.id,
-          extractionBackend: 'residential',
-          fallbackUsed: false,
-          failureClass: 'BACKEND_UNHEALTHY',
+          extractionBackend: 'direct',
+          poTokenStatus: potStatus,
+          failureClass: classifyFailure(failure),
+          errorCode: failure.code,
+          detail: failure.detail,
           durationMs: Date.now() - started,
         },
-        'youtube fallback backend is not answering',
+        'youtube extraction failed',
       );
-      throw blocked;
+      throw failure;
     }
-
-    let media: ResolvedMedia;
-    try {
-      const response = await fetch(`${fallbackUrl}/resolve`, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          ...(fallbackToken ? { authorization: `Bearer ${fallbackToken}` } : {}),
-        },
-        body: JSON.stringify({ url: url.toString() }),
-        signal: AbortSignal.timeout(context.config.resolveTimeoutMsFor(this.id)),
-      });
-      if (!response.ok) {
-        throw seraError('PROVIDER_UNAVAILABLE', {
-          detail: `youtube: fallback backend returned ${response.status}`,
-        });
-      }
-      media = (await response.json()) as ResolvedMedia;
-      if (!Array.isArray(media.items) || !media.items.length) {
-        throw seraError('MEDIA_UNAVAILABLE', { detail: 'youtube: fallback returned no items' });
-      }
-    } catch (error) {
-      context.logger.warn(
-        {
-          provider: this.id,
-          extractionBackend: 'residential',
-          fallbackUsed: true,
-          failureClass: SeraError.from(error).code,
-          durationMs: Date.now() - started,
-        },
-        'youtube fallback backend failed',
-      );
-      // The original block is the more useful answer: the fallback is an implementation
-      // detail of this server, not something the visitor asked for.
-      throw blocked;
-    }
-
-    context.logger.info(
-      {
-        provider: this.id,
-        extractionBackend: 'residential',
-        poTokenStatus: potStatus,
-        fallbackUsed: true,
-        durationMs: Date.now() - started,
-        items: media.items.length,
-      },
-      'youtube extraction succeeded through the fallback backend',
-    );
-
-    return {
-      ...media,
-      provider: this.id,
-      providerLabel: this.label,
-      metadata: {
-        ...media.metadata,
-        extractionBackend: 'residential',
-        poTokenStatus: potStatus,
-        fallbackUsed: 'true',
-      },
-    };
   }
 }
 
-/** A backend that does not answer its health endpoint is not chosen. */
-async function backendIsHealthy(baseUrl: string, token: string): Promise<boolean> {
-  try {
-    const response = await fetch(`${baseUrl}/health`, {
-      headers: token ? { authorization: `Bearer ${token}` } : {},
-      signal: AbortSignal.timeout(5000),
-    });
-    return response.ok;
-  } catch {
-    return false;
-  }
+/**
+ * Offers each item's cover image alongside its video.
+ *
+ * The extraction already found it, so this is one more option on an item rather than a
+ * second item — the picker groups by kind, so an Image tab appears next to Video and
+ * Audio and nothing about ordering or counts changes. The container comes from the URL
+ * here, and the download path corrects it from the bytes if YouTube served something
+ * else, which it does: the same image is JPEG on one host and WebP on another.
+ */
+function withThumbnailOption(media: ResolvedMedia): ResolvedMedia {
+  return {
+    ...media,
+    items: media.items.map((item) => {
+      const thumbnail = item.thumbnailUrl;
+      if (!thumbnail || item.kind !== 'video') return item;
+      const extension = /.(jpg|jpeg|png|webp)(?:[?#]|$)/i.exec(thumbnail)?.[1]?.toLowerCase();
+      const container = extension === 'jpeg' ? 'jpg' : ((extension ?? 'jpg') as 'jpg');
+
+      return {
+        ...item,
+        plans: ensureRecommendations([
+          ...item.plans,
+          {
+            kind: 'image' as const,
+            container,
+            label: 'Thumbnail',
+            detail: `${container.toUpperCase()} · cover image`,
+            requiresConversion: false,
+            recommended: false,
+            fetch: { via: 'direct' as const, url: thumbnail },
+          },
+        ]),
+      };
+    }),
+  };
 }
