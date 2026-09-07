@@ -36,6 +36,31 @@ own media in the standard way, and any direct link to a media file.
 
 Adding another is one file and one registry line. See [Providers](#providers).
 
+#### Where you host it changes what works
+
+This is worth knowing before you pick a host, because it is not a bug you can fix in the
+code.
+
+Several platforms treat requests from cloud provider address ranges differently from
+requests from a home connection. YouTube is the clearest case: from a residential IP it
+resolves normally, and from a cloud instance — Oracle, AWS, Hetzner, all of them — it
+answers **"Sign in to confirm you're not a bot"** instead. SERA reports that honestly as
+`LOGIN_REQUIRED`; there is nothing on this side to repair.
+
+The same message appears for genuinely restricted media: Vimeo now requires an account
+for its web client, on any address.
+
+What still works from a datacentre: direct file links, SoundCloud, and every provider
+that does not gate on the requesting network. What does not: anything that does, for as
+long as it does.
+
+SERA does not ship a way around this, and adding one is out of scope. Supplying account
+cookies to defeat a bot check means handing a server your credentials to act as you, and
+turning the tool into something for reaching content the platform has decided you should
+not reach — the opposite of what it is for. If you want YouTube specifically, run SERA
+where you are: the [tunnel](#publicly-from-your-own-machine) option gives you a public
+URL with the extractor running on your own connection.
+
 ---
 
 ## Running it

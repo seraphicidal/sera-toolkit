@@ -165,6 +165,24 @@ To use your own domain instead, point an `A` record at the instance, then set
 
 ---
 
+## What will not work from here
+
+Oracle's addresses are cloud addresses, and some platforms treat those differently from a
+home connection. In practice, on this instance:
+
+| Source                                        | Result                                                          |
+| --------------------------------------------- | --------------------------------------------------------------- |
+| Direct file links, SoundCloud, most providers | Work normally                                                   |
+| YouTube                                       | `LOGIN_REQUIRED` — "Sign in to confirm you're not a bot"        |
+| Vimeo                                         | `LOGIN_REQUIRED` — its web client now needs an account anywhere |
+
+The YouTube one is specific to the address, not to the deployment: the same link, the same
+yt-dlp version and the same code resolve fine from a residential connection. Nothing in
+the configuration changes it, and SERA deliberately ships no way around it — see
+[Where you host it changes what works](../README.md#where-you-host-it-changes-what-works).
+
+---
+
 ## Afterwards
 
 Provisioning installs `sera`, a wrapper around `docker compose` that points at this
