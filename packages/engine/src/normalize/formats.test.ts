@@ -242,8 +242,15 @@ describe('container reasoning', () => {
   it('knows which pairs can share an MP4', () => {
     expect(fitsInMp4('avc1.640028', 'mp4a.40.2')).toBe(true);
     expect(fitsInMp4('av01.0.08M.08', 'mp4a.40.2')).toBe(true);
-    expect(fitsInMp4('vp09.00.40.08', 'mp4a.40.2')).toBe(false);
     expect(fitsInMp4('avc1.640028', 'opus')).toBe(false);
+
+    // VP9 with AAC is an MP4, and used to be called a WebM — which cannot hold AAC, so
+    // the merge failed and every Instagram Reel with it failed at the download step.
+    expect(fitsInMp4('vp09.00.40.08', 'mp4a.40.2')).toBe(true);
+    // With Opus it is a WebM again, which is YouTube's usual pairing.
+    expect(fitsInMp4('vp09.00.40.08', 'opus')).toBe(false);
+    // VP8 stays off the list: legal in MP4, played by almost nothing.
+    expect(fitsInMp4('vp8', 'mp4a.40.2')).toBe(false);
   });
 });
 

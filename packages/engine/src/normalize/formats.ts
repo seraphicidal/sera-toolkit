@@ -120,7 +120,17 @@ export function nativeContainer(vcodec: string | undefined): 'mp4' | 'webm' {
   return 'mp4';
 }
 
-/** True when the codec pair can live in an MP4 without re-encoding. */
+/**
+ * True when the codec pair can live in an MP4 without re-encoding.
+ *
+ * VP9 belongs on this list. It is a standard MP4 video codec, and leaving it off had a
+ * consequence: Instagram serves VP9 video in MP4 with AAC audio, this said the pair did
+ * not fit, the plan asked for a WebM — and WebM cannot hold AAC, so every Reel died in
+ * the merge with "Stream #1:0 -> #0:1 (copy)". The audio codec is the real constraint
+ * here, and it still decides: VP9 with Opus is a WebM, VP9 with AAC is an MP4.
+ *
+ * VP8 is deliberately absent. It is legal in MP4 and almost nothing plays it.
+ */
 export function fitsInMp4(vcodec: string | undefined, acodec: string | undefined): boolean {
   const v = (vcodec ?? '').toLowerCase();
   const a = (acodec ?? '').toLowerCase();
@@ -130,6 +140,8 @@ export function fitsInMp4(vcodec: string | undefined, acodec: string | undefined
     v.startsWith('avc') ||
     v.startsWith('h264') ||
     v.startsWith('av01') ||
+    v.startsWith('vp09') ||
+    v.startsWith('vp9') ||
     v.startsWith('hev') ||
     v.startsWith('hvc');
   const audioOk =
