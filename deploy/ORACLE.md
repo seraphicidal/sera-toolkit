@@ -161,20 +161,20 @@ https://<your-ip-with-dashes>.sslip.io
 is a real certificate on a real hostname — no browser warning.
 
 To use your own domain instead, point an `A` record at the instance, then set
-`SERA_DOMAIN` in `/opt/sera/.env` and re-run `docker compose … up -d`.
+`SERA_DOMAIN` in `/opt/sera/.env` and re-run `sudo sera up -d`.
 
 ---
 
 ## Afterwards
 
-```bash
-cd /opt/sera
-COMPOSE="sudo docker compose --env-file .env -f deploy/docker-compose.oracle.yml"
+Provisioning installs `sera`, a wrapper around `docker compose` that points at this
+deployment's compose file, project directory and `.env`. It works from any directory:
 
-$COMPOSE ps                  # what is running
-$COMPOSE logs -f worker      # follow a download
-$COMPOSE logs caddy          # certificate problems live here
-$COMPOSE pull && $COMPOSE up -d   # update to the latest images
+```bash
+sudo sera ps                 # what is running
+sudo sera logs -f worker     # follow a download
+sudo sera logs caddy         # certificate problems live here
+sudo sera pull && sudo sera up -d   # update to the latest images
 ```
 
 Everything is `restart: unless-stopped` and Docker starts at boot, so the stack survives
@@ -182,12 +182,12 @@ reboots and crashes without intervention.
 
 ### Troubleshooting
 
-| Symptom                              | Cause                                                                                                  |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------ |
-| Site never answers, SSH works        | The **security list** ingress rules are missing. This is by far the most common.                       |
-| Browser certificate warning          | Caddy has not finished issuing. Give it a minute, then check `$COMPOSE logs caddy`.                    |
-| `no such host` for the sslip.io name | The IP in the hostname is wrong — check `/opt/sera/.env`.                                              |
-| Downloads fail immediately           | `$COMPOSE logs worker`. If the extractor is at fault, `npm run update-providers` upstream and re-pull. |
+| Symptom                              | Cause                                                                                                   |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------- |
+| Site never answers, SSH works        | The **security list** ingress rules are missing. This is by far the most common.                        |
+| Browser certificate warning          | Caddy has not finished issuing. Give it a minute, then check `sudo sera logs caddy`.                    |
+| `no such host` for the sslip.io name | The IP in the hostname is wrong — check `/opt/sera/.env`.                                               |
+| Downloads fail immediately           | `sudo sera logs worker`. If the extractor is at fault, `npm run update-providers` upstream and re-pull. |
 
 ### Staying inside the free tier
 
@@ -204,4 +204,4 @@ SERA_MAX_CONCURRENT_JOBS_PER_CLIENT=1
 SERA_RATE_LIMIT_JOBS_PER_MINUTE=4
 ```
 
-Then `$COMPOSE up -d` to apply.
+Then `sudo sera up -d` to apply.

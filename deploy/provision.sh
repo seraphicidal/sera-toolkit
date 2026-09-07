@@ -19,10 +19,17 @@ REPO="${SERA_REPO:-https://github.com/seraphicidal/sera-toolkit.git}"
 INSTALL_DIR="${SERA_DIR:-/opt/sera}"
 COMPOSE_FILE="deploy/docker-compose.oracle.yml"
 
-# Compose looks for .env beside the compose file, i.e. deploy/.env, which is not where
-# provisioning writes it. Naming the file explicitly is what makes every later
-# `docker compose` run from /opt/sera work instead of failing on interpolation.
-COMPOSE=(docker compose --env-file .env -f "$COMPOSE_FILE")
+# Compose resolves relative paths against the *project directory*, which defaults to the
+# folder holding the compose file — deploy/. Left implicit, that turns `.env` into
+# deploy/.env and the Caddyfile mount into deploy/deploy/Caddyfile, and both fail. Naming
+# the project directory fixes every relative path at once; absolute paths for the rest
+# mean these commands work from any working directory.
+COMPOSE=(
+  docker compose
+  --project-directory "$INSTALL_DIR"
+  --env-file "$INSTALL_DIR/.env"
+  -f "$INSTALL_DIR/$COMPOSE_FILE"
+)
 
 log() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 warn() { printf '\033[1;33m !  %s\033[0m\n' "$*"; }
@@ -166,6 +173,19 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Convenience wrapper
+# ---------------------------------------------------------------------------
+
+log "Installing the sera command"
+cat > /usr/local/bin/sera <<WRAPPER
+#!/usr/bin/env bash
+# Thin wrapper around docker compose for this deployment. Written by
+# deploy/provision.sh; edit that instead.  Usage: sudo sera ps | logs -f worker | up -d
+exec docker compose --project-directory "$INSTALL_DIR" --env-file "$INSTALL_DIR/.env" -f "$INSTALL_DIR/$COMPOSE_FILE" "\$@"
+WRAPPER
+chmod 755 /usr/local/bin/sera
+
+# ---------------------------------------------------------------------------
 # Launch
 # ---------------------------------------------------------------------------
 
@@ -199,19 +219,18 @@ cat <<EOF
     1. Check the cloud firewall. On Oracle this is separate from the instance firewall:
        Networking > Virtual Cloud Networks > your VCN > Security Lists > add ingress
        rules for TCP 80 and 443 from 0.0.0.0/0.
-    2. sudo docker compose --env-file .env -f ${COMPOSE_FILE} logs caddy
-    3. sudo docker compose --env-file .env -f ${COMPOSE_FILE} logs api
+    2. sudo sera logs caddy
+    3. sudo sera logs api
 
-  Useful afterwards:
+  Useful afterwards — `sera` wraps docker compose for this deployment and works from
+  any directory:
 
-    cd /opt/sera
-    sudo docker compose --env-file .env -f ${COMPOSE_FILE} ps
-    sudo docker compose --env-file .env -f ${COMPOSE_FILE} logs -f worker
+    sudo sera ps
+    sudo sera logs -f worker
 
   To update:
 
-    cd /opt/sera && sudo git pull
-    sudo docker compose --env-file .env -f ${COMPOSE_FILE} pull
-    sudo docker compose --env-file .env -f ${COMPOSE_FILE} up -d
+    sudo git -C ${INSTALL_DIR} pull
+    sudo sera pull && sudo sera up -d
 
 EOF
