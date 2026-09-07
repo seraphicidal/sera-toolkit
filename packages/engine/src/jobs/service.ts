@@ -5,6 +5,7 @@ import { seraError, SeraError } from '../errors.js';
 import { logSafeUrl, type Logger } from '../logging.js';
 import type { MediaResolver } from '../resolver.js';
 import type { WorkspaceManager } from '../storage/workspace.js';
+import { classifyFailure } from '../extract/failure.js';
 import type { ExtractionNodeRegistry } from '../extract/remote.js';
 import { newJobId } from '../util/tokens.js';
 import type { JobBackend, JobRecord, WorkerHandle } from '../queue/types.js';
@@ -282,6 +283,7 @@ export class JobService {
           source: logSafeUrl(record.spec.url),
           outcome: cancelled ? 'cancelled' : 'failed',
           errorCode: seraErr.code,
+          failureClass: classifyFailure(seraErr),
           detail: seraErr.detail,
         },
         'job finished',

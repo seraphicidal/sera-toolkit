@@ -45,7 +45,10 @@ export interface ExtractionBackend {
 export interface ExtractionOutcome {
   readonly media: ResolvedMedia;
   readonly backend: string;
+  readonly networkClass: NetworkClass;
   readonly fallbackUsed: boolean;
+  /** How many backends were tried, including the one that answered. */
+  readonly attempts: number;
   /** Why the first backend was abandoned, when one was. */
   readonly firstFailure?: FailureClass;
 }
@@ -174,11 +177,19 @@ export class ExtractionRouter {
           return {
             media,
             backend: backend.id,
+            networkClass: backend.networkClass,
             fallbackUsed: true,
+            attempts: index + 1,
             ...(firstFailure ? { firstFailure } : {}),
           };
         }
-        return { media, backend: backend.id, fallbackUsed: false };
+        return {
+          media,
+          backend: backend.id,
+          networkClass: backend.networkClass,
+          fallbackUsed: false,
+          attempts: 1,
+        };
       } catch (error) {
         const failure = classifyFailure(error);
         if (index === 0) {
