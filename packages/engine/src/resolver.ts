@@ -3,7 +3,7 @@ import type { DownloadOption, MediaInfo, MediaItem } from '@sera/contracts/types
 import type { Dispatcher } from 'undici';
 import type { EngineConfig } from './config.js';
 import { seraError, SeraError } from './errors.js';
-import { dumpInfo } from './extract/ytdlp.js';
+import { dumpInfo, version as ytdlpVersion } from './extract/ytdlp.js';
 import type { YtdlpInfo } from './extract/ytdlp-types.js';
 import { createLogger, logSafeUrl, type Logger } from './logging.js';
 import { normalizeForProvider, ProviderRegistry } from './providers/index.js';
@@ -108,6 +108,22 @@ export class MediaResolver {
         }));
   }
 
+  /**
+   * The extractor's version, asked for once.
+   *
+   * It belongs on every resolve line because it is the first question when a provider
+   * starts failing: did the site change, or did the extractor?
+   */
+  private cachedExtractorVersion: string | undefined;
+
+  private async extractorVersion(): Promise<string> {
+    const cached = this.cachedExtractorVersion;
+    if (cached) return cached;
+    const resolved = await ytdlpVersion(this.config.ytdlpPath).catch(() => 'unknown');
+    this.cachedExtractorVersion = resolved;
+    return resolved;
+  }
+
   /** Resolves user input into the client model. */
   async resolve(input: string, signal?: AbortSignal): Promise<MediaInfo> {
     const { url } = parseUserUrl(input, {
@@ -175,6 +191,7 @@ export class MediaResolver {
         {
           provider: used.id,
           source: logSafeUrl(canonical),
+          ytdlp: await this.extractorVersion(),
           durationMs: Date.now() - started,
           errorCode: seraErr.code,
           detail: seraErr.detail,
@@ -188,6 +205,7 @@ export class MediaResolver {
       {
         provider: used.id,
         source: logSafeUrl(canonical),
+        ytdlp: await this.extractorVersion(),
         durationMs: Date.now() - started,
         items: resolved.items.length,
       },
