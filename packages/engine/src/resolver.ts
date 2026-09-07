@@ -128,21 +128,31 @@ export class MediaResolver {
       try {
         resolved = await this.resolveCanonical(canonical, provider.id, signal);
       } catch (error) {
-        // A path ending in .gif is not proof of a GIF: wikis and image hosts give
-        // file-description *pages* that extension and serve HTML. The direct provider
-        // claims the URL on its shape and can only find out by asking, so when it reports
-        // that the link is not a file, the page reader gets the same try it would have had
-        // if the extension had never been there. No new surface: an extensionless URL for
-        // the same page already reaches the generic provider.
+        // "This provider cannot handle what is here" is not the same as "there is
+        // nothing here", and the page reader can often do better. Two cases in practice: a
+        // path ending in .gif that is really a file-description page, and a social post
+        // whose extractor only understands video while the post is photographs. Both are
+        // reported as an unsupported source, and both are worth one more try through the
+        // reader — which grants no extra reach, since a URL the specific provider had not
+        // claimed would have arrived there anyway.
         const generic = this.registry.get('generic');
         if (
-          provider.id !== 'direct' ||
+          provider.id === 'generic' ||
           !generic ||
           SeraError.from(error).code !== 'UNSUPPORTED_SOURCE'
         ) {
           throw error;
         }
-        resolved = await this.resolveCanonical(canonical, generic.id, signal);
+        try {
+          resolved = await this.resolveCanonical(canonical, generic.id, signal);
+        } catch (fallbackError) {
+          // The reader found nothing either, so the first answer stands — it names the
+          // source the user actually pasted. The exception is a site that asks not to be
+          // read automatically: "this source isn't supported" would be misleading when
+          // the truthful answer is that we were asked not to look.
+          const refusal = SeraError.from(fallbackError);
+          throw refusal.detail?.startsWith('robots.txt disallows') ? refusal : error;
+        }
         used = generic;
       }
       this.registry.markHealthy(used.id);

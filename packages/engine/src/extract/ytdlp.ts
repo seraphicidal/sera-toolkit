@@ -350,6 +350,23 @@ export function classifyYtdlpFailure(stderr: string, exitCode: number): SeraErro
   if (has('http error 429', 'too many requests', 'rate-limit', 'rate limit')) {
     return seraError('RATE_LIMITED', { detail });
   }
+  // The extractor ran, understood the page, and found nothing it handles — which on
+  // most social platforms means the post is photos rather than video. That is a gap in
+  // *this* extractor, not a missing post, so it is reported as an unsupported source and
+  // the resolver retries through the page reader, which does read images.
+  if (
+    has(
+      'no video could be found',
+      'no video formats found',
+      'there is no video in this post',
+      'no media found',
+      'unable to find any media',
+    )
+  ) {
+    return seraError('UNSUPPORTED_SOURCE', {
+      detail: detail ? `no extractable video: ${detail}` : 'no extractable video',
+    });
+  }
   if (
     has(
       'unsupported url',
