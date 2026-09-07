@@ -174,6 +174,23 @@ export class SeraEngine {
       }),
     );
 
+    // Where extraction can run. Only reported once a deployment has enabled it, so a
+    // normal install's health output does not grow a line about a feature it is not
+    // using. A configured node that has gone quiet shows as an error here, which is the
+    // one way an operator finds out before a visitor does.
+    if (this.config.extractionNodes.enabled) {
+      const nodes = this.extractionNodes.status();
+      const healthy = nodes.filter((node) => node.healthy);
+      checks.push({
+        name: 'extraction-nodes',
+        status: nodes.length === 0 ? 'error' : healthy.length ? 'ok' : 'error',
+        detail: nodes.length
+          ? healthy.map((node) => `${node.id} (${node.providers.join(',') || 'any'})`).join(', ') ||
+            'all nodes are stale'
+          : 'none connected',
+      });
+    }
+
     const failed = checks.filter((check) => check.status === 'error').length;
     return {
       status: failed === 0 ? 'ok' : failed === checks.length ? 'error' : 'degraded',
