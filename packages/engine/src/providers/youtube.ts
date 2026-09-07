@@ -85,12 +85,15 @@ export class YouTubeProvider extends YtdlpProvider {
   }
 
   protected override extractorArgs(_url: URL, context: ProviderContext): readonly string[] {
-    const args = [
-      // The web client alone stopped returning full format lists reliably; asking for
-      // the additional clients is what keeps 1080p and the audio-only renditions
-      // visible. `tv` needs no PO token, which is why it leads.
-      'youtube:player_client=tv,default,web_safari',
-    ];
+    const args: string[] = [];
+
+    // Nothing by default, because an audit of every client the extractor offers found
+    // none that beats letting it choose — and one, `tv`, that errors outright. The
+    // previous hardcoded `tv,default,web_safari` produced exactly the same 53 formats
+    // as no override at all, so it was carrying a claim it could no longer support.
+    // See SERA_YOUTUBE_PLAYER_CLIENTS for the measurements.
+    const clients = context.config.youtube.playerClients;
+    if (clients) args.push(`youtube:player_client=${clients}`);
 
     const provider = context.config.youtube.potProviderUrl;
     if (provider) {
@@ -111,7 +114,7 @@ export class YouTubeProvider extends YtdlpProvider {
         {
           provider: this.id,
           extractionBackend: 'direct',
-          playerClient: 'tv,default,web_safari',
+          playerClient: context.config.youtube.playerClients || 'extractor default',
           poTokenStatus: potStatus,
           fallbackUsed: false,
           durationMs: Date.now() - started,
