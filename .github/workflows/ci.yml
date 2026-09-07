@@ -23,6 +23,21 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
+    # The Redis driver is the one part of the engine a mock cannot stand in for: BullMQ's
+    # own constructor validation, custom job ids and cross-connection pub/sub all behave
+    # differently against a fake. Skipping it here is how a queue name BullMQ rejects
+    # reached a production server.
+    services:
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
     steps:
       - uses: actions/checkout@v5
 
@@ -67,9 +82,25 @@ jobs:
 
       - name: Test
         run: npm test
+        env:
+          # Unset, the Redis integration tests skip themselves. Set, they run.
+          SERA_TEST_REDIS_URL: redis://127.0.0.1:6379
 
       - name: Build
         run: npm run build
+
+      # The reverse proxy's config is as load-bearing as the application's, and it fails
+      # in a way nothing in the test suite can see: a Caddyfile Caddy refuses means the
+      # site has no TLS terminator at all. Both states are checked because the bug that
+      # prompted this was in the one where the optional ACME contact is absent.
+      - name: Validate the Caddyfile
+        run: |
+          mkdir -p /tmp/globals-none /tmp/globals-email
+          echo 'email ci@example.test' > /tmp/globals-email/email.caddy
+          for globals in /tmp/globals-none /tmp/globals-email; do
+            echo "== globals: $globals"
+            docker run --rm -e SERA_DOMAIN=example.test -v "$PWD/deploy/Caddyfile:/etc/caddy/Caddyfile:ro" -v "$globals:/etc/caddy/globals:ro" caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+          done
 
   images:
     name: Build container images
@@ -130,17 +161,30 @@ jobs:
           docker run --rm --entrypoint ffmpeg "$IMAGE_API:verify" -version | head -n 1
           docker run --rm --entrypoint ffprobe "$IMAGE_API:verify" -version | head -n 1
 
-      - name: Verify the API image boots and reports health
+      # Booted the way the compose file boots it — Redis driver, API and worker in
+      # separate containers — because the memory driver shares almost no code with it.
+      # The failure this replaces was a crash inside the Redis backend's constructor,
+      # which a memory-driver smoke test cannot reach.
+      - name: Verify the API and worker images boot against Redis
         run: |
-          docker run -d --name sera-api-ci \
-            -e NODE_ENV=production \
-            -e SERA_SECRET=ci-smoke-secret-not-used-in-production \
-            -e SERA_QUEUE_DRIVER=memory \
-            -p 4000:4000 "$IMAGE_API:verify"
-          for i in $(seq 1 30); do
+          docker network create sera-ci >/dev/null
+          docker run -d --name sera-redis-ci --network sera-ci redis:7.4-alpine >/dev/null
+
+          common="-e NODE_ENV=production
+            -e SERA_SECRET=ci-smoke-secret-not-used-in-production
+            -e SERA_QUEUE_DRIVER=redis
+            -e SERA_REDIS_URL=redis://sera-redis-ci:6379"
+
+          # shellcheck disable=SC2086
+          docker run -d --name sera-api-ci --network sera-ci $common -e SERA_EMBEDDED_WORKER=false -p 4000:4000 "$IMAGE_API:verify" >/dev/null
+          # shellcheck disable=SC2086
+          docker run -d --name sera-worker-ci --network sera-ci $common "$IMAGE_API:verify" node apps/worker/dist/index.js >/dev/null
+
+          for _ in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:4000/health >/dev/null 2>&1; then break; fi
             sleep 2
           done
+
           curl -fsS http://127.0.0.1:4000/health | tee /tmp/health.json
           node -e "
             const r = require('/tmp/health.json');
@@ -148,8 +192,20 @@ jobs:
             console.log('health ok, version', r.version);
           "
           curl -fsS http://127.0.0.1:4000/ready > /dev/null
-          docker logs sera-api-ci | tail -n 20
-          docker rm -f sera-api-ci
+
+          # A restart loop looks identical to a healthy boot if you only check once. Both
+          # containers must still be up, and the worker has no health endpoint of its own.
+          for name in sera-api-ci sera-worker-ci; do
+            echo "== $name"
+            docker logs "$name" 2>&1 | tail -n 20
+            running=$(docker inspect -f '{{.State.Running}}' "$name")
+            restarts=$(docker inspect -f '{{.RestartCount}}' "$name")
+            test "$running" = true || { echo "$name is not running"; exit 1; }
+            test "$restarts" = 0 || { echo "$name restarted $restarts time(s)"; exit 1; }
+          done
+
+          docker rm -f sera-api-ci sera-worker-ci sera-redis-ci >/dev/null
+          docker network rm sera-ci >/dev/null
 
       - name: Build web image (amd64, build check)
         uses: docker/build-push-action@v6
@@ -162,6 +218,39 @@ jobs:
           tags: ${{ env.IMAGE_WEB }}:verify
           cache-from: type=gha,scope=web
           cache-to: type=gha,mode=max,scope=web
+
+      # Booted, not just built. The web container runs with a read-only root filesystem
+      # and reaches the API only over the compose network, so "it compiled" says nothing
+      # about whether it serves a page.
+      - name: Verify the web image boots and proxies to the API
+        run: |
+          docker network create sera-web-ci >/dev/null
+          docker run -d --name sera-redis-web-ci --network sera-web-ci redis:7.4-alpine >/dev/null
+          docker run -d --name sera-api-web-ci --network sera-web-ci -e NODE_ENV=production -e SERA_SECRET=ci-smoke-secret-not-used-in-production -e SERA_QUEUE_DRIVER=redis -e SERA_REDIS_URL=redis://sera-redis-web-ci:6379 "$IMAGE_API:verify" >/dev/null
+          docker run -d --name sera-web-ci --network sera-web-ci -e SERA_API_URL=http://sera-api-web-ci:4000 --read-only --tmpfs /tmp --tmpfs /app/apps/web/.next/cache -p 3000:3000 "$IMAGE_WEB:verify" >/dev/null
+
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:3000/ >/dev/null 2>&1; then break; fi
+            sleep 2
+          done
+
+          # The page itself, then the two things it depends on: the rewrite to the API,
+          # and a route that renders server-side against it.
+          curl -fsS http://127.0.0.1:3000/ | grep -q 'SERA' || { echo 'home page did not render'; exit 1; }
+          curl -fsS http://127.0.0.1:3000/health | grep -q '"status":"ok"' || { echo 'rewrite to the API did not work'; exit 1; }
+          curl -fsS http://127.0.0.1:3000/about >/dev/null
+
+          # ISR revalidation writes to the cache; a read-only mount would surface here.
+          sleep 2
+          curl -fsS http://127.0.0.1:3000/about >/dev/null
+          docker logs sera-web-ci 2>&1 | tail -n 20
+          docker logs sera-web-ci 2>&1 | grep -qi 'EROFS|read-only file system' && { echo 'web wrote to a read-only path'; exit 1; }
+
+          running=$(docker inspect -f '{{.State.Running}}' sera-web-ci)
+          test "$running" = true || { echo 'web container is not running'; exit 1; }
+
+          docker rm -f sera-web-ci sera-api-web-ci sera-redis-web-ci >/dev/null
+          docker network rm sera-web-ci >/dev/null
 
       # Published for both architectures once the amd64 build has proved itself.
       - name: Publish API image

@@ -10,6 +10,9 @@ coverage/
 .tools/
 tmp/
 
+# Generated at deploy time from SERA_TLS_EMAIL.
+deploy/caddy.globals/
+
 # Environment
 .env
 .env.local
