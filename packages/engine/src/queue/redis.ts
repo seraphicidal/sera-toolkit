@@ -19,7 +19,13 @@ import {
  * stream. Pub/sub does the fan-out; the queue only decides who runs what.
  */
 
-const QUEUE_NAME = 'sera:jobs';
+/**
+ * BullMQ refuses a queue name containing `:` — it builds its own key namespace by
+ * joining on that character, so a colon here would collide with its internal layout.
+ * The plain Redis keys below are ours alone and use the usual colon convention.
+ */
+export const QUEUE_NAME = 'sera-jobs';
+
 const RECORD_PREFIX = 'sera:job:';
 const CLIENT_PREFIX = 'sera:client:';
 const UPDATE_CHANNEL = 'sera:job-updates';
