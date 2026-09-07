@@ -72,6 +72,8 @@ const DEFAULT_STATUS: Record<ErrorCode, number> = {
   GEO_RESTRICTED: 451,
   AGE_RESTRICTED: 403,
   LOGIN_REQUIRED: 403,
+  // Not 403: the refusal is upstream's, about this server, not about the request.
+  SOURCE_BLOCKED: 502,
   DRM_PROTECTED: 403,
   LIVE_IN_PROGRESS: 409,
   RATE_LIMITED: 429,
@@ -101,6 +103,7 @@ export const MESSAGES: Record<ErrorCode, string> = {
   GEO_RESTRICTED: "This media isn't available from this server's region.",
   AGE_RESTRICTED: 'This media is age-restricted and cannot be accessed without signing in.',
   LOGIN_REQUIRED: 'This media requires an account to view.',
+  SOURCE_BLOCKED: 'This source is blocking this server, not the link.',
   DRM_PROTECTED: 'This media is protected and cannot be downloaded.',
   LIVE_IN_PROGRESS: 'This stream is still live. Try again once it has finished.',
   RATE_LIMITED: 'The source is temporarily limiting requests. Try again later.',
@@ -127,6 +130,8 @@ export const HINTS: Partial<Record<ErrorCode, string>> = {
   TOO_LARGE: 'Try a lower quality.',
   LIVE_IN_PROGRESS: 'Live streams can only be processed after they end.',
   EXPIRED: 'Paste the link again to refresh the available formats.',
+  SOURCE_BLOCKED:
+    'Sites often challenge requests coming from datacentres. The same link usually works from a home connection.',
 };
 
 /** Constructs a `SeraError` with the canonical message and hint for its code. */

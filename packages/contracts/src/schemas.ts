@@ -55,6 +55,7 @@ export const errorCodeSchema = z.enum([
   'GEO_RESTRICTED',
   'AGE_RESTRICTED',
   'LOGIN_REQUIRED',
+  'SOURCE_BLOCKED',
   'DRM_PROTECTED',
   'LIVE_IN_PROGRESS',
   'RATE_LIMITED',
