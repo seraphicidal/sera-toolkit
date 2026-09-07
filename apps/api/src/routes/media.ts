@@ -44,7 +44,7 @@ export function registerMediaRoutes(app: FastifyInstance, engine: SeraEngine): v
       const signal = clientAbortSignal(request, reply);
 
       try {
-        const info = await engine.resolver.resolve(body.url, signal);
+        const info = await engine.resolver.resolve(body.url, signal, request.id);
         engine.abuse.recordSuccess(request.clientKey);
         return await reply.header('cache-control', 'no-store').send(info);
       } catch (error) {

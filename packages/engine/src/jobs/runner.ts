@@ -135,7 +135,7 @@ export class JobRunner {
         {
           jobId: spec.jobId,
           provider: spec.provider,
-          extractionBackend: remoteBackend,
+          strategy: remoteBackend,
           files: produced.length,
         },
         'job completed on a remote extraction backend',
@@ -194,6 +194,12 @@ export class JobRunner {
         jobId: spec.jobId,
         provider: spec.provider,
         source: logSafeUrl(spec.url),
+        strategy: remoteBackend ?? 'local',
+        mediaType: resolved.type,
+        mediaKinds: [...new Set(matched.map(({ item }) => item.kind))],
+        outputFormat: result.isArchive
+          ? 'zip'
+          : [...new Set(matched.map(({ plan }) => plan.container))].join(','),
         files: produced.length,
         bytes: result.sizeBytes,
         durationMs: Date.now() - startedAt,

@@ -22,24 +22,44 @@ export interface LoggerOptions {
  * anything resembling a token never reach the log, because a media downloader's logs
  * would otherwise be a record of what everyone watched.
  */
+export const REDACTED_PATHS: readonly string[] = [
+  'req.headers.authorization',
+  'req.headers.cookie',
+  'req.headers["x-forwarded-for"]',
+  'req.remoteAddress',
+  'req.remotePort',
+  'res.headers["set-cookie"]',
+  // A full URL says which video a person asked for. `logSafeUrl` is how one gets logged.
+  'url',
+  'sourceUrl',
+  'mediaUrl',
+  '*.mediaUrl',
+  'token',
+  '*.token',
+  // Credentials an operator may configure. Not one of these is ever handed to a logger
+  // deliberately; the list exists so that a future object spread — the only way it would
+  // ever happen — cannot leak one.
+  'cookie',
+  '*.cookie',
+  'sessionId',
+  '*.sessionId',
+  'clientSecret',
+  '*.clientSecret',
+  'accessToken',
+  '*.accessToken',
+  'authorization',
+  '*.authorization',
+];
+
+export const REDACTION_CENSOR = '[redacted]';
+
 export function createLogger(options: LoggerOptions): Logger {
   const base = {
     level: options.level,
     ...(options.name ? { name: options.name } : {}),
     redact: {
-      paths: [
-        'req.headers.authorization',
-        'req.headers.cookie',
-        'req.headers["x-forwarded-for"]',
-        'req.remoteAddress',
-        'req.remotePort',
-        'res.headers["set-cookie"]',
-        'url',
-        'sourceUrl',
-        'token',
-        '*.token',
-      ],
-      censor: '[redacted]',
+      paths: [...REDACTED_PATHS],
+      censor: REDACTION_CENSOR,
     },
     formatters: {
       level: (label) => ({ level: label }),

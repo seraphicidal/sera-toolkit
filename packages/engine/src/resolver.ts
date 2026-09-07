@@ -3,8 +3,13 @@ import type { DownloadOption, MediaInfo, MediaItem } from '@sera/contracts/types
 import type { Dispatcher } from 'undici';
 import type { EngineConfig } from './config.js';
 import { seraError, SeraError } from './errors.js';
+import { classifyFailure } from './extract/failure.js';
 import { dumpInfo, version as ytdlpVersion } from './extract/ytdlp.js';
-import { ExtractionRouter, type ExtractionBackend } from './extract/router.js';
+import {
+  ExtractionRouter,
+  type ExtractionBackend,
+  type ExtractionOutcome,
+} from './extract/router.js';
 import type { YtdlpInfo } from './extract/ytdlp-types.js';
 import { createLogger, logSafeUrl, type Logger } from './logging.js';
 import { normalizeForProvider, ProviderRegistry } from './providers/index.js';
@@ -88,7 +93,7 @@ export class MediaResolver {
 
   private readonly probeImpl: NonNullable<ResolverDependencies['probe']>;
   /** Short-lived, so submitting a job just after analyzing does not re-hit the provider. */
-  private readonly cache = new TtlCache<ResolvedMedia>(200, 5 * 60_000);
+  private readonly cache = new TtlCache<ExtractionOutcome>(200, 5 * 60_000);
 
   constructor(deps: ResolverDependencies) {
     this.config = deps.config;
@@ -150,8 +155,13 @@ export class MediaResolver {
 
   private readonly router: ExtractionRouter;
 
-  /** Resolves user input into the client model. */
-  async resolve(input: string, signal?: AbortSignal): Promise<MediaInfo> {
+  /**
+   * Resolves user input into the client model.
+   *
+   * `requestId` is the API's own id for the request, carried only so a log line can be
+   * followed from the visitor's request through to the extraction that answered it.
+   */
+  async resolve(input: string, signal?: AbortSignal, requestId?: string): Promise<MediaInfo> {
     const { url } = parseUserUrl(input, {
       allowPrivateAddresses: this.config.allowPrivateAddresses,
     });
@@ -171,11 +181,11 @@ export class MediaResolver {
     const canonical = normalizeUrl(normalizeForProvider(provider, url));
     const started = Date.now();
 
-    let resolved: ResolvedMedia;
+    let outcome: ExtractionOutcome;
     let used = provider;
     try {
       try {
-        resolved = await this.resolveCanonical(canonical, provider.id, signal);
+        outcome = await this.route(canonical, provider.id, signal);
       } catch (error) {
         // "This provider cannot handle what is here" is not the same as "there is
         // nothing here", and the page reader can often do better. Two cases in practice: a
@@ -193,7 +203,7 @@ export class MediaResolver {
           throw error;
         }
         try {
-          resolved = await this.resolveCanonical(canonical, generic.id, signal);
+          outcome = await this.route(canonical, generic.id, signal);
         } catch (fallbackError) {
           // The reader found nothing either, so the first answer stands — it names the
           // source the user actually pasted. The exception is a site that asks not to be
@@ -215,11 +225,14 @@ export class MediaResolver {
       }
       this.logger.info(
         {
+          ...(requestId ? { requestId } : {}),
           provider: used.id,
           source: logSafeUrl(canonical),
           ytdlp: await this.extractorVersion(),
+          networkClass: this.config.networkClass,
           durationMs: Date.now() - started,
           errorCode: seraErr.code,
+          failureClass: classifyFailure(seraErr),
           detail: seraErr.detail,
         },
         'resolve failed',
@@ -227,11 +240,19 @@ export class MediaResolver {
       throw seraErr;
     }
 
+    const resolved = outcome.media;
     this.logger.info(
       {
+        ...(requestId ? { requestId } : {}),
         provider: used.id,
         source: logSafeUrl(canonical),
         ytdlp: await this.extractorVersion(),
+        strategy: outcome.backend,
+        networkClass: outcome.networkClass,
+        attempts: outcome.attempts,
+        ...(outcome.firstFailure ? { firstFailure: outcome.firstFailure } : {}),
+        mediaType: resolved.type,
+        mediaKinds: [...new Set(resolved.items.map((item) => item.kind))],
         durationMs: Date.now() - started,
         items: resolved.items.length,
       },
@@ -252,6 +273,23 @@ export class MediaResolver {
     providerId: string,
     signal?: AbortSignal,
   ): Promise<ResolvedMedia> {
+    return (await this.route(canonical, providerId, signal)).media;
+  }
+
+  /**
+   * Resolution plus where it happened.
+   *
+   * Through the router rather than straight to the provider, so the job-time
+   * re-resolution takes the same backend the analysis did. It has to: a media URL signed
+   * for one address is refused from another, so a resolution and its download belong to
+   * the same network. The outcome is cached with the media for the same reason a log
+   * line carries it — "which network answered this" stays true on a cache hit.
+   */
+  private async route(
+    canonical: URL,
+    providerId: string,
+    signal?: AbortSignal,
+  ): Promise<ExtractionOutcome> {
     const provider = this.registry.get(providerId);
     if (!provider) {
       throw seraError('UNSUPPORTED_SOURCE', { detail: `unknown provider ${providerId}` });
@@ -261,21 +299,18 @@ export class MediaResolver {
     const cached = this.cache.get(cacheKey);
     if (cached) return cached;
 
-    // Through the router rather than straight to the provider, so the job-time
-    // re-resolution takes the same backend the analysis did. It has to: a media URL
-    // signed for one address is refused from another, so a resolution and its download
-    // belong to the same network.
     const outcome = await this.router.resolve(canonical, providerId, signal);
-    const resolved = outcome.fallbackUsed
+    const media = outcome.fallbackUsed
       ? {
           ...outcome.media,
           metadata: { ...outcome.media.metadata, extractionBackend: outcome.backend },
         }
       : outcome.media;
 
-    if (!resolved.items.length) throw seraError('MEDIA_UNAVAILABLE');
-    this.cache.set(cacheKey, resolved);
-    return resolved;
+    if (!media.items.length) throw seraError('MEDIA_UNAVAILABLE');
+    const withMedia = { ...outcome, media };
+    this.cache.set(cacheKey, withMedia);
+    return withMedia;
   }
 
   /** One attempt on this worker. The router decides whether it is the only one. */
