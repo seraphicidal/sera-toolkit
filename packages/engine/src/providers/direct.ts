@@ -1,4 +1,4 @@
-import type { ContainerFormat, MediaKind } from '@sera/contracts/types';
+import type { ContainerFormat, MediaKind, ProviderCapabilities } from '@sera/contracts/types';
 import { seraError } from '../errors.js';
 import { MEDIA_EXTENSIONS, urlExtension } from '../security/url.js';
 import { formatBytes } from '../util/format.js';
@@ -26,6 +26,18 @@ export class DirectFileProvider implements MediaProvider {
   readonly label = 'Direct file';
   readonly hosts: readonly string[] = [];
   readonly priority = 900;
+
+  /**
+   * Whatever the server hands over. Audio can be pulled out of a video file and a GIF
+   * turned into one, but a lone file is never a carousel.
+   */
+  readonly capabilities: ProviderCapabilities = {
+    video: true,
+    image: true,
+    carousel: false,
+    audioExtraction: true,
+    gif: true,
+  };
 
   canHandle(url: URL): boolean {
     const extension = urlExtension(url);

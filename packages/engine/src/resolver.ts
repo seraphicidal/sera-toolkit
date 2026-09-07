@@ -64,7 +64,13 @@ export interface ResolverDependencies {
   /** Overridable so tests can exercise the whole pipeline with no yt-dlp installed. */
   readonly probe?: (
     url: string,
-    options: { playlist?: boolean; flatPlaylist?: boolean; signal?: AbortSignal },
+    options: {
+      playlist?: boolean;
+      flatPlaylist?: boolean;
+      signal?: AbortSignal;
+      extractorArgs?: readonly string[];
+      timeoutMs?: number;
+    },
   ) => Promise<YtdlpInfo>;
 }
 
@@ -94,9 +100,10 @@ export class MediaResolver {
         dumpInfo(url, {
           binary: this.config.ytdlpPath,
           ffmpegPath: this.config.ffmpegPath,
-          timeoutMs: this.config.resolveTimeoutSeconds * 1000,
+          timeoutMs: options.timeoutMs ?? this.config.resolveTimeoutSeconds * 1000,
           ...(options.playlist !== undefined ? { playlist: options.playlist } : {}),
           ...(options.flatPlaylist !== undefined ? { flatPlaylist: options.flatPlaylist } : {}),
+          ...(options.extractorArgs?.length ? { extractorArgs: options.extractorArgs } : {}),
           ...(options.signal ? { signal: options.signal } : {}),
         }));
   }

@@ -1,4 +1,9 @@
-import type { ContainerFormat, MediaInfoType, MediaKind } from '@sera/contracts/types';
+import type {
+  ContainerFormat,
+  MediaInfoType,
+  MediaKind,
+  ProviderCapabilities,
+} from '@sera/contracts/types';
 import type { ConversionSpec } from '../convert/ffmpeg.js';
 import type { EngineConfig } from '../config.js';
 import type { Logger } from '../logging.js';
@@ -25,6 +30,15 @@ export interface MediaProvider {
    */
   readonly priority: number;
 
+  /**
+   * What this provider can produce, as this installation is configured.
+   *
+   * It is not what builds the format picker — an item's own options do that — but it is
+   * what lets a client say "photos here need credentials this server does not have"
+   * before anyone pastes a link.
+   */
+  readonly capabilities: ProviderCapabilities;
+
   /** Whether this provider handles the URL. Must be cheap and side-effect free. */
   canHandle(url: URL, host: string): boolean;
 
@@ -43,7 +57,14 @@ export interface ProviderContext {
   /** Runs yt-dlp's metadata dump. */
   readonly probe: (
     url: string,
-    options?: { readonly playlist?: boolean; readonly flatPlaylist?: boolean },
+    options?: {
+      readonly playlist?: boolean;
+      readonly flatPlaylist?: boolean;
+      /** `--extractor-args` entries. Was declared on providers and never reached yt-dlp. */
+      readonly extractorArgs?: readonly string[];
+      /** Overrides the shared ceiling, so one slow source cannot hold the worker. */
+      readonly timeoutMs?: number;
+    },
   ) => Promise<YtdlpInfo>;
   /** Fetches a URL through the SSRF-guarded client. */
   readonly fetchText: (url: URL, maxBytes?: number) => Promise<{ body: string; url: string }>;

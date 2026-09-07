@@ -57,6 +57,44 @@ const envSchema = z.object({
   /** Ceiling for a metadata probe. Kept short: the user is waiting on it. */
   SERA_RESOLVE_TIMEOUT_SECONDS: seconds.default(45),
 
+  /**
+   * Per-provider ceilings for the metadata probe, in seconds.
+   *
+   * One number for every source is wrong in both directions: an OAuth round trip to
+   * Reddit should not be given the same 45 seconds as a YouTube player negotiation, and
+   * a slow provider must not be able to hold the single worker this instance has. A
+   * value of 0 means "use SERA_RESOLVE_TIMEOUT_SECONDS".
+   */
+  SERA_RESOLVE_TIMEOUT_YOUTUBE_SECONDS: seconds.default(60),
+  SERA_RESOLVE_TIMEOUT_INSTAGRAM_SECONDS: seconds.default(30),
+  SERA_RESOLVE_TIMEOUT_TWITTER_SECONDS: seconds.default(25),
+  SERA_RESOLVE_TIMEOUT_REDDIT_SECONDS: seconds.default(25),
+
+  /**
+   * Reddit's Data API. Anonymous access is refused outright from hosted ranges, so
+   * without these Reddit is honestly reported as needing credentials rather than
+   * failing with something vague. Register an app at
+   * https://www.reddit.com/prefs/apps as type "script" and use its id and secret.
+   */
+  SERA_REDDIT_CLIENT_ID: z.string().default(''),
+  SERA_REDDIT_CLIENT_SECRET: z.string().default(''),
+
+  /**
+   * A yt-dlp PO Token Provider, as described in yt-dlp's PO-Token-Guide. Empty disables
+   * it. Measured on this deployment, it does not lift YouTube's datacentre challenge —
+   * see the YouTube backend notes — but it is the supported architecture and is what a
+   * host with a clean address needs for the web clients.
+   */
+  SERA_YOUTUBE_POT_PROVIDER_URL: z.string().default(''),
+
+  /**
+   * An authorized residential extraction backend for YouTube, reached over HTTPS with a
+   * shared secret. Empty means there is no fallback and a blocked datacentre simply
+   * reports that it is blocked, which is the honest default for a public deployment.
+   */
+  SERA_YOUTUBE_FALLBACK_URL: z.string().default(''),
+  SERA_YOUTUBE_FALLBACK_TOKEN: z.string().default(''),
+
   SERA_QUEUE_DRIVER: z.enum(['memory', 'redis']).default('memory'),
   SERA_REDIS_URL: z.string().default('redis://127.0.0.1:6379'),
   SERA_WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(64).default(2),
@@ -115,6 +153,22 @@ export interface EngineConfig {
   readonly maxItemsPerJob: number;
   readonly jobTimeoutSeconds: number;
   readonly resolveTimeoutSeconds: number;
+
+  /** Provider id → probe ceiling in milliseconds. Falls back to the shared value. */
+  readonly resolveTimeoutMsFor: (providerId: string) => number;
+
+  readonly reddit: {
+    readonly clientId: string;
+    readonly clientSecret: string;
+    /** True when this installation can talk to Reddit's Data API at all. */
+    readonly configured: boolean;
+  };
+
+  readonly youtube: {
+    readonly potProviderUrl: string;
+    readonly fallbackUrl: string;
+    readonly fallbackToken: string;
+  };
 
   readonly queueDriver: 'memory' | 'redis';
   readonly redisUrl: string;
@@ -230,6 +284,29 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): EngineConfig {
     maxItemsPerJob: e.SERA_MAX_ITEMS_PER_JOB,
     jobTimeoutSeconds: e.SERA_JOB_TIMEOUT_SECONDS,
     resolveTimeoutSeconds: e.SERA_RESOLVE_TIMEOUT_SECONDS,
+
+    resolveTimeoutMsFor: (providerId: string) => {
+      const perProvider: Record<string, number> = {
+        youtube: e.SERA_RESOLVE_TIMEOUT_YOUTUBE_SECONDS,
+        instagram: e.SERA_RESOLVE_TIMEOUT_INSTAGRAM_SECONDS,
+        twitter: e.SERA_RESOLVE_TIMEOUT_TWITTER_SECONDS,
+        reddit: e.SERA_RESOLVE_TIMEOUT_REDDIT_SECONDS,
+      };
+      const seconds = perProvider[providerId] ?? 0;
+      return (seconds > 0 ? seconds : e.SERA_RESOLVE_TIMEOUT_SECONDS) * 1000;
+    },
+
+    reddit: {
+      clientId: e.SERA_REDDIT_CLIENT_ID,
+      clientSecret: e.SERA_REDDIT_CLIENT_SECRET,
+      configured: Boolean(e.SERA_REDDIT_CLIENT_ID && e.SERA_REDDIT_CLIENT_SECRET),
+    },
+
+    youtube: {
+      potProviderUrl: e.SERA_YOUTUBE_POT_PROVIDER_URL.replace(/\/+$/, ''),
+      fallbackUrl: e.SERA_YOUTUBE_FALLBACK_URL.replace(/\/+$/, ''),
+      fallbackToken: e.SERA_YOUTUBE_FALLBACK_TOKEN,
+    },
 
     queueDriver: e.SERA_QUEUE_DRIVER,
     redisUrl: e.SERA_REDIS_URL,

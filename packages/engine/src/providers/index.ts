@@ -115,6 +115,7 @@ export class ProviderRegistry {
         label: provider.label,
         hosts: provider.hosts,
         status: this.statusOf(provider.id),
+        capabilities: provider.capabilities,
       }));
   }
 }

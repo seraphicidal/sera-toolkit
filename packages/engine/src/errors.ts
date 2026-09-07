@@ -74,6 +74,11 @@ const DEFAULT_STATUS: Record<ErrorCode, number> = {
   LOGIN_REQUIRED: 403,
   // Not 403: the refusal is upstream's, about this server, not about the request.
   SOURCE_BLOCKED: 502,
+  // 501, not 403: the request is fine and the media may well be public — this
+  // installation simply has not been given what the source now asks for.
+  PROVIDER_AUTH_REQUIRED: 501,
+  PROVIDER_CONFIGURATION_ERROR: 500,
+  ROBOTS_DISALLOWED: 403,
   DRM_PROTECTED: 403,
   LIVE_IN_PROGRESS: 409,
   RATE_LIMITED: 429,
@@ -104,6 +109,9 @@ export const MESSAGES: Record<ErrorCode, string> = {
   AGE_RESTRICTED: 'This media is age-restricted and cannot be accessed without signing in.',
   LOGIN_REQUIRED: 'This media requires an account to view.',
   SOURCE_BLOCKED: 'This source is blocking this server, not the link.',
+  PROVIDER_AUTH_REQUIRED: 'This source needs an account, and this server does not have one.',
+  PROVIDER_CONFIGURATION_ERROR: 'This source is configured incorrectly on this server.',
+  ROBOTS_DISALLOWED: 'This site asks not to be read automatically.',
   DRM_PROTECTED: 'This media is protected and cannot be downloaded.',
   LIVE_IN_PROGRESS: 'This stream is still live. Try again once it has finished.',
   RATE_LIMITED: 'The source is temporarily limiting requests. Try again later.',
@@ -132,6 +140,9 @@ export const HINTS: Partial<Record<ErrorCode, string>> = {
   EXPIRED: 'Paste the link again to refresh the available formats.',
   SOURCE_BLOCKED:
     'Sites often challenge requests coming from datacentres. The same link usually works from a home connection.',
+  PROVIDER_AUTH_REQUIRED:
+    'Nothing is wrong with the link. The operator of this server can enable it by adding credentials for that source.',
+  ROBOTS_DISALLOWED: 'Try a direct link to the media file itself.',
 };
 
 /** Constructs a `SeraError` with the canonical message and hint for its code. */
