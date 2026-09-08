@@ -11,6 +11,8 @@ import {
   type RedditPost,
   type RedditVideo,
 } from './reddit-api.js';
+import type { ExtractionStrategy } from '../extract/strategy.js';
+import { readViaEmbed, videoBaseFromUrl } from './reddit-embed.js';
 import type { DownloadPlan, ProviderContext, ResolvedItem, ResolvedMedia } from './types.js';
 import { YtdlpProvider } from './ytdlp-base.js';
 
@@ -47,10 +49,11 @@ export class RedditProvider extends YtdlpProvider {
     image: true,
     carousel: true,
     gif: true,
-    // An app registration, not a person's account: the client-credentials grant.
+    // An app registration, not a person's account: the client-credentials grant. It is
+    // no longer *required* — the embed route works without one — but it is still first,
+    // because it is the supported API and it sees more.
     authenticatedMode: true,
-    requiresOauth: true,
-    authRequiredFor: ['everything — Reddit refuses anonymous requests from servers'],
+    requiresOauth: false,
   });
 
   override normalize(url: URL): URL {
@@ -69,7 +72,53 @@ export class RedditProvider extends YtdlpProvider {
     return true;
   }
 
-  override async resolve(url: URL, context: ProviderContext): Promise<ResolvedMedia> {
+  /**
+   * The supported API when there is one, and what Reddit publishes for embedding when
+   * there is not.
+   *
+   * Reddit refuses hosted address ranges on every anonymous route to the *data* — the
+   * page, `.json`, `api.reddit.com`, `old.reddit.com` — and this does not argue with
+   * that. It asks a different question instead: what does Reddit hand a site that quotes
+   * one of its posts? Measured from the blocked address, `embed.reddit.com`,
+   * `/oembed` and the `.rss` feed all answer 200, `i.redd.it` serves the image, and the
+   * `v.redd.it` streaming manifests serve while only the progressive file is refused.
+   *
+   * So an installation with no app registration is no longer told "Reddit needs an
+   * account". It gets the post.
+   */
+  protected override strategies(
+    _url: URL,
+    _context: ProviderContext,
+  ): readonly ExtractionStrategy[] {
+    return [
+      {
+        id: 'oauth-api',
+        label: "Reddit's Data API, with the operator's app registration",
+        // A `v.redd.it` URL is a media host, not a post: the API has nothing to say
+        // about it, and the job pipeline asks about one every time it re-resolves a
+        // video. The embed rung answers that from the URL alone.
+        available: (ctx) => this.credentialsFrom(ctx) !== undefined,
+        run: (target, ctx) => {
+          if (videoBaseFromUrl(target)) {
+            throw seraError('UNSUPPORTED_SOURCE', { detail: 'reddit: a media host, not a post' });
+          }
+          return this.viaApi(target, ctx);
+        },
+      },
+      {
+        id: 'embed',
+        label: 'what Reddit publishes for embedding',
+        run: (target, ctx) =>
+          readViaEmbed(
+            target,
+            (endpoint, maxBytes, options) => ctx.fetchText(endpoint, maxBytes, options),
+            ctx.config.maxItemsPerJob,
+          ),
+      },
+    ];
+  }
+
+  private async viaApi(url: URL, context: ProviderContext): Promise<ResolvedMedia> {
     // A bare i.redd.it link is a file, not a post; the direct provider already claimed
     // those, so anything arriving here with a media host is a link Reddit redirected.
     const postId = postIdFrom(url);
@@ -82,9 +131,7 @@ export class RedditProvider extends YtdlpProvider {
 
     const credentials = this.credentialsFrom(context);
     if (!credentials) {
-      throw seraError('PROVIDER_AUTH_REQUIRED', {
-        message: 'Reddit needs an account, and this server does not have one.',
-        hint: 'Reddit refuses anonymous requests from servers. The operator can enable it by registering a Reddit app and setting SERA_REDDIT_CLIENT_ID and SERA_REDDIT_CLIENT_SECRET.',
+      throw seraError('PROVIDER_CONFIGURATION_ERROR', {
         detail: 'reddit: no client credentials configured',
       });
     }

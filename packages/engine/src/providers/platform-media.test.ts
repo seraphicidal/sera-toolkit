@@ -334,18 +334,31 @@ describe('RedditProvider', () => {
     expect(itemsFrom(share.crosspost_parent_list![0]!, 50)).toHaveLength(1);
   });
 
-  it('asks for credentials plainly when none are configured', async () => {
-    const error = await provider
-      .resolve(new URL('https://www.reddit.com/r/aww/comments/1w9of32/x/'), contextWith())
-      .then(
-        () => undefined,
-        (caught: unknown) => SeraError.from(caught),
-      );
+  it('reads a post through the embed when no app is registered', async () => {
+    // It used to say "Reddit needs an account". Reddit refuses hosted ranges on every
+    // anonymous route to the *data*, which is true — but not on what it publishes for
+    // embedding, and that is enough to read a public post completely.
+    const embedded = `<html>${'<shreddit-screenview-data data="' + JSON.stringify({ post: { type: 'image', url: 'https://i.redd.it/abc123.jpeg' }, subreddit: { name: 'aww' } }).replace(/"/g, '&quot;') + '">'}<img src="https://i.redd.it/abc123.jpeg"></html>`;
 
-    expect(error?.code).toBe('PROVIDER_AUTH_REQUIRED');
-    expect(error?.hint).toContain('SERA_REDDIT_CLIENT_ID');
-    // The visitor is told nothing is wrong with their link, because nothing is.
-    expect(error?.message).toContain('this server does not have one');
+    const media = await provider.resolve(
+      new URL('https://www.reddit.com/r/aww/comments/1w9of32/x/'),
+      {
+        ...contextWith(),
+        fetchText: (target: URL) =>
+          target.hostname === 'embed.reddit.com'
+            ? Promise.resolve({ body: embedded, url: target.toString(), status: 200 })
+            : Promise.resolve({
+                body: JSON.stringify({ title: 'Good dog', author_name: 'someone' }),
+                url: target.toString(),
+                status: 200,
+              }),
+      },
+    );
+
+    expect(media.items).toHaveLength(1);
+    expect(media.items[0]?.kind).toBe('image');
+    expect(media.title).toBe('Good dog');
+    expect(media.metadata?.source).toBe('embed');
   });
 });
 
@@ -449,7 +462,9 @@ describe('provider capabilities', () => {
       'photo posts',
       'carousels',
     ]);
-    expect(byId.get('reddit')?.capabilities.authRequiredFor?.length).toBeGreaterThan(0);
+    // Reddit no longer needs one: the embed route works without an app registration.
+    expect(byId.get('reddit')?.capabilities.authRequiredFor).toBeUndefined();
+    expect(byId.get('reddit')?.capabilities.requiresOauth).toBe(false);
     // X needs none of it any more.
     expect(byId.get('twitter')?.capabilities.authRequiredFor).toBeUndefined();
     expect(byId.get('twitter')?.capabilities.image).toBe(true);
