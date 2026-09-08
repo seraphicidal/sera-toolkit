@@ -5,7 +5,7 @@ import { join, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import { loadConfig, seraError, SeraEngine } from '@sera/engine';
+import { loadConfig, seraError, SeraEngine, SeraError } from '@sera/engine';
 import { buildServer } from '../server.js';
 
 /**
@@ -132,6 +132,36 @@ describe('the shipped extraction node, as a child process', () => {
       error: { code: 'NOT_FOUND', message: 'Not found.' },
     });
   });
+
+  it('refuses an address that is not the provider it was told, even from us', async () => {
+    // Dispatched straight into the registry, which is the internal API — the same shape
+    // a bug in the control plane's validation, or a compromised control plane, would
+    // produce. The node is somebody's home connection and the whole argument for it
+    // being safe is that it does a narrow, known job; "the other side checked" is not
+    // that argument. yt-dlp is a subprocess making its own connections, so nothing else
+    // on this machine would have stopped either of these.
+    await until(() => engine.extractionNodes.status().find((node) => node.healthy), 30_000);
+
+    const refusals: [string, string][] = [
+      // Caught by the address gate: a loopback literal never reaches the extractor.
+      ['http://127.0.0.1:1/', 'BLOCKED_ADDRESS'],
+      // Caught by the provider gate: a public host is fine, but it is not YouTube's, so
+      // a task cannot borrow a provider's name to have some other address fetched.
+      ['https://example.com/watch?v=x', 'UNSUPPORTED_SOURCE'],
+    ];
+
+    for (const [url, code] of refusals) {
+      const outcome = await engine.extractionNodes
+        .dispatch({ kind: 'resolve', url, providerId: 'youtube' })
+        .then(
+          () => 'resolved' as const,
+          (error: unknown) => SeraError.from(error),
+        );
+
+      expect(outcome, url).not.toBe('resolved');
+      expect((outcome as SeraError).code, url).toBe(code);
+    }
+  }, 90_000);
 
   it('takes a task the router hands it and answers over the wire', async () => {
     await until(() => engine.extractionNodes.status().find((n) => n.healthy), 30_000);
