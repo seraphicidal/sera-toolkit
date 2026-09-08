@@ -1,6 +1,7 @@
 import { createWriteStream } from 'node:fs';
 import { mkdir, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
+import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
@@ -41,6 +42,28 @@ const failedSchema = z.object({
   message: z.string().max(500).optional(),
   detail: z.string().max(2000).optional(),
 });
+
+/**
+ * Stops a stream the moment it passes a size, rather than after.
+ *
+ * Checking the file once it is written means the disk has already been spent — and on a
+ * host with a few gigabytes free that is the whole attack. Fastify's own `bodyLimit`
+ * does not apply here, because these uploads are handed through as a raw stream
+ * precisely so a large file never has to be buffered.
+ */
+function limitTo(maxBytes: number): Transform {
+  let seen = 0;
+  return new Transform({
+    transform(chunk: Buffer, _encoding, done) {
+      seen += chunk.length;
+      if (seen > maxBytes) {
+        done(seraError('TOO_LARGE', { detail: 'node: upload exceeds the size limit' }));
+        return;
+      }
+      done(null, chunk);
+    },
+  });
+}
 
 /** Compared in constant time: a token check that leaks timing is a token check. */
 function tokenMatches(presented: string, expected: string): boolean {
@@ -201,24 +224,25 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
           dot > 0 ? requested.slice(0, dot) : requested,
           dot > 0 ? requested.slice(dot + 1) : 'bin',
         );
-        const directory = join(config.dataDir, 'remote', taskId);
+        // A directory of its own at the top of the data directory, so the reaper that
+        // deletes expired job workspaces by age deletes an abandoned upload the same
+        // way. Nested under a shared `remote/` parent it could not: one busy node keeps
+        // the parent's mtime fresh, and the orphans underneath it never age out.
+        const directory = join(config.dataDir, `remote-${taskId}`);
         await mkdir(directory, { recursive: true });
         const path = join(directory, name);
 
         try {
-          await pipeline(request.raw, createWriteStream(path));
+          await pipeline(request.raw, limitTo(config.maxFilesizeBytes), createWriteStream(path));
         } catch (error) {
           await rm(path, { force: true });
+          if (error instanceof SeraError) throw error;
           throw seraError('NETWORK_ERROR', {
             detail: `node: upload failed: ${error instanceof Error ? error.message : 'unknown'}`,
           });
         }
 
         const written = await stat(path);
-        if (written.size > config.maxFilesizeBytes) {
-          await rm(path, { force: true });
-          throw seraError('TOO_LARGE', { detail: 'node: uploaded file exceeds the limit' });
-        }
 
         const accepted = extractionNodes.acceptFile(taskId, {
           name,
