@@ -15,7 +15,7 @@ node has to do the whole job or only the resolve.
 | **YouTube Shorts** | same as above  | same                              | —                  | same                     | **yes**      | same                                    |
 | **Instagram**      | yt-dlp         | operator session → oEmbed cover   | no useful one      | same (both refused)      | no           | private account, deleted post           |
 | **X / Twitter**    | syndication    | yt-dlp                            | paid, not used     | same                     | no           | post deleted or has no media            |
-| **Reddit**         | OAuth API      | —                                 | **yes, used**      | **differs** — see below  | no           | removed, quarantined, private subreddit |
+| **Reddit**         | OAuth API      | the embed Reddit publishes        | **yes, optional**  | **differs** — see below  | no           | removed, quarantined, private subreddit |
 | **TikTok**         | yt-dlp         | —                                 | no                 | same                     | no           | private, deleted                        |
 | **Vimeo**          | yt-dlp (embed) | —                                 | yes, unused        | same                     | no           | private, password-protected             |
 | **Twitch**         | yt-dlp         | —                                 | yes, unused        | same                     | no           | live in progress, VOD expired           |
@@ -44,17 +44,36 @@ not compose. The PO Token Provider loads and is offered to the extractor and You
 answers on the _player_ request, before streaming: PO tokens address stream 403s, not
 address reputation.
 
-**Reddit refuses anonymous requests from hosted address ranges** — both the page and its
-`.json` endpoint — which is its documented position for servers. The fix is an application
-registration, not a different network: `SERA_REDDIT_CLIENT_ID` / `_SECRET`, a
-client-credentials grant against an app the operator owns. No user's account is involved.
-Without it, Reddit says it needs credentials and refuses politely; that is correct
-behaviour rather than a gap.
+**Reddit refuses anonymous requests from hosted address ranges** — the page, `.json`,
+`api.reddit.com` and `old.reddit.com` are all 403 from Oracle, which is its documented
+position for servers. This does not argue with that; it asks a different question. What
+does Reddit hand a site that quotes one of its posts? Measured from the same blocked
+address on 8 September 2026:
 
-**Instagram serves photographs to logged-in clients only, from any network.** Measured
-against a real public post from a home connection: the page is a shell, `?__a=1` is a 404,
-`/api/v1/media/…/info/` redirects to a login, GraphQL answers `require_login`. An
-extraction node changes nothing. What still answers anonymously is oEmbed — the endpoint
+|                                   |                                                                                               |
+| --------------------------------- | --------------------------------------------------------------------------------------------- |
+| `embed.reddit.com/<permalink>`    | **200** — carries a `<shreddit-screenview-data>` JSON blob with the post's type and media URL |
+| `www.reddit.com/oembed?url=…`     | **200** — title and author                                                                    |
+| `www.reddit.com/r/<sub>/.rss`     | **200**                                                                                       |
+| `i.redd.it/<id>`                  | **200** — the image itself                                                                    |
+| `v.redd.it/<id>/HLSPlaylist.m3u8` | **200** — yt-dlp resolves it to 1280p with audio                                              |
+| `v.redd.it/<id>/DASH_720.mp4`     | **403** — the one thing refused                                                               |
+
+So Reddit works with **no credentials at all**. An app registration is still first when
+one is configured — it is the supported API and it sees more — and
+`SERA_REDDIT_CLIENT_ID` / `_SECRET` remain the way to enable it. Nothing breaks without
+them any more.
+
+**Instagram serves photographs to logged-in clients only, from any network.** Re-measured
+against a real public post from a home connection on 8 September 2026: the page is a
+shell, `?__a=1&__d=dis` is a 404, `/api/v1/media/<pk>/info/` is a 302 to the login on both
+`www` and `i.` hosts, and GraphQL answers `require_login`. An extraction node changes
+nothing, and neither does gallery-dl.
+
+**640 pixels is the anonymous ceiling, and it is a hard one.** oEmbed's `thumbnail_url` is
+signed for its size — `stp=dst-jpg_e35_s640x640` — so asking for a bigger variant is a
+403, and `maxwidth` on the oEmbed request is ignored. Full resolution needs
+`SERA_INSTAGRAM_SESSION_ID`; there is no other route to it. What still answers anonymously is oEmbed — the endpoint
 Instagram publishes for anyone embedding a post — which returns the caption, the account
 and a signed 640px cover image. SERA offers that, labelled "Cover image" and marked
 degraded, only after every backend has refused. A carousel's cover is its first slide, so
