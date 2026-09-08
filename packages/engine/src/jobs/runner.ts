@@ -358,6 +358,7 @@ export class JobRunner {
       input: args.input,
       output,
       spec: args.spec,
+      maxOutputBytes: config.maxFilesizeBytes,
       ...(args.durationSeconds !== undefined ? { durationSeconds: args.durationSeconds } : {}),
       ...(args.signal ? { signal: args.signal } : {}),
       onProgress: (percent) => {
@@ -508,6 +509,16 @@ export class JobRunner {
         throw seraError('CONVERSION_FAILED', {
           message: 'The download finished but produced an empty file.',
           detail: `empty output: ${file.name}`,
+        });
+      }
+      // A re-encode can be larger than what it was given, so the bound on the input is
+      // not a bound on the output. FFmpeg is told to stop at the same ceiling; this is
+      // what turns the truncated file it leaves behind into an answer that says why.
+      if (info.size >= config.maxFilesizeBytes) {
+        throw seraError('TOO_LARGE', {
+          message: 'The converted file is larger than this server allows.',
+          hint: 'Try a lower quality.',
+          detail: `${info.size} bytes: ${file.name}`,
         });
       }
       const extension = file.name.split('.').pop()?.toLowerCase() ?? '';

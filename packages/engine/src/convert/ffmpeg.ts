@@ -147,6 +147,15 @@ export interface ConvertRequest extends FfmpegOptions {
   readonly spec: ConversionSpec;
   /** Source duration in seconds; enables percentage progress. */
   readonly durationSeconds?: number;
+  /**
+   * Ceiling on what the conversion may write.
+   *
+   * The input is bounded and the duration is bounded, and neither bounds the output: a
+   * re-encode can be larger than what it was given. FFmpeg stops writing here rather
+   * than filling the disk, and the caller's own check turns the short file into an
+   * honest "too large" instead of a confusing "conversion failed".
+   */
+  readonly maxOutputBytes?: number;
   readonly onProgress?: (percent: number) => void;
 }
 
@@ -263,6 +272,7 @@ function buildArgs(request: ConvertRequest, source: ProbeResult): string[] {
       break;
   }
 
+  if (request.maxOutputBytes) args.push('-fs', String(request.maxOutputBytes));
   args.push('-progress', 'pipe:1', '-nostats', request.output);
   return args;
 }
