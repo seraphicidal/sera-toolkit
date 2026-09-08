@@ -341,6 +341,7 @@ npm run dev            # everything, with the TypeScript build in watch mode
 npm test               # 449 tests, including a real end-to-end pipeline
 npm run check:providers # every provider against the real sites, from this network
 npm run check:node     # the extraction-node architecture end to end, on one machine
+npm run check:split    # …and again with the API and the worker as separate processes
 npm run test:coverage
 npm run verify         # format, lint, typecheck, test, build — run before shipping
 ```

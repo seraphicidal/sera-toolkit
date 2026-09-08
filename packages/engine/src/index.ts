@@ -132,5 +132,6 @@ export {
   type RemoteProgress,
   type RemoteTask,
 } from './extract/remote.js';
+export { RemoteOverHttp } from './extract/remote-http.js';
 export { TtlCache } from './util/cache.js';
 export { run, type RunOptions, type RunResult } from './util/spawn.js';
