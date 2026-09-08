@@ -1,6 +1,6 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { loadConfig, seraError, SeraEngine, type ResolvedMedia } from '@sera/engine';
@@ -44,6 +44,14 @@ const remoteMedia: ResolvedMedia = {
 let app: FastifyInstance;
 let engine: SeraEngine;
 let dataDir: string;
+/**
+ * A real port, for the one case that cannot use `inject`.
+ *
+ * `inject` waits for the request body to be consumed in full, and the behaviour under
+ * test is refusing an upload without reading all of it — so the test harness would hang
+ * on exactly the thing that makes the fix a fix.
+ */
+let port: number;
 
 beforeAll(async () => {
   dataDir = await mkdtemp(join(tmpdir(), 'sera-node-'));
@@ -56,6 +64,9 @@ beforeAll(async () => {
       SERA_EXTRACTION_NODE_TOKEN: TOKEN,
       // Short, so a claim that finds nothing returns quickly instead of holding the test.
       SERA_EXTRACTION_CLAIM_HOLD_SECONDS: '1',
+      // Small, so the oversized-upload case can be a real one rather than a four-gigabyte
+      // allocation. Every other upload here is a handful of bytes.
+      SERA_MAX_FILESIZE_BYTES: String(64 * 1024),
     }),
     // Every local extraction is refused the way a datacentre is refused, which is the
     // only condition under which the router will look for another network.
@@ -65,6 +76,9 @@ beforeAll(async () => {
       ),
   });
   app = await buildServer(engine);
+  await app.listen({ port: 0, host: '127.0.0.1' });
+  const address = app.server.address();
+  port = typeof address === 'object' && address ? address.port : 0;
   await app.ready();
 });
 
@@ -247,6 +261,74 @@ describe('extraction node endpoints', () => {
     // A node is trusted to extract, not to choose where bytes land.
     expect(files[0]!.name).not.toContain('..');
     expect(files[0]!.path).toContain(task.id);
+  });
+
+  it('stops an oversized upload while it is arriving, not after', async () => {
+    // The limit used to be checked with `stat` once the whole file was on disk, which
+    // spends the disk before deciding it should not have. On a host with a few gigabytes
+    // free that is the whole attack, and Fastify's own bodyLimit does not apply here —
+    // these uploads are handed through as a raw stream precisely so that a large file is
+    // never buffered.
+    engine.extractionNodes.register('test-node', ['youtube'], 1);
+    const dispatched = engine.extractionNodes
+      .dispatchJob({
+        kind: 'job',
+        url: 'https://www.youtube.com/watch?v=x',
+        providerId: 'youtube',
+        planKeys: ['video/mp4/1080p'],
+      })
+      .catch(() => []);
+    const task = (await claim()).json();
+
+    expect(engine.config.maxFilesizeBytes).toBe(64 * 1024);
+    const oversized = Buffer.alloc(engine.config.maxFilesizeBytes + 4096, 0x41);
+    const response = await fetch(
+      `http://127.0.0.1:${String(port)}/internal/extraction/${task.id}/file?name=huge.mp4`,
+      {
+        method: 'POST',
+        headers: { ...auth, 'content-type': 'application/octet-stream' },
+        body: oversized,
+      },
+    );
+
+    expect(response.status).toBe(413);
+    expect(((await response.json()) as { error: { code: string } }).error.code).toBe('TOO_LARGE');
+    // Nothing was kept, and the task was not settled with a file it should not have.
+    engine.extractionNodes.fail(task.id, seraError('TOO_LARGE'));
+    expect(await dispatched).toEqual([]);
+  });
+
+  it('puts an upload where the reaper can find it on its own', async () => {
+    // Uploads used to share one `remote/` parent. The reaper deletes top-level
+    // directories by age, and a parent's mtime is refreshed by every new child — so one
+    // busy node kept the parent young forever and the abandoned uploads underneath it
+    // never aged out. A directory per task is reaped exactly like a job workspace.
+    engine.extractionNodes.register('test-node', ['youtube'], 1);
+    const dispatched = engine.extractionNodes.dispatchJob({
+      kind: 'job',
+      url: 'https://www.youtube.com/watch?v=x',
+      providerId: 'youtube',
+      planKeys: ['video/mp4/1080p'],
+    });
+    const task = (await claim()).json();
+
+    await app.inject({
+      method: 'POST',
+      url: `/internal/extraction/${task.id}/file?name=clip.mp4`,
+      headers: { ...auth, 'content-type': 'application/octet-stream' },
+      payload: Buffer.from('bytes'),
+    });
+    await app.inject({
+      method: 'POST',
+      url: `/internal/extraction/${task.id}/complete`,
+      headers: auth,
+      payload: {},
+    });
+
+    const files = await dispatched;
+    expect(files[0]!.path).toContain(`remote-${task.id}`);
+    // One level under the data directory, which is where the reaper looks.
+    expect(relative(dataDir, files[0]!.path).split(/[\\/]/)).toHaveLength(2);
   });
 
   it('passes a node failure through as the failure it was', async () => {

@@ -1,5 +1,5 @@
-import { mkdir, open, readdir, rename, stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, open, readdir, rename, rm, stat } from 'node:fs/promises';
+import { basename, dirname, join } from 'node:path';
 import type { JobProgress, JobResult, JobState, PackagingMode } from '@sera/contracts/types';
 import type { EngineConfig } from '../config.js';
 import { convert, probe, type ConversionSpec } from '../convert/ffmpeg.js';
@@ -129,6 +129,18 @@ export class JobRunner {
         const destination = workspace.outputPath(file.name);
         await rename(file.path, destination);
         produced.push({ path: destination, name: file.name });
+      }
+      // The upload directory is empty now. Leaving it would mean one stray directory per
+      // remote job until the reaper's retention window came round to it.
+      //
+      // Only a directory the upload endpoint itself created is removed. Deducing "the
+      // parent of the file" and deleting that would be one wrong assumption away from
+      // deleting a workspace, which is exactly what it did the first time it was written.
+      const uploads = [...new Set(files.map((file) => dirname(file.path)))].filter((directory) =>
+        basename(directory).startsWith('remote-'),
+      );
+      for (const directory of uploads) {
+        await rm(directory, { recursive: true, force: true }).catch(() => undefined);
       }
 
       logger.info(
