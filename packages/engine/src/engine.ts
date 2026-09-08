@@ -99,9 +99,14 @@ export class SeraEngine {
      * is invisible until a download: the link resolves through the node and then fails
      * with the datacentre block, because the process doing the downloading never knew a
      * node was there.
+     *
+     * `SERA_API_URL` is the signal, and it means "I am not the API" — only a standalone
+     * worker sets it. The first attempt asked whether the worker was embedded instead,
+     * which is a different question whose default is true, so the standalone worker went
+     * on consulting its own empty registry and the download failed exactly as before.
      */
     const remote: RemoteExtraction =
-      config.extractionNodes.enabled && !config.embeddedWorker && config.apiUrl
+      config.extractionNodes.enabled && config.apiUrl
         ? new RemoteOverHttp(config.apiUrl, config.extractionNodes.token, logger)
         : extractionNodes;
     const resolver = new MediaResolver({
