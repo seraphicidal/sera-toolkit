@@ -111,6 +111,22 @@ services:
     image: ${SERA_IMAGE_API:-ghcr.io/seraphicidal/sera-api:latest}
     restart: unless-stopped
     command: ['node', 'apps/worker/dist/index.js']
+    # The worker runs the API image and has no HTTP surface, so it cannot answer the
+    # healthcheck baked into that image — which is why it reported unhealthy from the
+    # moment it started while completing every job it was given. It touches a file from
+    # its event loop instead; a worker whose loop has wedged stops touching it.
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "const{statSync}=require('node:fs');const age=Date.now()-statSync('/data/.worker-alive').mtimeMs;process.exit(age<60000?0:1)",
+        ]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
     environment:
       NODE_ENV: production
       SERA_SECRET: ${SERA_SECRET:?set SERA_SECRET — see .env.example}

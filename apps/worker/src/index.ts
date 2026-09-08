@@ -1,4 +1,22 @@
+import { utimes, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { SeraEngine } from '@sera/engine';
+
+/**
+ * How a worker says it is alive.
+ *
+ * It has no HTTP surface by design, so it had been inheriting the API image's
+ * healthcheck — an HTTP request to a port nothing listens on. That failed every thirty
+ * seconds from the moment it started: 2,832 consecutive failures on the live deployment
+ * while the worker was, in fact, completing every job it was given. A signal that is
+ * always red is the same as no signal, and worse, because it hides the day something
+ * genuinely breaks.
+ *
+ * Touching a file from the event loop answers the question that actually matters — not
+ * "is the process present", which Docker already knows, but "is its loop still turning".
+ * A wedged worker stops touching it and goes unhealthy within a minute.
+ */
+const HEARTBEAT_INTERVAL_MS = 15_000;
 
 /**
  * Worker entrypoint.
@@ -21,8 +39,18 @@ async function main(): Promise<void> {
 
   const handle = engine.startWorker();
 
+  const heartbeat = join(engine.config.dataDir, '.worker-alive');
+  await writeFile(heartbeat, 'sera worker heartbeat\n').catch(() => undefined);
+  const ticker = setInterval(() => {
+    const now = new Date();
+    void utimes(heartbeat, now, now).catch(() => undefined);
+  }, HEARTBEAT_INTERVAL_MS);
+  // Never the reason the process stays up.
+  ticker.unref();
+
   const shutdown = (signal: string): void => {
     engine.logger.info({ signal }, 'draining worker');
+    clearInterval(ticker);
     void (async () => {
       // Let in-flight jobs finish before the process goes away.
       await handle.close().catch(() => undefined);
