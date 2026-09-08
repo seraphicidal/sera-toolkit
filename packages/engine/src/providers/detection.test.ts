@@ -122,8 +122,36 @@ describe('normalization', () => {
     expect(canonical('https://x.com/user/status/1/photo/2')).toBe('https://x.com/user/status/1');
   });
 
-  it('turns a Vimeo embed into the canonical page', () => {
-    expect(canonical('https://player.vimeo.com/video/76979871')).toBe('https://vimeo.com/76979871');
+  it('sends Vimeo to the embed player, which is the form that still answers', () => {
+    // The watch page tells an anonymous client to log in — measured on yt-dlp
+    // 2026.08.19 from a residential connection, so it is not about the address. The
+    // embed is the same video as any other site's embed receives it, and returns the
+    // full format list. This used to run the other way round, converting a link that
+    // worked into the one form that does not.
+    expect(canonical('https://vimeo.com/76979871')).toBe('https://player.vimeo.com/video/76979871');
+    expect(canonical('https://player.vimeo.com/video/76979871')).toBe(
+      'https://player.vimeo.com/video/76979871',
+    );
+    expect(canonical('https://vimeo.com/channels/staffpicks/76979871')).toBe(
+      'https://player.vimeo.com/video/76979871',
+    );
+  });
+
+  it('carries an unlisted Vimeo permission hash onto the embed', () => {
+    // Without it the embed answers "private", which is true of the embed and not of the
+    // link the visitor pasted.
+    expect(canonical('https://vimeo.com/76979871/abc123def4')).toBe(
+      'https://player.vimeo.com/video/76979871?h=abc123def4',
+    );
+    expect(canonical('https://vimeo.com/76979871?h=abc123def4')).toBe(
+      'https://player.vimeo.com/video/76979871?h=abc123def4',
+    );
+  });
+
+  it('leaves a Vimeo URL with no numeric id alone', () => {
+    expect(canonical('https://vimeo.com/someuser/somevideo')).toBe(
+      'https://vimeo.com/someuser/somevideo',
+    );
   });
 
   it('expands the Dailymotion shortener', () => {

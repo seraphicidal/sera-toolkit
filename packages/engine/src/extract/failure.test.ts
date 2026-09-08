@@ -1,7 +1,9 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { seraError } from '../errors.js';
 import {
   classifyFailure,
+  FAILURE_BY_CODE,
   isEgressProblem,
   isTransient,
   requiresOriginatingNode,
@@ -126,5 +128,65 @@ describe('routing predicates', () => {
     expect(isTransient('PRIVATE_CONTENT')).toBe(false);
     expect(isTransient('DELETED_CONTENT')).toBe(false);
     expect(isTransient('UNSUPPORTED_MEDIA')).toBe(false);
+  });
+});
+
+describe('the taxonomy against the error codes it has to cover', () => {
+  /**
+   * The code list, read out of the contract rather than restated here — so a code added
+   * there and forgotten in the map fails this test instead of silently classifying as an
+   * extractor bug. That is how a Twitch channel URL, correctly refused because the
+   * stream is still running, came to be logged as a bug in SERA.
+   */
+  const contract = readFileSync(
+    new URL('../../../contracts/src/types.ts', import.meta.url),
+    'utf8',
+  );
+  const codes = [
+    ...contract
+      .slice(contract.indexOf('export type ErrorCode'))
+      .split(';')[0]!
+      .matchAll(/'([A-Z_]+)'/g),
+  ].map((match) => match[1]!);
+
+  it('found the code list', () => {
+    expect(codes.length).toBeGreaterThan(20);
+    expect(codes).toContain('LIVE_IN_PROGRESS');
+  });
+
+  it('gives every code a mapping somebody chose', () => {
+    for (const code of codes) {
+      expect(FAILURE_BY_CODE[code], `${code} has no mapping`).toBeDefined();
+    }
+  });
+
+  it('sends only one code to another network', () => {
+    // Everything else that reaches an egress class gets there by its wording, which is
+    // the deliberate exception: extractors report a bot challenge under whatever code
+    // they like.
+    const egress = codes.filter((code) =>
+      isEgressProblem(classifyFailure(seraError(code as Parameters<typeof seraError>[0]))),
+    );
+    expect(egress).toEqual(['SOURCE_BLOCKED']);
+  });
+
+  it('treats a visitor leaving as its own answer', () => {
+    const cancelled = classifyFailure(seraError('CANCELLED'));
+    expect(cancelled).toBe('CANCELLED');
+    expect(isEgressProblem(cancelled)).toBe(false);
+    expect(isTransient(cancelled)).toBe(false);
+  });
+
+  it('says a live stream is unsupported media, not a bug', () => {
+    const live = classifyFailure(seraError('LIVE_IN_PROGRESS'));
+    expect(live).toBe('UNSUPPORTED_MEDIA');
+    expect(isEgressProblem(live)).toBe(false);
+  });
+
+  it('keeps "the server is full" separate from "the source refused us"', () => {
+    // They share the one property that matters for routing — waiting is the answer —
+    // and nothing else, so the detail says which.
+    expect(classifyFailure(seraError('QUEUE_FULL'))).toBe('RATE_LIMITED');
+    expect(isTransient(classifyFailure(seraError('QUEUE_FULL')))).toBe(true);
   });
 });

@@ -37,9 +37,18 @@ export type FailureClass =
   | 'SOURCE_ERROR'
   | 'UPSTREAM_TIMEOUT'
   | 'NETWORK_ERROR'
-  | 'OUTPUT_ERROR';
+  | 'OUTPUT_ERROR'
+  | 'CANCELLED';
 
-const BY_CODE: Partial<Record<string, FailureClass>> = {
+/**
+ * Every error code SERA can raise, and what it means for routing.
+ *
+ * Exported so the test can check it against the code list in the contract: a code added
+ * there and forgotten here would otherwise classify as an extractor bug, which is how a
+ * Twitch channel URL — correctly refused because the stream is still running — came to
+ * be logged as a bug in SERA.
+ */
+export const FAILURE_BY_CODE: Partial<Record<string, FailureClass>> = {
   SOURCE_BLOCKED: 'DATACENTER_BLOCKED',
   LOGIN_REQUIRED: 'LOGIN_REQUIRED',
   PROVIDER_AUTH_REQUIRED: 'LOGIN_REQUIRED',
@@ -55,6 +64,8 @@ const BY_CODE: Partial<Record<string, FailureClass>> = {
   PROVIDER_UNAVAILABLE: 'EXTRACTOR_BUG',
   UNSUPPORTED_SOURCE: 'UNSUPPORTED_MEDIA',
   ROBOTS_DISALLOWED: 'UNSUPPORTED_MEDIA',
+  // A stream still running is not a file yet, and no address changes that.
+  LIVE_IN_PROGRESS: 'UNSUPPORTED_MEDIA',
   INVALID_URL: 'UNSUPPORTED_URL',
   BLOCKED_ADDRESS: 'UNSUPPORTED_URL',
   NETWORK_ERROR: 'NETWORK_ERROR',
@@ -62,6 +73,12 @@ const BY_CODE: Partial<Record<string, FailureClass>> = {
   CONVERSION_FAILED: 'OUTPUT_ERROR',
   TOO_LARGE: 'OUTPUT_ERROR',
   TOO_LONG: 'OUTPUT_ERROR',
+  // This server is full, not the source refusing us. It shares one property with a
+  // rate limit and it is the one that matters here: waiting is the answer.
+  QUEUE_FULL: 'RATE_LIMITED',
+  // The visitor left. Not a failure of extraction, and a class of its own so that it
+  // cannot be read as one in the logs.
+  CANCELLED: 'CANCELLED',
   INTERNAL: 'EXTRACTOR_BUG',
 };
 
@@ -98,7 +115,7 @@ export function classifyFailure(error: unknown): FailureClass {
   for (const [failure, phrases] of BY_PHRASE) {
     if (phrases.some((phrase) => haystack.includes(phrase))) return failure;
   }
-  return BY_CODE[seraError.code] ?? 'EXTRACTOR_BUG';
+  return FAILURE_BY_CODE[seraError.code] ?? 'EXTRACTOR_BUG';
 }
 
 /**
