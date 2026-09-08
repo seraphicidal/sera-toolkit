@@ -47,6 +47,8 @@ export const REDACTED_PATHS: readonly string[] = [
   '*.clientSecret',
   'accessToken',
   '*.accessToken',
+  'proxy',
+  '*.proxy',
   'authorization',
   '*.authorization',
 ];

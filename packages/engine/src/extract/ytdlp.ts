@@ -14,6 +14,9 @@ import type { YtdlpInfo } from './ytdlp-types.js';
 export interface YtdlpOptions {
   readonly binary: string;
   readonly ffmpegPath?: string;
+  /** An outbound proxy for this call, when the deployment address is refused. */
+  readonly proxy?: string;
+
   readonly timeoutMs: number;
   readonly signal?: AbortSignal;
   /** Passed through as `--extractor-args`; providers use it for site-specific tuning. */
@@ -30,6 +33,9 @@ export interface DownloadRequest extends YtdlpOptions {
   readonly outputTemplate: string;
   /** Aborts the download once the file exceeds this size. */
   readonly maxFilesizeBytes?: number;
+  /** An outbound proxy for this call, when the deployment address is refused. */
+  readonly proxy?: string;
+
   /** Container to remux into after download, when the selection needs merging. */
   readonly mergeContainer?: string;
   /** `--remux-video` target, for a container change with no re-encode. */
@@ -102,6 +108,7 @@ function baseArgs(options: YtdlpOptions): string[] {
     '2',
   ];
   if (options.ffmpegPath) args.push('--ffmpeg-location', options.ffmpegPath);
+  if (options.proxy) args.push('--proxy', options.proxy);
   for (const extractorArg of options.extractorArgs ?? []) {
     args.push('--extractor-args', extractorArg);
   }
@@ -180,6 +187,7 @@ export async function download(request: DownloadRequest): Promise<void> {
     args.push('--audio-quality', request.audioQuality ?? '0');
   }
   if (request.maxFilesizeBytes) args.push('--max-filesize', String(request.maxFilesizeBytes));
+  if (request.proxy) args.push('--proxy', request.proxy);
 
   args.push('--', request.url);
 
@@ -276,9 +284,21 @@ export async function version(binary: string, timeoutMs = 10_000): Promise<strin
  * `PROVIDER_UNAVAILABLE` rather than a generic crash: when an extractor changes and the
  * wording moves, the user is told this source needs updating instead of seeing a 500.
  */
+/**
+ * Removes proxy credentials from extractor output.
+ *
+ * A proxy URL is normally `scheme://user:pass@host:port`, and yt-dlp will name it in a
+ * connection error. That output becomes an error detail, which reaches the structured
+ * log. Nothing else in this file has to know the proxy exists; this is the one place its
+ * password could escape.
+ */
+export function scrubCredentials(text: string): string {
+  return text.replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]*:[^\s/@]*@/gi, '$1[redacted]@');
+}
+
 export function classifyYtdlpFailure(stderr: string, exitCode: number): SeraError {
   const text = stderr.toLowerCase();
-  const detail = `yt-dlp exit ${exitCode}: ${stderr.slice(-600)}`;
+  const detail = `yt-dlp exit ${exitCode}: ${scrubCredentials(stderr).slice(-600)}`;
 
   const has = (...needles: string[]): boolean => needles.some((n) => text.includes(n));
 

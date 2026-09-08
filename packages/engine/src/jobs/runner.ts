@@ -355,6 +355,12 @@ export class JobRunner {
       // yt-dlp appends the real extension; a fixed stem makes the output easy to find.
       outputTemplate: 'media.%(ext)s',
       maxFilesizeBytes: config.maxFilesizeBytes,
+      // The resolve and the download are separate invocations. A proxy that applied to
+      // only one of them would produce a format list from one address and ask another to
+      // fetch it, which for a signed URL is the 403 this exists to avoid.
+      ...(config.proxyFor(args.resolved.provider)
+        ? { proxy: config.proxyFor(args.resolved.provider) }
+        : {}),
       ...(fetchPlan.merge ? { mergeContainer: fetchPlan.merge } : {}),
       ...(fetchPlan.remux ? { remuxContainer: fetchPlan.remux } : {}),
       ...(fetchPlan.audio

@@ -128,10 +128,12 @@ export abstract class YtdlpProvider implements MediaProvider {
 
   /** The default rung: yt-dlp, tuned by whatever this provider declares. */
   protected async runExtractor(url: URL, context: ProviderContext): Promise<ResolvedMedia> {
+    const proxy = context.config.proxyFor(this.id);
     const info = await context.probe(url.toString(), {
       playlist: this.wantsPlaylist(url),
       extractorArgs: this.extractorArgs(url, context),
       timeoutMs: context.config.resolveTimeoutMsFor(this.id),
+      ...(proxy ? { proxy } : {}),
     });
     return this.toResolvedMedia(info, url, context);
   }

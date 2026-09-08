@@ -71,6 +71,8 @@ export interface ProviderContext {
       readonly extractorArgs?: readonly string[];
       /** Overrides the shared ceiling, so one slow source cannot hold the worker. */
       readonly timeoutMs?: number;
+      /** An outbound proxy, when this provider is configured to use one. */
+      readonly proxy?: string;
     },
   ) => Promise<YtdlpInfo>;
   /** Fetches a URL through the SSRF-guarded client. */
