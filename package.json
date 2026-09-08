@@ -28,6 +28,8 @@
     "start": "node apps/api/dist/index.js",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
+    "check:matrix": "node scripts/provider-matrix.mjs",
+    "check:node": "node scripts/node-check.mjs",
     "test:watch": "vitest",
     "tools:fetch": "node scripts/fetch-tools.mjs",
     "typecheck": "tsc --build --pretty && tsc -p tsconfig.tests.json --pretty && tsc -p apps/web/tsconfig.json --pretty",
