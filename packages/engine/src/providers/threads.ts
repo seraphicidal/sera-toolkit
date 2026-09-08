@@ -14,10 +14,11 @@ export class ThreadsProvider extends YtdlpProvider {
   readonly hosts = ['threads.net', 'threads.com'];
   override readonly priority = 30;
 
-  override readonly capabilities: ProviderCapabilities = declare({
-    image: true,
-    carousel: true,
-  });
+  // Deliberately the plain default. Threads carries Instagram's attachment model, and
+  // Instagram photographs need a session from any network; no public Threads post could
+  // be reached in testing to show otherwise. Claiming images here on the strength of the
+  // resemblance would be a promise nobody measured.
+  override readonly capabilities: ProviderCapabilities = declare();
 
   override normalize(url: URL): URL {
     const out = new URL(url.toString());

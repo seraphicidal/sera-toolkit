@@ -505,14 +505,23 @@ describe('provider capabilities', () => {
   });
 
   it('describes a platform by what it serves, not by what the base class assumed', () => {
-    // TikTok, Threads and Tumblr inherited "video only" from the base class while
-    // happily downloading slideshows, which is how a service ends up describing itself
+    // TikTok inherited "video only" while handling slideshows through the same playlist
+    // path Instagram carousels use, which is how a service ends up describing itself
     // wrongly in the one place a visitor goes to read about it.
-    for (const id of ['tiktok', 'threads', 'tumblr']) {
-      expect(byId.get(id)?.capabilities.image, id).toBe(true);
-      expect(byId.get(id)?.capabilities.carousel, id).toBe(true);
-    }
+    expect(byId.get('tiktok')?.capabilities.image).toBe(true);
+    expect(byId.get('tiktok')?.capabilities.carousel).toBe(true);
     expect(byId.get('bandcamp')?.capabilities.audio).toBe(true);
     expect(byId.get('bandcamp')?.capabilities.video).toBe(false);
+  });
+
+  it('does not claim the photographs it was measured to be unable to reach', () => {
+    // Tumblr: the extractor is video-only, the page is a script shell, the old JSON
+    // endpoint is gone, and robots.txt disallows the www path. Pinterest: robots.txt is
+    // `Disallow: /` for every agent, and the extractor is video-only. Both refusals are
+    // correct; what would be wrong is a picker that offered a button for them.
+    for (const id of ['tumblr', 'pinterest']) {
+      expect(byId.get(id)?.capabilities.image, id).toBe(false);
+      expect(byId.get(id)?.capabilities.authRequiredFor?.length, id).toBeGreaterThan(0);
+    }
   });
 });
