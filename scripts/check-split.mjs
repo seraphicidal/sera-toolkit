@@ -89,12 +89,14 @@ try {
   );
 
   /* ---- and now the part the worker does, from outside that process ---- */
-  const asWorker = new RemoteOverHttp(apiUrl, TOKEN, createLogger({ level: 'silent' }), 0, 500);
+  // Cold, the way a worker container is when its first job arrives: nobody has asked
+  // this client anything yet. A cache that only refreshes on being asked answers the
+  // first question with "no nodes" — which is the first job after a boot, and the first
+  // job after a node connects to a worker that has been idle.
+  const asWorker = new RemoteOverHttp(apiUrl, TOKEN, createLogger({ level: 'silent' }), 2000, 500);
+  await wait(1000);
 
-  asWorker.status();
-  await wait(300);
-
-  note(asWorker.hasHealthyNode(), 'a separate process can see the node', 'this is what broke');
+  note(asWorker.hasHealthyNode(), 'a cold separate process sees the node', 'this is what broke');
   note(
     asWorker.availableProviders().includes('youtube'),
     'and knows what it will take',

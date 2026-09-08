@@ -39,21 +39,33 @@ export class RemoteOverHttp implements RemoteExtraction {
     /** How often the node list is re-read. Short: a node can connect at any moment. */
     private readonly statusTtlMs = 5_000,
     private readonly pollIntervalMs = 1_000,
-  ) {}
+  ) {
+    // Primed immediately, and kept warm on a timer.
+    //
+    // The router asks whether a fallback exists from a synchronous path, so this cannot
+    // go and look on demand — and a purely lazy cache answers the *first* question with
+    // "no nodes" and only then starts looking. On a worker that is the first job after
+    // it boots, and on a long-idle worker it is the first job after a node connects.
+    // Both are exactly when the answer matters, so the value refreshes on its own
+    // schedule rather than on being asked.
+    void this.refresh();
+    const timer = setInterval(() => void this.refresh(), Math.max(1_000, statusTtlMs));
+    // Never the reason the process stays alive.
+    timer.unref();
+  }
 
   /* --------------------------------------------------------------- status */
 
   /**
-   * The node list, cached for a few seconds.
+   * The node list as of the last refresh.
    *
-   * Read synchronously by the router when it builds a chain, so it cannot await. The
-   * refresh is kicked off in the background and the previous answer stands until it
-   * lands — which means a node that just connected is picked up within the TTL rather
-   * than needing a restart, and a router decision never blocks on a network call.
+   * Read synchronously by the router when it builds a chain, so it never blocks on a
+   * network call. The timer above is what keeps it current; this only catches up if the
+   * value has gone unusually stale, which would mean the timer is not running.
    */
   status(): NodeStatus[] {
     const cached = this.nodes;
-    if (!cached || Date.now() - cached.at > this.statusTtlMs) void this.refresh();
+    if (!cached || Date.now() - cached.at > this.statusTtlMs * 3) void this.refresh();
     return cached?.value ?? [];
   }
 
