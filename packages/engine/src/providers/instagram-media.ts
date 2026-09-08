@@ -38,20 +38,94 @@ export interface InstagramNode {
   readonly caption?: { readonly text?: string };
 }
 
+/**
+ * What Instagram publishes about a post to anyone embedding it.
+ *
+ * The one endpoint still answering without a session. Measured against public posts on
+ * 2026-09-08: it returns the caption, the account, the numeric media id, and a signed
+ * thumbnail on the CDN — 640×564 for a photo post, 640×1136 for a Reel, both real JPEGs
+ * of about 60 KB. The signature is on the size, so asking for a bigger one is a 403;
+ * 640 is what Instagram publishes and therefore what this can honestly offer.
+ */
+export interface InstagramOembed {
+  readonly title?: string;
+  readonly author_name?: string;
+  readonly author_url?: string;
+  readonly media_id?: string;
+  readonly thumbnail_url?: string;
+  readonly thumbnail_width?: number;
+  readonly thumbnail_height?: number;
+}
+
+export async function oembedFor(
+  url: URL,
+  fetchText: (url: URL, maxBytes?: number) => Promise<{ body: string }>,
+): Promise<InstagramOembed> {
+  const endpoint = new URL('https://www.instagram.com/api/v1/oembed/');
+  endpoint.searchParams.set('url', url.toString());
+  const { body } = await fetchText(endpoint, 256 * 1024);
+  return JSON.parse(body) as InstagramOembed;
+}
+
 /** oEmbed answers anonymously and is the only place the numeric id is published. */
 export async function mediaIdFor(
   shortcode: string,
   fetchText: (url: URL, maxBytes?: number) => Promise<{ body: string }>,
 ): Promise<string> {
-  const endpoint = new URL('https://www.instagram.com/api/v1/oembed/');
-  endpoint.searchParams.set('url', `https://www.instagram.com/p/${shortcode}/`);
-  const { body } = await fetchText(endpoint, 256 * 1024);
-  const mediaId = (JSON.parse(body) as { media_id?: unknown }).media_id;
-  if (typeof mediaId !== 'string') {
+  const oembed = await oembedFor(new URL(`https://www.instagram.com/p/${shortcode}/`), fetchText);
+  if (typeof oembed.media_id !== 'string') {
     throw seraError('MEDIA_UNAVAILABLE', { detail: 'instagram: oembed carried no media id' });
   }
   // `<pk>_<userId>`; the media endpoint wants the pk.
-  return mediaId.split('_')[0] ?? mediaId;
+  return oembed.media_id.split('_')[0] ?? oembed.media_id;
+}
+
+/**
+ * The published cover image as a one-item resolution.
+ *
+ * Deliberately labelled for what it is. A carousel's cover is its first slide and a
+ * Reel's is a frame, so calling either "the post" would be a lie the picker then repeats
+ * — the option says "Cover image" and the metadata records that this was a fallback, so
+ * a report can tell the difference between a post that worked and a post that was
+ * salvaged.
+ */
+export function coverItemFrom(oembed: InstagramOembed): ResolvedItem | undefined {
+  const url = nonEmpty(oembed.thumbnail_url);
+  if (!url) return undefined;
+
+  const width = oembed.thumbnail_width;
+  const height = oembed.thumbnail_height;
+  const container = containerFor(url, 'jpg');
+
+  return {
+    sourceId: nonEmpty(oembed.media_id) ?? 'cover',
+    index: 0,
+    kind: 'image',
+    title: 'Cover image',
+    thumbnailUrl: url,
+    ...(width ? { width } : {}),
+    ...(height ? { height } : {}),
+    container,
+    plans: ensureRecommendations([
+      {
+        kind: 'image',
+        container,
+        label: 'Cover image',
+        detail: [
+          container.toUpperCase(),
+          width && height ? `${width} × ${height}` : undefined,
+          'the preview Instagram publishes',
+        ]
+          .filter(Boolean)
+          .join(' · '),
+        ...(width ? { width } : {}),
+        ...(height ? { height } : {}),
+        requiresConversion: false,
+        recommended: true,
+        fetch: { via: 'direct', url },
+      },
+    ]),
+  };
 }
 
 /** Headers instagram.com's own web client sends. The session is one of them. */

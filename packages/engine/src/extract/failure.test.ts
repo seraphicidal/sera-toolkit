@@ -56,7 +56,10 @@ describe('classifyFailure', () => {
   it('separates gone from private from geo-blocked', () => {
     expect(classifyFailure(seraError('MEDIA_UNAVAILABLE'))).toBe('DELETED_CONTENT');
     expect(classifyFailure(seraError('PRIVATE_CONTENT'))).toBe('PRIVATE_CONTENT');
-    expect(classifyFailure(seraError('AGE_RESTRICTED'))).toBe('PRIVATE_CONTENT');
+    // Its own class, not folded into private: the routing is the same but what a
+    // visitor should be told is not, and a report that says "private" about an
+    // age-gated video sends someone looking for a permission problem that isn't there.
+    expect(classifyFailure(seraError('AGE_RESTRICTED'))).toBe('AGE_RESTRICTED');
     expect(classifyFailure(seraError('GEO_RESTRICTED'))).toBe('GEO_BLOCKED');
     expect(
       classifyFailure(

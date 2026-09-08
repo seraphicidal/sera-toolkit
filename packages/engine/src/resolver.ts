@@ -118,6 +118,10 @@ export class MediaResolver {
       // What each provider says about itself, rather than a conditional in the router
       // that knows about failure classes and nothing about platforms.
       capabilitiesOf: (providerId) => this.registry.get(providerId)?.capabilities,
+      // The bottom rung: the same provider, allowed to answer with a lesser public
+      // representation now that nothing else has answered at all.
+      lastResort: (url, providerId, signal) =>
+        this.runProvider(url, providerId, signal, { allowDegraded: true }),
     });
     this.dispatcher =
       deps.dispatcher ??
@@ -319,12 +323,17 @@ export class MediaResolver {
     canonical: URL,
     providerId: string,
     signal?: AbortSignal,
+    options: { allowDegraded?: boolean } = {},
   ): Promise<ResolvedMedia> {
     const provider = this.registry.get(providerId);
     if (!provider) {
       throw seraError('UNSUPPORTED_SOURCE', { detail: `unknown provider ${providerId}` });
     }
-    return provider.resolve(canonical, this.providerContext(signal));
+    const context = this.providerContext(signal);
+    return provider.resolve(
+      canonical,
+      options.allowDegraded ? { ...context, allowDegraded: true } : context,
+    );
   }
 
   /** What the health endpoint reports about where extraction can run. */

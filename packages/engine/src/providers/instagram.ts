@@ -2,13 +2,17 @@ import type { ProviderCapabilities } from '@sera/contracts/types';
 import { declare } from './capabilities.js';
 import type { EngineConfig } from '../config.js';
 import { SeraError, seraError } from '../errors.js';
+import type { ExtractionStrategy } from '../extract/strategy.js';
 import {
+  coverItemFrom,
   itemsFrom,
   mediaIdFor,
+  oembedFor,
   sessionHeaders,
   titleFor,
   type InstagramNode,
 } from './instagram-media.js';
+import { nonEmpty } from '../util/format.js';
 import type { ProviderContext, ResolvedMedia } from './types.js';
 import { YtdlpProvider } from './ytdlp-base.js';
 
@@ -115,22 +119,75 @@ export class InstagramProvider extends YtdlpProvider {
     };
   }
 
+  /**
+   * The cover image Instagram publishes for anyone embedding the post.
+   *
+   * Last, and marked degraded, because it is not the post: a carousel's cover is its
+   * first slide and a Reel's is a frame. It runs only once every backend — including an
+   * extraction node, if one is connected — has already refused, so it can never take the
+   * place of the real thing.
+   */
+  private async viaOembed(url: URL, context: ProviderContext): Promise<ResolvedMedia> {
+    const oembed = await oembedFor(url, (endpoint, maxBytes) =>
+      context.fetchText(endpoint, maxBytes),
+    );
+    const item = coverItemFrom(oembed);
+    if (!item) {
+      throw seraError('MEDIA_UNAVAILABLE', { detail: 'instagram: oembed carried no thumbnail' });
+    }
+
+    const author = oembed.author_name;
+    return {
+      provider: this.id,
+      providerLabel: this.label,
+      url: url.toString(),
+      type: 'single',
+      title: nonEmpty(oembed.title) ?? `Post by ${author ?? 'an Instagram account'}`,
+      ...(author ? { author } : {}),
+      ...(oembed.author_url ? { authorUrl: oembed.author_url } : {}),
+      thumbnailUrl: item.thumbnailUrl!,
+      items: [item],
+      metadata: { source: 'oembed', degraded: 'cover-image' },
+    };
+  }
+
+  protected override strategies(
+    _url: URL,
+    _context: ProviderContext,
+  ): readonly ExtractionStrategy[] {
+    return [
+      {
+        id: 'ytdlp',
+        label: 'the extractor',
+        run: (target, ctx) => this.runExtractor(target, ctx),
+      },
+      {
+        id: 'web-api',
+        label: "Instagram's web API, with the operator's session",
+        available: (ctx) => ctx.config.instagram.configured,
+        // The extractor reports a photo post as an unsupported source, because it only
+        // understands video. That — and a login wall — are what a session answers.
+        answers: ['UNSUPPORTED_MEDIA', 'LOGIN_REQUIRED', 'AUTH_CONFIGURATION_ERROR'],
+        run: (target, ctx) => this.viaSession(target, ctx),
+      },
+      {
+        id: 'oembed',
+        label: 'the cover image Instagram publishes for embeds',
+        degraded: true,
+        run: (target, ctx) => this.viaOembed(target, ctx),
+      },
+    ];
+  }
+
   override async resolve(url: URL, context: ProviderContext): Promise<ResolvedMedia> {
     try {
       return await super.resolve(url, context);
     } catch (error) {
-      // A photo post, and a session the operator configured for their own server. The
-      // extractor has no image support at all, so this is the only path to one.
-      if (
-        context.config.instagram.configured &&
-        SeraError.from(error).code === 'UNSUPPORTED_SOURCE'
-      ) {
-        const photos = await this.viaSession(url, context).catch(() => undefined);
-        if (photos) return photos;
-      }
       const failure = SeraError.from(error);
-      // "No video in this post" means the extractor read the post and found photographs.
-      // Everything anonymous that could return those now requires a session.
+      // "No video in this post" means the extractor read the post and found photographs,
+      // and every anonymous endpoint that could return those now needs a session. Said
+      // plainly, because an extractor message about video describes nothing the visitor
+      // did — and because the alternative here is a real requirement, not a bug.
       if (failure.code !== 'UNSUPPORTED_SOURCE') throw failure;
       throw seraError('PROVIDER_AUTH_REQUIRED', {
         message: 'Instagram photo posts need an account, and this server does not have one.',

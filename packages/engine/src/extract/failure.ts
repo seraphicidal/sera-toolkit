@@ -22,21 +22,32 @@ import { SeraError } from '../errors.js';
  *   so they never justify spending a scarce backend.
  */
 export type FailureClass =
+  /* ---- the address that asked ---- */
   | 'DATACENTER_BLOCKED'
   | 'BOT_DETECTION'
+  /* ---- a media URL, not a page ---- */
   | 'STREAM_403'
-  | 'RATE_LIMITED'
+  | 'CDN_DOWNLOAD_FAILURE'
+  /* ---- the extractor's own footing ---- */
+  | 'PO_TOKEN_REQUIRED'
+  | 'FORMAT_UNAVAILABLE'
+  /* ---- credentials ---- */
   | 'LOGIN_REQUIRED'
+  | 'AGE_RESTRICTED'
   | 'AUTH_CONFIGURATION_ERROR'
+  /* ---- the same from everywhere ---- */
   | 'PRIVATE_CONTENT'
   | 'DELETED_CONTENT'
   | 'GEO_BLOCKED'
   | 'UNSUPPORTED_URL'
   | 'UNSUPPORTED_MEDIA'
-  | 'EXTRACTOR_BUG'
+  /* ---- worth another try, unchanged ---- */
+  | 'RATE_LIMITED'
   | 'SOURCE_ERROR'
   | 'UPSTREAM_TIMEOUT'
   | 'NETWORK_ERROR'
+  /* ---- ours ---- */
+  | 'EXTRACTOR_BUG'
   | 'OUTPUT_ERROR'
   | 'CANCELLED';
 
@@ -54,7 +65,7 @@ export const FAILURE_BY_CODE: Partial<Record<string, FailureClass>> = {
   PROVIDER_AUTH_REQUIRED: 'LOGIN_REQUIRED',
   PROVIDER_CONFIGURATION_ERROR: 'AUTH_CONFIGURATION_ERROR',
   PRIVATE_CONTENT: 'PRIVATE_CONTENT',
-  AGE_RESTRICTED: 'PRIVATE_CONTENT',
+  AGE_RESTRICTED: 'AGE_RESTRICTED',
   DRM_PROTECTED: 'PRIVATE_CONTENT',
   GEO_RESTRICTED: 'GEO_BLOCKED',
   MEDIA_UNAVAILABLE: 'DELETED_CONTENT',
@@ -90,19 +101,43 @@ export const FAILURE_BY_CODE: Partial<Record<string, FailureClass>> = {
  * one thing that does not distinguish them.
  */
 const BY_PHRASE: readonly (readonly [FailureClass, readonly string[]])[] = [
+  // Ordered: the first match wins, so the specific readings come before the general
+  // ones they would otherwise be swallowed by.
   [
     'BOT_DETECTION',
     ['not a bot', 'unusual traffic', 'suspicious activity', 'confirm your identity'],
   ],
   [
+    // The extractor asking for a token it could not get. Distinct from a bot challenge
+    // because the answer is a provider, not a different address — and distinct from a
+    // login wall because no account is involved.
+    'PO_TOKEN_REQUIRED',
+    ['po token', 'po_token', 'potoken', 'missing a gvs po token', 'requires a po token'],
+  ],
+  [
+    // The list this client can see does not contain what was asked for. Another client
+    // sees a different list, and a lower quality is on the same one.
+    'FORMAT_UNAVAILABLE',
+    ['requested format is not available', 'no video formats found', 'no formats found'],
+  ],
+  [
+    // A media URL refused to the address that asked, which is not the same as a page
+    // being refused: it is fixed by downloading where the resolve happened.
     'STREAM_403',
+    ['http error 403', 'unable to download video data: http error 403'],
+  ],
+  [
+    // The CDN answered, badly. Retrying the same URL from the same place is what does
+    // not work; the whole job somewhere else does.
+    'CDN_DOWNLOAD_FAILURE',
     [
-      'http error 403',
-      'unable to download video data: http error 403',
       'fragment 1 not found',
       'giving up after 10 fragment retries',
+      'unable to download fragment',
+      'the download is incomplete',
     ],
   ],
+  ['AGE_RESTRICTED', ['age-restricted', 'confirm your age', 'sign in to confirm your age']],
   ['DELETED_CONTENT', ['has been removed', 'no longer available', 'video unavailable']],
   ['GEO_BLOCKED', ['not available in your country', 'blocked it in your country']],
   ['SOURCE_ERROR', ['http error 5', 'internal server error', 'service unavailable']],
@@ -126,7 +161,48 @@ export function classifyFailure(error: unknown): FailureClass {
  * answer more slowly.
  */
 export function isEgressProblem(failure: FailureClass): boolean {
-  return failure === 'DATACENTER_BLOCKED' || failure === 'BOT_DETECTION';
+  return (
+    failure === 'DATACENTER_BLOCKED' ||
+    failure === 'BOT_DETECTION' ||
+    // A token the extractor could not obtain here. A residential address usually can,
+    // which makes this an address problem wearing different words.
+    failure === 'PO_TOKEN_REQUIRED' ||
+    // The page resolved and the CDN then refused or truncated the bytes. Nothing on
+    // this network fixes that; the whole job somewhere else does.
+    failure === 'CDN_DOWNLOAD_FAILURE'
+  );
+}
+
+/**
+ * Whether this is the end of the road, whatever else exists.
+ *
+ * The point of a strategy ladder is to keep going after a failure that another approach
+ * could plausibly answer. These are the failures no approach answers: the content is
+ * private, gone, geo-fenced, not media, or the visitor has left. Retrying them through
+ * five more backends spends time and somebody's bandwidth to arrive at the same
+ * sentence — and, worse, replaces a precise answer with a vague one.
+ */
+export function isDefinitive(failure: FailureClass): boolean {
+  return (
+    failure === 'PRIVATE_CONTENT' ||
+    failure === 'AGE_RESTRICTED' ||
+    failure === 'DELETED_CONTENT' ||
+    failure === 'GEO_BLOCKED' ||
+    failure === 'UNSUPPORTED_URL' ||
+    failure === 'CANCELLED'
+  );
+}
+
+/**
+ * Whether another way of asking the same source could still work.
+ *
+ * The inverse of `isDefinitive`, and the question a strategy ladder actually asks.
+ * `UNSUPPORTED_MEDIA` is deliberately on this side of the line: it usually means "this
+ * extractor only understands video and the post is photographs", which is precisely the
+ * case another strategy exists for.
+ */
+export function worthAnotherStrategy(failure: FailureClass): boolean {
+  return !isDefinitive(failure);
 }
 
 /**

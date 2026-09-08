@@ -2,7 +2,7 @@ import type { ProviderCapabilities } from '@sera/contracts/types';
 import { SeraError } from '../errors.js';
 import type { Logger } from '../logging.js';
 import type { ResolvedMedia } from '../providers/types.js';
-import { classifyFailure, isEgressProblem, type FailureClass } from './failure.js';
+import { classifyFailure, isDefinitive, isEgressProblem, type FailureClass } from './failure.js';
 
 /**
  * The kind of connection an extraction runs on.
@@ -71,6 +71,20 @@ export interface RouterDependencies {
    * does not know, which is treated as the conservative answer: local only.
    */
   readonly capabilitiesOf: (providerId: string) => ProviderCapabilities | undefined;
+  /**
+   * The provider asked again, this time allowed to return a lesser representation.
+   *
+   * The bottom rung of the ladder, and it has to be here rather than inside a provider.
+   * Instagram publishes a cover image for a post that needs a session to read properly;
+   * if that rung ran where the provider runs it, a post that an extraction node could
+   * have returned in full would come back as one image instead, because the node is
+   * only consulted once the local attempt has failed. Last means last.
+   */
+  readonly lastResort?: (
+    url: URL,
+    providerId: string,
+    signal?: AbortSignal,
+  ) => Promise<ResolvedMedia>;
 }
 
 /**
@@ -160,6 +174,25 @@ export class ExtractionRouter {
     return false;
   }
 
+  /**
+   * One last ask, for something rather than nothing.
+   *
+   * Only after every backend has refused, and never for a failure that is the same from
+   * everywhere: a private post has no lesser public representation, and offering one
+   * would mean inventing it. A failure here is swallowed on purpose — the answer the
+   * visitor gets is the real one from the real route, not whatever went wrong while
+   * looking for a consolation.
+   */
+  private async lastResort(
+    url: URL,
+    providerId: string,
+    failure: FailureClass,
+    signal?: AbortSignal,
+  ): Promise<ResolvedMedia | undefined> {
+    if (!this.deps.lastResort || isDefinitive(failure)) return undefined;
+    return this.deps.lastResort(url, providerId, signal).catch(() => undefined);
+  }
+
   async resolve(url: URL, providerId: string, signal?: AbortSignal): Promise<ExtractionOutcome> {
     const { logger } = this.deps;
     const chain = this.plan(providerId);
@@ -209,6 +242,29 @@ export class ExtractionRouter {
 
         const next = chain[index + 1];
         if (!next || !this.shouldEscalate(failure, backend, next)) {
+          const salvaged = await this.lastResort(url, providerId, failure, signal);
+          if (salvaged) {
+            logger.info(
+              {
+                provider: providerId,
+                backend: 'degraded',
+                firstFailure,
+                fallbackUsed: true,
+                items: salvaged.items.length,
+              },
+              'every backend refused; returning a lesser public representation',
+            );
+            return {
+              media: salvaged,
+              backend: 'degraded',
+              networkClass: backend.networkClass,
+              remote: false,
+              fallbackUsed: true,
+              attempts: index + 2,
+              ...(firstFailure ? { firstFailure } : {}),
+            };
+          }
+
           logger.info(
             {
               provider: providerId,
