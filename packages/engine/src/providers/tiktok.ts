@@ -31,6 +31,11 @@ export class TikTokProvider extends YtdlpProvider {
     if (!['vm.tiktok.com', 'vt.tiktok.com'].includes(out.hostname.toLowerCase())) {
       out.hostname = 'www.tiktok.com';
     }
+    // The app hands out a slideshow as `/photo/<id>`, and the extractor answers
+    // "Unsupported URL" to that path while accepting the identical id under `/video/`
+    // — measured on yt-dlp 2026.08.19. TikTok serves one post under both, so the link a
+    // visitor pasted was being refused over its spelling.
+    out.pathname = out.pathname.replace(/^\/(@[^/]+)\/photo\/(\d+)/, '/$1/video/$2');
     return out;
   }
 

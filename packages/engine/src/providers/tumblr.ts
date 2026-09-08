@@ -15,10 +15,14 @@ export class TumblrProvider extends YtdlpProvider {
   readonly hosts = ['tumblr.com'];
   override readonly priority = 30;
 
+  // Video only, measured rather than assumed. The extractor answers "No video could be
+  // found in this post" for a photoset; the page it would otherwise be read from is a
+  // script shell with no `og:image`; the old `/api/read/json` endpoint is gone (404);
+  // and `www.tumblr.com/<blog>/<id>` is disallowed by Tumblr's robots.txt, which SERA
+  // honours. Photosets would need an API key from a registered application, which this
+  // installation does not have and does not ask visitors for.
   override readonly capabilities: ProviderCapabilities = declare({
-    image: true,
-    carousel: true,
-    gif: true,
+    authRequiredFor: ['photo posts'],
   });
 
   override canHandle(_url: URL, host: string): boolean {

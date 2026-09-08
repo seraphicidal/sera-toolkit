@@ -154,6 +154,22 @@ describe('normalization', () => {
     );
   });
 
+  it('spells a TikTok slideshow the way the extractor accepts', () => {
+    // The app hands out `/photo/<id>`; yt-dlp 2026.08.19 answers "Unsupported URL" to
+    // that path and resolves the identical id under `/video/`. One post, two spellings,
+    // and the link a visitor pasted was being refused over which one they had.
+    expect(canonical('https://www.tiktok.com/@someone/photo/7681695065927912735')).toBe(
+      'https://www.tiktok.com/@someone/video/7681695065927912735',
+    );
+    expect(canonical('https://www.tiktok.com/@someone/video/7681695065927912735')).toBe(
+      'https://www.tiktok.com/@someone/video/7681695065927912735',
+    );
+  });
+
+  it('leaves a TikTok path that only looks like a photo post alone', () => {
+    expect(canonical('https://www.tiktok.com/photo/123')).toBe('https://www.tiktok.com/photo/123');
+  });
+
   it('expands the Dailymotion shortener', () => {
     expect(canonical('https://dai.ly/x8abc')).toBe('https://www.dailymotion.com/video/x8abc');
   });
