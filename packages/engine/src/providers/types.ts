@@ -54,6 +54,13 @@ export interface ProviderContext {
   readonly config: EngineConfig;
   readonly logger: Logger;
   readonly signal?: AbortSignal;
+  /**
+   * Whether a lesser representation of the media would now be better than nothing.
+   *
+   * Set only by the router's last resort, once every backend it knows about has
+   * refused. A provider reads it to decide whether its degraded strategies may run.
+   */
+  readonly allowDegraded?: boolean;
   /** Runs yt-dlp's metadata dump. */
   readonly probe: (
     url: string,

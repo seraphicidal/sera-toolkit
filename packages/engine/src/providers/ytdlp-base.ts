@@ -14,6 +14,7 @@ import {
   kindOf,
   type PlanBuildOptions,
 } from '../normalize/plans.js';
+import { runStrategies, type ExtractionStrategy } from '../extract/strategy.js';
 import { hostMatchesAny } from '../security/url.js';
 import { truncate } from '../util/format.js';
 import type {
@@ -87,7 +88,46 @@ export abstract class YtdlpProvider implements MediaProvider {
     return 'collection';
   }
 
+  /**
+   * The ways this provider knows to ask, in the order to ask them.
+   *
+   * One rung by default, because for most of the several hundred sites yt-dlp
+   * normalizes there is nothing else to try. A provider with a published embed
+   * endpoint, an official API or a second extractor overrides this and gets the whole
+   * ladder for free — including the rule that a private or deleted post ends it rather
+   * than being asked four more times.
+   */
+  protected strategies(_url: URL, _context: ProviderContext): readonly ExtractionStrategy[] {
+    return [
+      {
+        id: 'ytdlp',
+        label: 'the extractor',
+        run: (target, context) => this.runExtractor(target, context),
+      },
+    ];
+  }
+
   async resolve(url: URL, context: ProviderContext): Promise<ResolvedMedia> {
+    const ladder = this.strategies(url, context);
+    // One rung is the common case, and it should look in the log exactly as it did
+    // before the ladder existed: no strategy line, no ceremony.
+    if (ladder.length === 1) return ladder[0]!.run(url, context);
+
+    const outcome = await runStrategies(ladder, url, context, {
+      provider: this.id,
+      logger: context.logger,
+      includeDegraded: context.allowDegraded === true,
+    });
+    return outcome.attempts.length
+      ? {
+          ...outcome.media,
+          metadata: { ...outcome.media.metadata, extractionStrategy: outcome.strategy },
+        }
+      : outcome.media;
+  }
+
+  /** The default rung: yt-dlp, tuned by whatever this provider declares. */
+  protected async runExtractor(url: URL, context: ProviderContext): Promise<ResolvedMedia> {
     const info = await context.probe(url.toString(), {
       playlist: this.wantsPlaylist(url),
       extractorArgs: this.extractorArgs(url, context),

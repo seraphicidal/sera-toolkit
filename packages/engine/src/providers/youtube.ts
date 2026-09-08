@@ -2,6 +2,7 @@ import type { MediaInfoType, ProviderCapabilities } from '@sera/contracts/types'
 import { ensureRecommendations } from '../normalize/plans.js';
 import { SeraError } from '../errors.js';
 import { classifyFailure } from '../extract/failure.js';
+import type { ExtractionStrategy } from '../extract/strategy.js';
 import type { ProviderContext, ResolvedMedia } from './types.js';
 import { YtdlpProvider } from './ytdlp-base.js';
 import { declare } from './capabilities.js';
@@ -92,6 +93,50 @@ export class YouTubeProvider extends YtdlpProvider {
     return url.pathname.startsWith('/playlist') && url.searchParams.has('list');
   }
 
+  /**
+   * Two ways of asking, and the second exists for one measured reason.
+   *
+   * yt-dlp's player clients do not see the same format list. Measured from a residential
+   * connection on 2026.08.19: the default client returns 53 formats up to 2160p, and
+   * `android` returns 5 up to 360p — but they fail independently. When the first client's
+   * list does not contain what was asked for, or when it cannot obtain a PO token, a
+   * client with a different list is a different question rather than the same one asked
+   * twice. Anything else — a bot challenge, a private video — is not helped by it, and
+   * the ladder's own rules stop there.
+   *
+   * There is deliberately no "just give them the thumbnail" rung here. YouTube already
+   * offers the cover image alongside a successful extraction, and a rung that always
+   * succeeds would pre-empt the extraction node that could have returned the video.
+   */
+  protected override strategies(
+    _url: URL,
+    context: ProviderContext,
+  ): readonly ExtractionStrategy[] {
+    const configured = context.config.youtube.playerClients;
+    const ladder: ExtractionStrategy[] = [
+      {
+        id: 'ytdlp',
+        label: configured ? `the extractor (${configured})` : 'the extractor',
+        run: (target, ctx) => this.runExtractor(target, ctx),
+      },
+    ];
+
+    for (const client of ALTERNATE_CLIENTS) {
+      if (configured === client) continue;
+      ladder.push({
+        id: `ytdlp:${client}`,
+        label: `the extractor, asking as ${client}`,
+        // Only these two. A bot challenge is about the address and a different client
+        // is challenged the same way — measured on Oracle, on every client yt-dlp
+        // offers — so running one there would delay the node that actually fixes it.
+        answers: ['FORMAT_UNAVAILABLE', 'PO_TOKEN_REQUIRED'],
+        run: (target, ctx) =>
+          this.runExtractor(target, { ...ctx, config: withPlayerClient(ctx.config, client) }),
+      });
+    }
+    return ladder;
+  }
+
   protected override extractorArgs(_url: URL, context: ProviderContext): readonly string[] {
     const args: string[] = [];
 
@@ -161,6 +206,23 @@ export class YouTubeProvider extends YtdlpProvider {
       throw failure;
     }
   }
+}
+
+/**
+ * Clients worth asking when the first one's format list came up short.
+ *
+ * `web_safari` and `android` were the two that returned anything at all in the audit;
+ * the rest either errored outright or returned exactly what the default returned, and a
+ * rung that duplicates the one above it is a wasted round trip rather than a fallback.
+ */
+const ALTERNATE_CLIENTS = ['web_safari', 'android'] as const;
+
+/** The same configuration with one field changed, so a rung can ask differently. */
+function withPlayerClient(
+  config: ProviderContext['config'],
+  playerClients: string,
+): ProviderContext['config'] {
+  return { ...config, youtube: { ...config.youtube, playerClients } };
 }
 
 /**
