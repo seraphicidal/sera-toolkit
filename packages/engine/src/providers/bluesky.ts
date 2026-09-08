@@ -1,5 +1,6 @@
 import type { ContainerFormat, ProviderCapabilities } from '@sera/contracts/types';
-import { SeraError, seraError } from '../errors.js';
+import { seraError } from '../errors.js';
+import type { ExtractionStrategy } from '../extract/strategy.js';
 import { ensureRecommendations } from '../normalize/plans.js';
 import { normalizeContainer } from './direct.js';
 import { nonEmpty, truncate } from '../util/format.js';
@@ -41,22 +42,37 @@ export class BlueskyProvider extends YtdlpProvider {
     return true;
   }
 
-  override async resolve(url: URL, context: ProviderContext): Promise<ResolvedMedia> {
-    try {
-      return await super.resolve(url, context);
-    } catch (error) {
-      // Only the "nothing here I can extract" answer is worth a second look. A private
-      // account or a deleted post is a real answer and stays one.
-      if (SeraError.from(error).code !== 'UNSUPPORTED_SOURCE') throw error;
-      return this.resolveImages(url, context, error);
-    }
+  /**
+   * The extractor, then the AT Protocol.
+   *
+   * yt-dlp owns video, which it renders in several qualities the API does not. The API
+   * owns photographs, which the extractor does not see at all — so the second rung
+   * answers exactly one thing, "there was nothing here I could extract", and a private
+   * account or a deleted post stops the ladder rather than being asked twice.
+   */
+  protected override strategies(
+    _url: URL,
+    _context: ProviderContext,
+  ): readonly ExtractionStrategy[] {
+    return [
+      {
+        id: 'ytdlp',
+        label: 'the extractor',
+        run: (target, ctx) => this.runExtractor(target, ctx),
+      },
+      {
+        id: 'at-protocol',
+        label: "Bluesky's public API",
+        answers: ['UNSUPPORTED_MEDIA'],
+        run: (target, ctx) => this.resolveImages(target, ctx),
+      },
+    ];
   }
 
-  private async resolveImages(
-    url: URL,
-    context: ProviderContext,
-    original: unknown,
-  ): Promise<ResolvedMedia> {
+  private async resolveImages(url: URL, context: ProviderContext): Promise<ResolvedMedia> {
+    const original = seraError('UNSUPPORTED_SOURCE', {
+      detail: 'bluesky: not a post URL this API can read',
+    });
     const parts = url.pathname.split('/').filter(Boolean);
     const actor = parts[1];
     const rkey = parts[3];
