@@ -420,16 +420,25 @@ describe('failure handling', () => {
     ).rejects.toMatchObject({ code: 'MEDIA_UNAVAILABLE' });
   });
 
-  it('refuses Reddit before spending a probe on it', async () => {
-    // Reddit answers 403 Blocked to anonymous requests from hosted ranges, so a probe
-    // is a guaranteed waste of the one worker this instance has.
+  it('never spends a probe on Reddit, which answers 403 to this address', async () => {
+    // Reddit answers 403 Blocked to anonymous requests from hosted ranges, so the
+    // extractor is a guaranteed waste of the one worker this instance has. The embed
+    // route replaces it — and when that cannot be reached either, the failure is about
+    // the fetch rather than about the extractor never being tried.
     const empty: YtdlpInfo = { id: 'x', title: 'nothing here', formats: [] };
+    let probed = false;
+    const context: ProviderContext = {
+      ...contextFor(empty),
+      probe: () => {
+        probed = true;
+        return Promise.resolve(empty);
+      },
+    };
+
     await expect(
-      new RedditProvider().resolve(
-        new URL('https://www.reddit.com/r/a/comments/b/c'),
-        contextFor(empty),
-      ),
-    ).rejects.toMatchObject({ code: 'PROVIDER_AUTH_REQUIRED' });
+      new RedditProvider().resolve(new URL('https://www.reddit.com/r/a/comments/b/c'), context),
+    ).rejects.toThrow();
+    expect(probed).toBe(false);
   });
 
   it('surfaces a probe failure unchanged', async () => {

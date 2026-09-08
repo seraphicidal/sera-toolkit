@@ -138,12 +138,14 @@ const CASES = [
   {
     id: 'reddit-image',
     url: 'https://www.reddit.com/r/aww/comments/1w9mm3q/x/',
-    expect: { kinds: ['image'], orFailure: 'LOGIN_REQUIRED' },
+    expect: { kinds: ['image'] },
+    download: [{ kind: 'image' }],
   },
   {
     id: 'reddit-video',
     url: 'https://www.reddit.com/r/aww/comments/1w9of32/x/',
-    expect: { kinds: ['video'], orFailure: 'LOGIN_REQUIRED' },
+    expect: { kinds: ['video'] },
+    download: [{ kind: 'video' }, { kind: 'audio' }],
   },
   {
     id: 'direct-image',
