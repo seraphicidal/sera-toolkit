@@ -6,10 +6,11 @@ import { convert, probe, type ConversionSpec } from '../convert/ffmpeg.js';
 import { seraError, SeraError } from '../errors.js';
 import { downloadDirect } from '../extract/direct-download.js';
 import { download as ytdlpDownload } from '../extract/ytdlp.js';
+import { classifyFailure } from '../extract/failure.js';
 import { logSafeUrl, type Logger } from '../logging.js';
 import type { DownloadPlan, ResolvedItem, ResolvedMedia } from '../providers/types.js';
 import { planKey } from '../providers/types.js';
-import { contradicts, sniffContainer, SNIFF_BYTES } from '../util/sniff.js';
+import { contradicts, sniffContainer, sniffTextImposter, SNIFF_BYTES } from '../util/sniff.js';
 import type { MediaResolver } from '../resolver.js';
 import type { ExtractionNodeRegistry } from '../extract/remote.js';
 import { mimeTypeFor, type Workspace, type WorkspaceManager } from '../storage/workspace.js';
@@ -98,6 +99,8 @@ export class JobRunner {
     const totalFiles = matched.length;
     const produced: { path: string; name: string }[] = [];
     const taken = new Set<string>();
+    /** Anything the visitor asked for that had to be met with something else. */
+    const delivered: { requested: string; actual: string }[] = [];
 
     // A resolution the local network could not produce cannot be downloaded here
     // either: YouTube binds a media URL to the address that asked for it. The node that
@@ -162,7 +165,7 @@ export class JobRunner {
           ...extra,
         });
 
-        const downloaded = await this.fetchOne({
+        const { path: downloaded, plan: used } = await this.fetchWithFallback({
           workspace,
           resolved,
           item,
@@ -172,11 +175,12 @@ export class JobRunner {
           fileProgress,
           ...(signal ? { signal } : {}),
         });
+        if (used !== plan) delivered.push({ requested: plan.label, actual: used.label });
 
-        const converted = plan.convert
+        const converted = used.convert
           ? await this.convertOne({
               input: downloaded,
-              spec: plan.convert,
+              spec: used.convert,
               workspace,
               index,
               report,
@@ -187,7 +191,7 @@ export class JobRunner {
           : downloaded;
 
         const name = dedupeFilename(
-          this.nameFor(spec, resolved, item, plan, converted, totalFiles),
+          this.nameFor(spec, resolved, item, used, converted, totalFiles),
           taken,
         );
         const destination = workspace.outputPath(name);
@@ -207,6 +211,7 @@ export class JobRunner {
         provider: spec.provider,
         source: logSafeUrl(spec.url),
         strategy: remoteBackend ?? 'local',
+        ...(delivered.length ? { substituted: delivered } : {}),
         mediaType: resolved.type,
         mediaKinds: [...new Set(matched.map(({ item }) => item.kind))],
         outputFormat: result.isArchive
@@ -224,6 +229,56 @@ export class JobRunner {
   }
 
   /* ------------------------------------------------------------------ */
+
+  /**
+   * The requested format, and then the next best one this item actually has.
+   *
+   * A format list is a snapshot. Between the moment it was read and the moment the
+   * bytes are asked for, the one that was picked can stop being available — a signed
+   * URL expires, a CDN refuses, a client's list changes underneath it. Failing the whole
+   * job at that point throws away a perfectly good 720p because the 1080p went missing.
+   *
+   * Only for the failures a different format is an answer to, and only downward through
+   * options this item already published: no re-resolving, no different media, and never
+   * a different kind — someone who asked for video does not want an MP3 instead. Each
+   * candidate is tried once, so this is a ladder and not a retry loop.
+   */
+  private async fetchWithFallback(args: {
+    workspace: Workspace;
+    resolved: ResolvedMedia;
+    item: ResolvedItem;
+    plan: DownloadPlan;
+    index: number;
+    report: ReportFn;
+    fileProgress: (fraction: number, extra?: Partial<JobProgress>) => JobProgress;
+    signal?: AbortSignal;
+  }): Promise<{ path: string; plan: DownloadPlan }> {
+    const candidates = [args.plan, ...lowerQualityAlternatives(args.item, args.plan)];
+
+    for (const [attempt, plan] of candidates.entries()) {
+      try {
+        return { path: await this.fetchOne({ ...args, plan }), plan };
+      } catch (error) {
+        const failure = classifyFailure(error);
+        const next = candidates[attempt + 1];
+        if (!next || !FORMAT_FALLBACK_ANSWERS.has(failure)) throw error;
+
+        this.deps.logger.info(
+          {
+            jobId: args.workspace.jobId,
+            provider: args.resolved.provider,
+            failureClass: failure,
+            requested: plan.label,
+            fallingBackTo: next.label,
+          },
+          'the requested format could not be fetched; stepping down',
+        );
+      }
+    }
+
+    /* istanbul ignore next -- the loop always returns or throws. */
+    throw seraError('MEDIA_UNAVAILABLE', { detail: 'no format could be fetched' });
+  }
 
   private async fetchOne(args: {
     workspace: Workspace;
@@ -521,6 +576,19 @@ export class JobRunner {
           detail: `${info.size} bytes: ${file.name}`,
         });
       }
+
+      // A refusal that arrived as a 200. A login page, a consent wall or a JSON error
+      // saved under the extension the plan asked for is a .jpg that opens to "Log in to
+      // continue" — and nothing else here would catch it, because it has no magic number
+      // to contradict and no audio or video track to probe.
+      const imposter = sniffTextImposter(await headOf(file.path));
+      if (imposter) {
+        throw seraError('MEDIA_UNAVAILABLE', {
+          message: 'The source returned a page instead of the media.',
+          hint: 'The post may have become private, or the site may be asking for a login.',
+          detail: `${file.name} is ${imposter}, not media`,
+        });
+      }
       const extension = file.name.split('.').pop()?.toLowerCase() ?? '';
       if (
         ['mp4', 'webm', 'mov', 'mkv', 'mp3', 'm4a', 'opus', 'wav', 'flac', 'ogg'].includes(
@@ -532,6 +600,12 @@ export class JobRunner {
           ffprobePath: config.ffprobePath,
           timeoutMs: 30_000,
         }).catch(() => undefined);
+        if (probed?.durationSeconds !== undefined && probed.durationSeconds <= 0) {
+          throw seraError('CONVERSION_FAILED', {
+            message: 'The download finished but the file has no playable content.',
+            detail: `zero duration: ${file.name}`,
+          });
+        }
         if (!probed || (!probed.video && !probed.audio)) {
           throw seraError('CONVERSION_FAILED', {
             message: 'The download finished but the file could not be verified.',
@@ -670,19 +744,62 @@ export { SeraError };
  * Returns the path to use. A file whose format cannot be recognised keeps the name it
  * was given: guessing wrong twice is worse than guessing wrong once.
  */
-async function renameToActualFormat(path: string, claimed: string): Promise<string> {
-  let head: Buffer;
+/**
+ * Failures a different format is an answer to.
+ *
+ * A missing format and a refused or truncated stream are about *this* rendition. A bot
+ * challenge, a private post or a login wall are about the whole request, and stepping
+ * down the quality list would ask the same question in a smaller voice.
+ */
+const FORMAT_FALLBACK_ANSWERS = new Set([
+  'FORMAT_UNAVAILABLE',
+  'STREAM_403',
+  'CDN_DOWNLOAD_FAILURE',
+  'SOURCE_ERROR',
+]);
+
+/**
+ * The same kind of thing, smaller, from what this item already published.
+ *
+ * Ordered by height descending so the step down is one step, not a fall to the bottom.
+ * Plans with no height sort last: an audio rendition or a still has no ladder to walk,
+ * and putting them behind the sized ones keeps "the next best video" meaning that.
+ */
+function lowerQualityAlternatives(
+  item: ResolvedItem,
+  chosen: DownloadPlan,
+): readonly DownloadPlan[] {
+  const ceiling = chosen.height ?? Number.POSITIVE_INFINITY;
+  return item.plans
+    .filter(
+      (plan) =>
+        plan !== chosen &&
+        plan.kind === chosen.kind &&
+        planKey(plan) !== planKey(chosen) &&
+        (plan.height ?? 0) < ceiling,
+    )
+    .sort((a, b) => (b.height ?? 0) - (a.height ?? 0));
+}
+
+/** The first bytes of a file, or nothing when it cannot be read. */
+async function headOf(path: string): Promise<Buffer> {
   try {
     const handle = await open(path, 'r');
     try {
-      head = Buffer.alloc(SNIFF_BYTES);
+      const head = Buffer.alloc(SNIFF_BYTES);
       await handle.read(head, 0, SNIFF_BYTES, 0);
+      return head;
     } finally {
       await handle.close();
     }
   } catch {
-    return path;
+    return Buffer.alloc(0);
   }
+}
+
+async function renameToActualFormat(path: string, claimed: string): Promise<string> {
+  const head = await headOf(path);
+  if (!head.length) return path;
 
   const actual = sniffContainer(head);
   if (!actual || !contradicts(claimed, actual)) return path;

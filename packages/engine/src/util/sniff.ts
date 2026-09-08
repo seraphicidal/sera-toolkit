@@ -49,6 +49,34 @@ export function sniffContainer(head: Uint8Array): ContainerFormat | undefined {
 }
 
 /**
+ * What a file is when it is not media at all.
+ *
+ * A source that has decided to refuse still answers 200, and what it sends is a login
+ * page, a consent wall, a CAPTCHA or a JSON error — with whatever content type it
+ * likes. Saved under the extension the plan asked for, that is a .jpg that opens to
+ * "Log in to continue", and nothing downstream noticed: `sniffContainer` returns
+ * undefined for it, so the container correction left it alone, and the ffprobe check
+ * only runs on audio and video extensions.
+ *
+ * Reads the first bytes, skipping a UTF-8 BOM and leading whitespace, because that is
+ * all it takes to tell markup and JSON from every magic number above.
+ */
+export function sniffTextImposter(head: Uint8Array): 'html' | 'json' | 'xml' | undefined {
+  let start = 0;
+  if (head[0] === 0xef && head[1] === 0xbb && head[2] === 0xbf) start = 3;
+  while (start < head.length && (head[start] ?? 0) <= 0x20) start += 1;
+
+  const text = Buffer.from(head.subarray(start)).toString('latin1').toLowerCase();
+  if (!text) return undefined;
+  if (text.startsWith('<!doctype html') || text.startsWith('<html') || text.startsWith('<head')) {
+    return 'html';
+  }
+  if (text.startsWith('<?xml')) return 'xml';
+  if (text.startsWith('{') || text.startsWith('[')) return 'json';
+  return undefined;
+}
+
+/**
  * Formats that are genuinely the same file in different clothes, where renaming would be
  * noise rather than a correction.
  */
