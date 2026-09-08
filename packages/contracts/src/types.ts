@@ -181,6 +181,22 @@ export interface JobResultFile {
   readonly downloadPath: string;
 }
 
+/**
+ * What was actually delivered, when it was not quite what was asked for.
+ *
+ * A format list is a snapshot, and the rendition someone picked can stop being available
+ * between the moment they picked it and the moment the bytes are fetched. SERA steps down
+ * to the next one the same item published rather than failing the job — and then says so,
+ * because a 720p file arriving under a 1080p request is only acceptable if nobody has to
+ * discover it by looking at the pixels.
+ */
+export interface JobDelivery {
+  /** Which extraction backend produced the file: `local`, or the node that did. */
+  readonly backend: string;
+  /** One entry per selection that had to be met with something else. */
+  readonly substituted?: readonly { readonly requested: string; readonly actual: string }[];
+}
+
 export interface JobResult {
   /** Path on the SERA API for the primary download (a file, or the ZIP). */
   readonly downloadPath: string;
@@ -192,6 +208,8 @@ export interface JobResult {
   readonly files?: readonly JobResultFile[];
   /** ISO-8601 instant after which the files are deleted. */
   readonly expiresAt: string;
+  /** Present when the delivery differs from the request in a way worth reporting. */
+  readonly delivery?: JobDelivery;
 }
 
 export type ErrorCode =

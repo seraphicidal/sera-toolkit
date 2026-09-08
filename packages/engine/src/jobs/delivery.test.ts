@@ -128,6 +128,10 @@ describe('a format that stops being available part-way through', () => {
     // One step, not a fall to the bottom.
     expect(asked).toEqual(['1080p', '720p']);
     expect(result.sizeBytes).toBeGreaterThan(0);
+    // And the result says so, because a 720p file arriving under a 1080p request is only
+    // acceptable if nobody has to discover it by looking at the pixels.
+    expect(result.delivery?.substituted).toEqual([{ requested: '1080p', actual: '720p' }]);
+    expect(result.delivery?.backend).toBe('local');
   }, 60_000);
 
   it('walks the whole list rather than giving up after one step', async () => {
@@ -241,5 +245,7 @@ describe('a refusal that arrives as a 200', () => {
     const result = await runner.run(spec, () => undefined);
     const bytes = await readFile(join(dataDir, spec.jobId, 'out', result.filename));
     expect(bytes.subarray(4, 8).toString('latin1')).toBe('ftyp');
+    // Nothing was substituted, so there is nothing to report about it.
+    expect(result.delivery?.substituted).toBeUndefined();
   }, 60_000);
 });

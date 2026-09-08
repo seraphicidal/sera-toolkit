@@ -200,7 +200,16 @@ export class JobRunner {
       }
     }
 
-    const result = await this.package(spec, resolved, workspace, produced, report, signal);
+    const packaged = await this.package(spec, resolved, workspace, produced, report, signal);
+    // Said out loud rather than left for someone to notice in the pixels: which backend
+    // produced this, and anything that had to be met with a different rendition.
+    const result: JobResult = {
+      ...packaged,
+      delivery: {
+        backend: remoteBackend ?? 'local',
+        ...(delivered.length ? { substituted: delivered } : {}),
+      },
+    };
 
     await workspace.clearScratch();
     await this.validate(produced, result);
