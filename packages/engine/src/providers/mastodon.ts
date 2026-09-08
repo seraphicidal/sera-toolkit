@@ -1,5 +1,6 @@
 import type { ProviderCapabilities } from '@sera/contracts/types';
-import { SeraError } from '../errors.js';
+import { seraError } from '../errors.js';
+import type { ExtractionStrategy } from '../extract/strategy.js';
 import { ensureRecommendations } from '../normalize/plans.js';
 import { hostMatchesAny, urlExtension } from '../security/url.js';
 import { nonEmpty, truncate } from '../util/format.js';
@@ -66,18 +67,57 @@ export class MastodonProvider extends YtdlpProvider {
     return true;
   }
 
-  override async resolve(url: URL, context: ProviderContext): Promise<ResolvedMedia> {
-    // The API is tried first because it is the only path that sees every attachment.
-    // yt-dlp still owns video, which it renders in several qualities the API cannot.
-    const viaApi = await this.resolveViaApi(url, context).catch(() => undefined);
-    if (viaApi?.items.every((item) => item.kind === 'image')) return viaApi;
-
-    try {
-      return await super.resolve(url, context);
-    } catch (error) {
-      if (viaApi) return viaApi;
-      throw SeraError.from(error);
-    }
+  /**
+   * The instance API first, because it is the only path that sees every attachment.
+   *
+   * A status with four photographs is four items there and nothing at all to the
+   * extractor. But the extractor renders video in several qualities the API cannot, so a
+   * status carrying video falls through to it deliberately — the first rung declines
+   * rather than answering with the one rendition the API knows about.
+   */
+  protected override strategies(
+    _url: URL,
+    _context: ProviderContext,
+  ): readonly ExtractionStrategy[] {
+    return [
+      {
+        id: 'instance-api',
+        label: "the instance's public API",
+        run: async (target, ctx) => {
+          const media = await this.resolveViaApi(target, ctx);
+          if (!media?.items.length) {
+            throw seraError('UNSUPPORTED_SOURCE', {
+              detail: 'mastodon: the status carries no attachments this API can read',
+            });
+          }
+          if (!media.items.every((item) => item.kind === 'image')) {
+            throw seraError('UNSUPPORTED_SOURCE', {
+              detail: 'mastodon: video, which the extractor renders in more qualities',
+            });
+          }
+          return media;
+        },
+      },
+      {
+        id: 'ytdlp',
+        label: 'the extractor',
+        run: (target, ctx) => this.runExtractor(target, ctx),
+      },
+      {
+        // The API answer, whatever it was, once the extractor has declined too. A single
+        // rendition of a video is less than the extractor would have given and more than
+        // the nothing otherwise on offer — and unlike a cover image, it is the media.
+        id: 'instance-api-anything',
+        label: "the instance's public API, taking whatever it has",
+        run: async (target, ctx) => {
+          const media = await this.resolveViaApi(target, ctx);
+          if (!media?.items.length) {
+            throw seraError('MEDIA_UNAVAILABLE', { detail: 'mastodon: nothing in the status' });
+          }
+          return media;
+        },
+      },
+    ];
   }
 
   private async resolveViaApi(
