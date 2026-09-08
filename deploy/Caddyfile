@@ -21,17 +21,40 @@
 {$SERA_DOMAIN} {
 	encode zstd gzip
 
-	# Everything goes to the Next server, which proxies /api to the API container. One
-	# origin, so the browser never makes a cross-site request and the app's own CSP can
-	# forbid outbound connections entirely.
-	reverse_proxy web:3000 {
-		# Media downloads are long-lived responses; the defaults would cut them off.
-		transport http {
-			read_timeout 30m
-			write_timeout 30m
+	# The extraction-node protocol, straight to the API rather than through the web app.
+	#
+	# These are reachable from the internet on purpose, and the name says "internal"
+	# because that is what they are *for*, not where they live: a node runs on a
+	# connection nothing can route to, so it has to dial out, which means the endpoint it
+	# dials has to answer. Every route behind this prefix requires the shared token, and
+	# without one configured the API does not mount them at all — so on a deployment with
+	# no node this proxies to a 404 either way.
+	#
+	# The generous timeouts are the upload: a node hands back a finished file that can be
+	# gigabytes, and this is the hop it crosses.
+	handle /internal/extraction/* {
+		reverse_proxy api:4000 {
+			transport http {
+				read_timeout 30m
+				write_timeout 30m
+			}
+			flush_interval -1
 		}
-		# SSE progress must not be buffered, or the bar sits still until the job ends.
-		flush_interval -1
+	}
+
+	# Everything else goes to the Next server, which proxies /api to the API container.
+	# One origin, so the browser never makes a cross-site request and the app's own CSP
+	# can forbid outbound connections entirely.
+	handle {
+		reverse_proxy web:3000 {
+			# Media downloads are long-lived responses; the defaults would cut them off.
+			transport http {
+				read_timeout 30m
+				write_timeout 30m
+			}
+			# SSE progress must not be buffered, or the bar sits still until the job ends.
+			flush_interval -1
+		}
 	}
 
 	header {
