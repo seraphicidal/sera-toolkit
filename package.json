@@ -30,6 +30,7 @@
     "test:coverage": "vitest run --coverage",
     "check:providers": "node scripts/check-providers.mjs",
     "check:node": "node scripts/node-check.mjs",
+    "check:split": "node scripts/check-split.mjs",
     "test:watch": "vitest",
     "tools:fetch": "node scripts/fetch-tools.mjs",
     "typecheck": "tsc --build --pretty && tsc -p tsconfig.tests.json --pretty && tsc -p apps/web/tsconfig.json --pretty",
