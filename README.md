@@ -338,7 +338,9 @@ in, bypass paywalls, or reach content behind an access control.
 
 ```bash
 npm run dev            # everything, with the TypeScript build in watch mode
-npm test               # 446 tests, including a real end-to-end pipeline
+npm test               # 449 tests, including a real end-to-end pipeline
+npm run check:matrix   # every provider against the real sites, from this network
+npm run check:node     # the extraction-node architecture end to end, on one machine
 npm run test:coverage
 npm run verify         # format, lint, typecheck, test, build — run before shipping
 ```
