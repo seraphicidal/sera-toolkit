@@ -12,7 +12,7 @@ import type { DownloadPlan, ResolvedItem, ResolvedMedia } from '../providers/typ
 import { planKey } from '../providers/types.js';
 import { contradicts, sniffContainer, sniffTextImposter, SNIFF_BYTES } from '../util/sniff.js';
 import type { MediaResolver } from '../resolver.js';
-import type { ExtractionNodeRegistry } from '../extract/remote.js';
+import type { RemoteExtraction } from '../extract/remote.js';
 import { mimeTypeFor, type Workspace, type WorkspaceManager } from '../storage/workspace.js';
 import { dedupeFilename, mediaFilename, sanitizeStem } from '../util/filename.js';
 import { createZip } from './zip.js';
@@ -66,7 +66,7 @@ export interface JobRunnerDependencies {
    * address is refused from another, so a job whose plans were made elsewhere has to be
    * carried out elsewhere too.
    */
-  readonly remote?: ExtractionNodeRegistry;
+  readonly remote?: RemoteExtraction;
 }
 
 /** Share of a single file's progress attributed to the download, versus conversion. */

@@ -3,7 +3,7 @@ import { mkdir, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { timingSafeEqual } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { buildFilename, seraError, SeraError, type SeraEngine } from '@sera/engine';
 import { z } from 'zod';
@@ -28,6 +28,24 @@ const claimSchema = z.object({
   // A node says what kind of connection it is on. The default is the reason nodes
   // exist; an operator running a second cloud node says so and is routed accordingly.
   networkClass: z.enum(['datacenter', 'residential', 'unknown']).default('residential'),
+});
+
+/**
+ * A task another SERA process wants a node to run.
+ *
+ * The worker is the caller. A node holds one connection to one process — here, the API —
+ * so on a deployment where the worker is a separate container it cannot see the node at
+ * all. Left alone that produced a YouTube link which resolved through the node and then
+ * failed at the download step with the datacentre block, because the process doing the
+ * downloading did not know a node existed.
+ */
+const dispatchSchema = z.object({
+  kind: z.enum(['resolve', 'job']),
+  url: z.string().url().max(2048),
+  providerId: z.string().min(1).max(32),
+  planKeys: z.array(z.string().min(1).max(200)).max(100).optional(),
+  filename: z.string().max(200).optional(),
+  networkClass: z.enum(['datacenter', 'residential', 'unknown']).optional(),
 });
 
 const progressSchema = z.object({
@@ -73,9 +91,39 @@ function tokenMatches(presented: string, expected: string): boolean {
   return timingSafeEqual(a, b);
 }
 
+/** What a dispatched task is doing, for the process that asked for it. */
+interface Dispatched {
+  state: 'pending' | 'done' | 'failed';
+  progress?: { percent: number; step: string };
+  media?: unknown;
+  files?: readonly { name: string; mimeType: string; path: string }[];
+  error?: { code: string; message: string; detail?: string };
+  readonly controller: AbortController;
+  settledAt?: number;
+}
+
 export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: SeraEngine): void {
   const { config, logger, extractionNodes } = engine;
   if (!config.extractionNodes.enabled) return;
+
+  /**
+   * Tasks another process is waiting on.
+   *
+   * Held here rather than in Redis because a dispatch only outlives the request that
+   * asked for it: the caller polls, and a caller that has gone away is a task nobody
+   * wants. Entries are dropped a minute after they settle, which is long enough for a
+   * poll to collect the answer and short enough that nothing accumulates.
+   */
+  const dispatched = new Map<string, Dispatched>();
+  const DISPATCH_KEEP_MS = 60_000;
+
+  const sweep = setInterval(() => {
+    const now = Date.now();
+    for (const [id, entry] of dispatched) {
+      if (entry.settledAt && now - entry.settledAt > DISPATCH_KEEP_MS) dispatched.delete(id);
+    }
+  }, 30_000);
+  sweep.unref();
 
   // Encapsulated, so the raw-body parser these need does not change how the public API
   // treats a request body.
@@ -261,6 +309,104 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
       async (request, reply) => {
         if (!authenticate(request, reply)) return reply;
         return reply.send({ accepted: extractionNodes.completeJob(request.params.taskId) });
+      },
+    );
+
+    /**
+     * The node list, for a process that cannot see the registry itself.
+     *
+     * Read by the worker's router when it decides whether a fallback exists at all.
+     */
+    app.get('/internal/extraction/nodes', { config: { rateLimit: false } }, (request, reply) => {
+      if (!authenticate(request, reply)) return reply;
+      return reply.send({ nodes: extractionNodes.status() });
+    });
+
+    /** Starts a task and answers with its id; the caller polls for the rest. */
+    app.post(
+      '/internal/extraction/dispatch',
+      { config: { rateLimit: false } },
+      (request, reply) => {
+        if (!authenticate(request, reply)) return reply;
+
+        const parsed = dispatchSchema.safeParse(request.body);
+        if (!parsed.success) {
+          throw seraError('INVALID_URL', {
+            message: 'Malformed dispatch.',
+            detail: 'node: bad dispatch body',
+          });
+        }
+
+        const taskId = randomUUID().replace(/-/g, '');
+        const entry: Dispatched = { state: 'pending', controller: new AbortController() };
+        dispatched.set(taskId, entry);
+
+        const task = parsed.data;
+        const options = {
+          onProgress: (progress: { percent: number; step: string }) => {
+            entry.progress = { percent: progress.percent, step: progress.step };
+          },
+          signal: entry.controller.signal,
+        };
+
+        const running =
+          task.kind === 'job'
+            ? extractionNodes.dispatchJob(task, options).then((files) => {
+                entry.files = files;
+              })
+            : extractionNodes.dispatch(task, options).then((media) => {
+                entry.media = media;
+              });
+
+        void running.then(
+          () => {
+            entry.state = 'done';
+            entry.settledAt = Date.now();
+          },
+          (error: unknown) => {
+            const failure = SeraError.from(error);
+            entry.state = 'failed';
+            entry.error = {
+              code: failure.code,
+              message: failure.message,
+              ...(failure.detail ? { detail: failure.detail } : {}),
+            };
+            entry.settledAt = Date.now();
+          },
+        );
+
+        return reply.send({ taskId });
+      },
+    );
+
+    app.get<{ Params: { taskId: string } }>(
+      '/internal/extraction/dispatch/:taskId',
+      { config: { rateLimit: false } },
+      (request, reply) => {
+        if (!authenticate(request, reply)) return reply;
+
+        const entry = dispatched.get(request.params.taskId);
+        if (!entry) throw seraError('NOT_FOUND', { detail: 'node: no such dispatch' });
+
+        return reply.send({
+          state: entry.state,
+          ...(entry.progress ? { progress: entry.progress } : {}),
+          ...(entry.media ? { media: entry.media } : {}),
+          ...(entry.files ? { files: entry.files } : {}),
+          ...(entry.error ? { error: entry.error } : {}),
+        });
+      },
+    );
+
+    /** The caller gave up, so the node should too. */
+    app.delete<{ Params: { taskId: string } }>(
+      '/internal/extraction/dispatch/:taskId',
+      { config: { rateLimit: false } },
+      (request, reply) => {
+        if (!authenticate(request, reply)) return reply;
+        const entry = dispatched.get(request.params.taskId);
+        entry?.controller.abort();
+        return reply.send({ cancelled: entry !== undefined });
       },
     );
 
