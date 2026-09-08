@@ -102,7 +102,7 @@ export class JobRunner {
     // A resolution the local network could not produce cannot be downloaded here
     // either: YouTube binds a media URL to the address that asked for it. The node that
     // resolved this owns the whole job.
-    const remoteBackend = resolved.metadata?.extractionBackend;
+    const remoteBackend = resolved.remoteBackend;
     if (remoteBackend && this.deps.remote) {
       report({ state: 'downloading', step: 'Downloading', progress: { percent: 0 } });
       const files = await this.deps.remote.dispatchJob(

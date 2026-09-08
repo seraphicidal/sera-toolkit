@@ -46,6 +46,14 @@ export interface ExtractionOutcome {
   readonly media: ResolvedMedia;
   readonly backend: string;
   readonly networkClass: NetworkClass;
+  /**
+   * Whether the backend that answered was a node on another network.
+   *
+   * Not the same question as `fallbackUsed`, which asks whether the first choice
+   * failed. A node can be the first choice — that is what a provider declaring no
+   * datacentre extraction asks for — and the download still has to follow it.
+   */
+  readonly remote: boolean;
   readonly fallbackUsed: boolean;
   /** How many backends were tried, including the one that answered. */
   readonly attempts: number;
@@ -178,6 +186,7 @@ export class ExtractionRouter {
             media,
             backend: backend.id,
             networkClass: backend.networkClass,
+            remote: backend.kind === 'remote',
             fallbackUsed: true,
             attempts: index + 1,
             ...(firstFailure ? { firstFailure } : {}),
@@ -187,6 +196,7 @@ export class ExtractionRouter {
           media,
           backend: backend.id,
           networkClass: backend.networkClass,
+          remote: backend.kind === 'remote',
           fallbackUsed: false,
           attempts: 1,
         };

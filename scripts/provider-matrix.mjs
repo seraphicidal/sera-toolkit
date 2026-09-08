@@ -38,11 +38,13 @@ const CASES = [
     id: 'youtube-shorts',
     url: 'https://youtube.com/shorts/Xz3UMZvhgeY',
     expect: { kinds: ['video'] },
+    download: 0,
   },
   {
     id: 'tiktok',
     url: 'https://www.tiktok.com/@tiktok/video/7681695065927912735',
     expect: { kinds: ['video'] },
+    download: 0,
   },
   {
     id: 'vimeo',
@@ -69,6 +71,7 @@ const CASES = [
     id: 'soundcloud',
     url: 'https://soundcloud.com/forss/city-ports',
     expect: { kinds: ['audio'] },
+    download: 0,
   },
   {
     id: 'bandcamp',
@@ -79,6 +82,7 @@ const CASES = [
     id: 'x-photo',
     url: 'https://x.com/NASA/status/2095585125627003244',
     expect: { kinds: ['image'] },
+    download: 0,
   },
   {
     id: 'x-video',
@@ -95,6 +99,7 @@ const CASES = [
     id: 'bluesky-photos',
     url: 'https://bsky.app/profile/bsky.app/post/3lifogne32c25',
     expect: { minItems: 3, kinds: ['image'] },
+    download: 0,
   },
   {
     id: 'bluesky-video',
@@ -110,6 +115,7 @@ const CASES = [
     id: 'instagram-reel',
     url: 'https://www.instagram.com/nasajohnson/reel/DcMXl1IPNtB/',
     expect: { kinds: ['video'] },
+    download: 0,
   },
   {
     id: 'instagram-photo',
@@ -137,6 +143,7 @@ const CASES = [
     id: 'direct-gif',
     url: 'https://upload.wikimedia.org/wikipedia/commons/2/2c/Rotating_earth_%28large%29.gif',
     expect: { kinds: ['gif'] },
+    download: 0,
   },
   {
     id: 'generic-page',

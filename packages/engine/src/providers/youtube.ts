@@ -134,9 +134,11 @@ export class YouTubeProvider extends YtdlpProvider {
         ...media,
         metadata: {
           ...media.metadata,
-          extractionBackend: 'direct',
+          // A diagnostic, and named so it cannot be mistaken for the routing field
+          // again: this used to be called `extractionBackend`, which is what the runner
+          // reads to decide a job belongs on another machine.
+          extractionPath: 'direct',
           poTokenStatus: potStatus,
-          fallbackUsed: 'false',
         },
       };
     } catch (error) {
