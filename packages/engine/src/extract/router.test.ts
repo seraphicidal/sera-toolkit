@@ -288,6 +288,36 @@ describe('the capability matrix decides where work may go', () => {
     expect(home.calls).toBe(1);
   });
 
+  it('says a node answered even when the node was the first choice', async () => {
+    // `fallbackUsed` asks whether the first choice failed, which is a different question
+    // from where the work ran. A node can be the first choice — that is exactly what a
+    // provider declaring no datacentre extraction asks for — and the download still has
+    // to follow it, because a media URL signed for one address is refused from another.
+    const primary = backend('oracle', { result: 'ok' });
+    const home = backend('residential', { result: 'ok' });
+    const router = new ExtractionRouter({
+      primary,
+      logger: silentLogger(),
+      fallbacks: () => [home],
+      capabilitiesOf: caps({ cloudExtraction: false }),
+    });
+
+    const outcome = await router.resolve(url, 'youtube');
+    expect(outcome.backend).toBe('residential');
+    expect(outcome.remote).toBe(true);
+    expect(outcome.fallbackUsed).toBe(false);
+  });
+
+  it('says the local backend answered when it did', async () => {
+    const router = new ExtractionRouter({
+      primary: backend('oracle', { result: 'ok' }),
+      logger: silentLogger(),
+      fallbacks: () => [backend('residential', { result: 'ok' })],
+      capabilitiesOf: caps(),
+    });
+    expect((await router.resolve(url, 'youtube')).remote).toBe(false);
+  });
+
   it('does not come home when the node reported something an address cannot fix', async () => {
     const primary = backend('oracle', { result: 'ok' });
     const home = backend('residential', { result: seraError('PRIVATE_CONTENT') });

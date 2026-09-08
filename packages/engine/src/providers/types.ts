@@ -162,6 +162,18 @@ export interface ResolvedMedia {
   readonly createdAt?: string;
   readonly items: readonly ResolvedItem[];
   readonly metadata?: Readonly<Record<string, string | number | boolean>>;
+  /**
+   * The extraction node that produced this, when one did.
+   *
+   * A field of its own rather than an entry in `metadata`, because the download has to
+   * follow it: a media URL signed for one address is refused from another, so a job
+   * belongs to whichever network resolved it. It lived in `metadata` once, under a name
+   * a provider was also using for a diagnostic — every YouTube job was dispatched to a
+   * node that did not exist and sat there until the task timed out.
+   *
+   * Set by the resolver from the router's outcome, and only there.
+   */
+  readonly remoteBackend?: string;
 }
 
 /**

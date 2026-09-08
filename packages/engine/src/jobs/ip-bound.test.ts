@@ -8,6 +8,7 @@ import { loadConfig } from '../config.js';
 import { silentLogger } from '../logging.js';
 import type { ResolvedMedia } from '../providers/types.js';
 import { WorkspaceManager } from '../storage/workspace.js';
+import { MediaResolver } from '../resolver.js';
 import { JobRunner } from './runner.js';
 import type { ExtractionNodeRegistry, RemoteFile } from '../extract/remote.js';
 
@@ -59,7 +60,10 @@ function media(backend?: string): ResolvedMedia {
         ],
       },
     ],
-    ...(backend ? { metadata: { extractionBackend: backend } } : {}),
+    // The typed field, not an entry in `metadata`. It was in `metadata` once, under a
+    // name the YouTube provider was also using for a diagnostic — so every YouTube job
+    // was dispatched to a node that did not exist and sat there until it timed out.
+    ...(backend ? { remoteBackend: backend } : {}),
   };
 }
 
@@ -133,6 +137,50 @@ describe('a job follows the backend that resolved it', () => {
     expect(dispatched).toHaveLength(1);
     expect(dispatched[0]?.planKeys).toEqual(['video/mp4/1080p']);
     expect(result.filename).toBe('from-node.mp4');
+  });
+
+  it("cannot be talked into it by a provider's own diagnostics", async () => {
+    // The bug this pins. The YouTube provider recorded which path it took as
+    // `metadata.extractionBackend`, and the runner read a key of that name to decide a
+    // job belonged on another machine. Every YouTube job was dispatched to a node that
+    // did not exist and sat there until the task timed out — with the state stuck on
+    // "Downloading" and nothing in the log to say why.
+    //
+    // The routing answer is now a typed field the resolver alone sets, so a provider
+    // cannot reach it however it names its metadata.
+    const resolver = new MediaResolver({
+      config: { ...config, dataDir },
+      logger: silentLogger(),
+      probe: () =>
+        Promise.resolve({
+          id: 'x',
+          _type: 'video',
+          title: 'A short',
+          webpage_url: 'https://www.youtube.com/watch?v=x',
+          duration: 30,
+          formats: [
+            {
+              format_id: '18',
+              ext: 'mp4',
+              protocol: 'https',
+              vcodec: 'avc1.42001E',
+              acodec: 'mp4a.40.2',
+              height: 360,
+              width: 640,
+              url: 'https://rr1---sn.googlevideo.com/videoplayback',
+            },
+          ],
+        }),
+    });
+
+    const resolved = await resolver.resolveCanonical(
+      new URL('https://www.youtube.com/watch?v=x'),
+      'youtube',
+    );
+
+    expect(resolved.remoteBackend).toBeUndefined();
+    // The diagnostic is still recorded — under a name that is not the routing field.
+    expect(resolved.metadata?.extractionPath).toBe('direct');
   });
 
   it('never dispatches remotely for a resolution the local network produced', async () => {

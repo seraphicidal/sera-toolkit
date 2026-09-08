@@ -300,12 +300,13 @@ export class MediaResolver {
     if (cached) return cached;
 
     const outcome = await this.router.resolve(canonical, providerId, signal);
-    const media = outcome.fallbackUsed
-      ? {
-          ...outcome.media,
-          metadata: { ...outcome.media.metadata, extractionBackend: outcome.backend },
-        }
-      : outcome.media;
+    // Always assigned, never merged: a node returns a whole `ResolvedMedia` over the
+    // wire, and what it says about where it ran is not what decides where the download
+    // goes. The router's answer is.
+    const media: ResolvedMedia = {
+      ...outcome.media,
+      ...(outcome.remote ? { remoteBackend: outcome.backend } : { remoteBackend: undefined }),
+    };
 
     if (!media.items.length) throw seraError('MEDIA_UNAVAILABLE');
     const withMedia = { ...outcome, media };
