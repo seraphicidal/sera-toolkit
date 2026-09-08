@@ -81,6 +81,7 @@ export interface ResolverDependencies {
       signal?: AbortSignal;
       extractorArgs?: readonly string[];
       timeoutMs?: number;
+      proxy?: string;
     },
   ) => Promise<YtdlpInfo>;
 }
@@ -137,6 +138,7 @@ export class MediaResolver {
           ...(options.playlist !== undefined ? { playlist: options.playlist } : {}),
           ...(options.flatPlaylist !== undefined ? { flatPlaylist: options.flatPlaylist } : {}),
           ...(options.extractorArgs?.length ? { extractorArgs: options.extractorArgs } : {}),
+          ...(options.proxy ? { proxy: options.proxy } : {}),
           ...(options.signal ? { signal: options.signal } : {}),
         }));
   }

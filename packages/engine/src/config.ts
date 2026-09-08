@@ -147,6 +147,29 @@ const envSchema = z.object({
    */
   SERA_API_URL: z.string().default(''),
 
+  /**
+   * An outbound proxy for extraction, when the deployment's own address is refused.
+   *
+   * This is the other answer to the same problem the extraction node solves, and it is
+   * what the public downloader sites do: YouTube refuses a datacentre by reputation, not
+   * by anything about the request, so the fix is an address it does not refuse. A node is
+   * one; a residential proxy someone pays for is another, and unlike a node it does not
+   * need a machine left switched on.
+   *
+   * Credentials in the URL are normal for these services, so the value is treated as a
+   * secret: redacted from logs, and scrubbed out of extractor output before that output
+   * becomes an error detail.
+   */
+  SERA_EXTRACTION_PROXY_URL: z.string().default(''),
+  /**
+   * Providers the proxy is used for. Empty means all of them.
+   *
+   * Usually not what you want. These services bill by the gigabyte, and only some
+   * providers refuse a datacentre in the first place, so naming `youtube` keeps a
+   * Bluesky image off a metered connection.
+   */
+  SERA_EXTRACTION_PROXY_PROVIDERS: z.string().default(''),
+
   SERA_QUEUE_DRIVER: z.enum(['memory', 'redis']).default('memory'),
   SERA_REDIS_URL: z.string().default('redis://127.0.0.1:6379'),
   SERA_WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(64).default(2),
@@ -224,6 +247,9 @@ export interface EngineConfig {
 
   /** The connection this installation extracts from. See SERA_NETWORK_CLASS. */
   readonly networkClass: 'datacenter' | 'residential' | 'unknown';
+
+  /** The outbound extraction proxy for this provider, when one is configured for it. */
+  proxyFor(providerId: string): string | undefined;
 
   /**
    * Where this process can reach its own API, when it is not the API.
@@ -382,6 +408,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): EngineConfig {
     },
 
     networkClass: e.SERA_NETWORK_CLASS,
+
+    proxyFor(providerId: string): string | undefined {
+      const proxy = e.SERA_EXTRACTION_PROXY_URL.trim();
+      if (!proxy) return undefined;
+      const only = e.SERA_EXTRACTION_PROXY_PROVIDERS.split(',')
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+      return only.length === 0 || only.includes(providerId) ? proxy : undefined;
+    },
     apiUrl: e.SERA_API_URL.replace(/\/+$/, ''),
 
     instagram: {
