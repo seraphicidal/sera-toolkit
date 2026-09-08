@@ -6,9 +6,12 @@ import {
   loadConfig,
   MediaResolver,
   newJobId,
+  parseUserUrl,
   ProviderRegistry,
   SeraError,
+  seraError,
   WorkspaceManager,
+  type EngineConfig,
   type JobSpec,
   type Logger,
   type ResolvedMedia,
@@ -59,6 +62,8 @@ class Node {
 
   constructor(
     private readonly logger: Logger,
+    private readonly config: EngineConfig,
+    private readonly registry: ProviderRegistry,
     private readonly resolver: MediaResolver,
     private readonly runner: JobRunner,
     private readonly workspaces: WorkspaceManager,
@@ -134,6 +139,42 @@ class Node {
     return (await response.json()) as RemoteTask;
   }
 
+  /**
+   * What this node will agree to do, decided here rather than taken on trust.
+   *
+   * The control plane checks all of this before it dispatches anything, and that is not
+   * a reason to skip it. This machine is somebody's home connection, and the whole
+   * argument for it being safe is that it does a narrow, known job. A node that runs
+   * whatever arrives is one compromised deployment — or one bug in a validator on the
+   * other side — away from being a fetcher for arbitrary addresses.
+   *
+   * yt-dlp is a subprocess and makes its own connections, so the engine's SSRF-guarded
+   * dispatcher does not cover it. This is the check that does.
+   */
+  private accept(task: RemoteTask): URL {
+    if (this.providers.length && !this.providers.includes(task.providerId)) {
+      throw seraError('UNSUPPORTED_SOURCE', {
+        detail: `node: not configured for ${task.providerId}`,
+      });
+    }
+
+    // Protocol, embedded credentials, unusual ports, and any IP literal that points at
+    // infrastructure — the same gate the public API puts a visitor's link through.
+    const { url } = parseUserUrl(task.url, {
+      allowPrivateAddresses: this.config.allowPrivateAddresses,
+    });
+
+    // And the named provider has to be the one that claims this host, so a task cannot
+    // borrow a provider's name to have some other address fetched.
+    const detected = this.registry.detect(url);
+    if (detected?.id !== task.providerId) {
+      throw seraError('UNSUPPORTED_SOURCE', {
+        detail: `node: ${url.hostname} is not ${task.providerId}`,
+      });
+    }
+    return url;
+  }
+
   private async handle(task: RemoteTask): Promise<void> {
     const started = Date.now();
     const abort = new AbortController();
@@ -143,12 +184,10 @@ class Node {
     heartbeat.unref();
 
     try {
+      const url = this.accept(task);
+
       if (task.kind === 'resolve') {
-        const media = await this.resolver.resolveCanonical(
-          new URL(task.url),
-          task.providerId,
-          abort.signal,
-        );
+        const media = await this.resolver.resolveCanonical(url, task.providerId, abort.signal);
         await this.post(`/internal/extraction/${task.id}/resolved`, { media });
         this.logger.info(
           {
@@ -163,7 +202,7 @@ class Node {
         return;
       }
 
-      await this.runJob(task, abort);
+      await this.runJob(task, url, abort);
       this.logger.info(
         {
           task: task.id,
@@ -190,10 +229,10 @@ class Node {
   }
 
   /** Resolves, downloads, converts and uploads — the whole job, on this network. */
-  private async runJob(task: RemoteTask, abort: AbortController): Promise<void> {
+  private async runJob(task: RemoteTask, url: URL, abort: AbortController): Promise<void> {
     const jobId = newJobId();
     const media: ResolvedMedia = await this.resolver.resolveCanonical(
-      new URL(task.url),
+      url,
       task.providerId,
       abort.signal,
     );
@@ -309,7 +348,7 @@ async function main(): Promise<void> {
   const workspaces = new WorkspaceManager(config.dataDir, config.retentionSeconds, logger);
   const runner = new JobRunner({ config, logger, resolver, workspaces });
 
-  const node = new Node(logger, resolver, runner, workspaces);
+  const node = new Node(logger, config, registry, resolver, runner, workspaces);
 
   const shutdown = (signal: string): void => {
     logger.info({ signal }, 'stopping extraction node');
