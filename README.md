@@ -292,14 +292,16 @@ than taking the service down with it.
 Every setting is an environment variable, documented in
 [`.env.example`](./.env.example). The ones worth knowing:
 
-| Variable                       | Default  | Notes                                                         |
-| ------------------------------ | -------- | ------------------------------------------------------------- |
-| `SERA_SECRET`                  | —        | Required in production. Signs the handles the browser holds.  |
-| `SERA_RETENTION_SECONDS`       | `1800`   | How long finished files survive. This is the privacy setting. |
-| `SERA_QUEUE_DRIVER`            | `memory` | `memory` for one container, `redis` to scale workers out.     |
-| `SERA_MAX_FILESIZE_BYTES`      | 4 GiB    | Refused before the download starts where the size is known.   |
-| `SERA_EXTRA_ALLOWED_HOSTS`     | empty    | Hosts the generic extractor may be pointed at. Opt-in.        |
-| `SERA_ALLOW_PRIVATE_ADDRESSES` | `false`  | Development only. Configuration refuses it in production.     |
+| Variable                       | Default   | Notes                                                         |
+| ------------------------------ | --------- | ------------------------------------------------------------- |
+| `SERA_SECRET`                  | —         | Required in production. Signs the handles the browser holds.  |
+| `SERA_RETENTION_SECONDS`       | `1800`    | How long finished files survive. This is the privacy setting. |
+| `SERA_QUEUE_DRIVER`            | `memory`  | `memory` for one container, `redis` to scale workers out.     |
+| `SERA_MAX_FILESIZE_BYTES`      | 4 GiB     | Refused before the download starts where the size is known.   |
+| `SERA_EXTRA_ALLOWED_HOSTS`     | empty     | Hosts the generic extractor may be pointed at. Opt-in.        |
+| `SERA_ALLOW_PRIVATE_ADDRESSES` | `false`   | Development only. Configuration refuses it in production.     |
+| `SERA_NETWORK_CLASS`           | `unknown` | `datacenter` lets the router prefer a node where one helps.   |
+| `SERA_EXTRACTION_NODE_TOKEN`   | empty     | Lets a node on another network claim work. Empty unmounts it. |
 
 ---
 
@@ -336,7 +338,7 @@ in, bypass paywalls, or reach content behind an access control.
 
 ```bash
 npm run dev            # everything, with the TypeScript build in watch mode
-npm test               # 269 tests, including a real end-to-end pipeline
+npm test               # 446 tests, including a real end-to-end pipeline
 npm run test:coverage
 npm run verify         # format, lint, typecheck, test, build — run before shipping
 ```

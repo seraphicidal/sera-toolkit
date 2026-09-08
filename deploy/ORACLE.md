@@ -185,14 +185,16 @@ the configuration changes it, and SERA deliberately ships no way around it — s
 
 ## Sources that need configuring
 
-Three settings in `/opt/sera/.env` change what this deployment can reach. All three are
+A few settings in `/opt/sera/.env` change what this deployment can reach. All of them are
 optional and everything else works without them.
 
-| Setting                                | What it enables                                                           |
-| -------------------------------------- | ------------------------------------------------------------------------- |
-| `SERA_REDDIT_CLIENT_ID` / `_SECRET`    | Reddit. Without it Reddit says it needs credentials and refuses politely. |
-| `SERA_YOUTUBE_POT_PROVIDER_URL`        | yt-dlp's PO Token Provider. Does not lift this host's YouTube block.      |
-| `SERA_YOUTUBE_FALLBACK_URL` / `_TOKEN` | An authorized residential extraction backend for YouTube.                 |
+| Setting                             | What it enables                                                                                      |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `SERA_REDDIT_CLIENT_ID` / `_SECRET` | Reddit. Without it Reddit says it needs credentials and refuses politely.                            |
+| `SERA_YOUTUBE_POT_PROVIDER_URL`     | yt-dlp's PO Token Provider. Does not lift this host's YouTube block.                                 |
+| `SERA_EXTRACTION_NODE_TOKEN`        | Lets an extraction node on another network do YouTube. See [EXTRACTION-NODE.md](EXTRACTION-NODE.md). |
+| `SERA_NETWORK_CLASS`                | Set to `datacenter` here, so the router asks a connected node first for YouTube.                     |
+| `SERA_INSTAGRAM_SESSION_ID`         | Instagram photo posts. Read the warning below first.                                                 |
 
 ### Reddit
 

@@ -112,6 +112,61 @@ jobs:
           echo "maxmemory-policy: $policy"
           test "$policy" = noeviction
 
+      # A setting that was removed from the schema and left behind in a compose file, an
+      # example or a guide reads as a supported knob and silently does nothing. This is
+      # the check for that: every SERA_* named outside the code has to exist in the
+      # config schema, or be one of the few that only an extraction node reads.
+      - name: Check every documented setting still exists
+        run: |
+          node --input-type=module -e '
+            import { readFileSync } from "node:fs";
+            import { execSync } from "node:child_process";
+
+            const schema = readFileSync("packages/engine/src/config.ts", "utf8");
+            // Names that legitimately never reach loadConfig: the extraction node reads
+            // its own four from the environment, and the rest belong to Compose, Caddy
+            // and the provisioning script rather than to the application.
+            const notAppConfig = new Set([
+              "SERA_API_URL",
+              "SERA_NODE_ID",
+              "SERA_NODE_PROVIDERS",
+              "SERA_NODE_NETWORK_CLASS",
+              "SERA_WEB_PORT",
+              "SERA_WORKER_CPUS",
+              "SERA_WORKER_MEMORY",
+              "SERA_IMAGE_API",
+              "SERA_IMAGE_WEB",
+              "SERA_DOMAIN",
+              "SERA_TLS_EMAIL",
+              "SERA_REPO",
+              "SERA_DIR",
+              "SERA_PUBLIC_IP",
+            ]);
+            const files = execSync(
+              "git ls-files .env.example README.md deploy docker",
+              { encoding: "utf8" },
+            ).split("\n").filter(Boolean);
+
+            const unknown = new Map();
+            for (const file of files) {
+              for (const [, name] of readFileSync(file, "utf8").matchAll(/\b(SERA_[A-Z0-9_]+)\b/g)) {
+                if (notAppConfig.has(name)) continue;
+                if (schema.includes(name)) continue;
+                if (!unknown.has(name)) unknown.set(name, new Set());
+                unknown.get(name).add(file);
+              }
+            }
+
+            if (unknown.size) {
+              for (const [name, where] of unknown) {
+                console.error(name + "  <- " + [...where].join(", "));
+              }
+              console.error("\nThese are named outside the code but are not in the config schema.");
+              process.exit(1);
+            }
+            console.log("every documented SERA_* setting exists in the schema");
+          '
+
       - name: Validate the Caddyfile
         run: |
           mkdir -p /tmp/globals-none /tmp/globals-email

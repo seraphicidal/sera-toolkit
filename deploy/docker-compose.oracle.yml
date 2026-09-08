@@ -92,6 +92,10 @@ services:
       # An Instagram session for photo posts. Read the warning in deploy/ORACLE.md
       # before setting this on a deployment other people can reach.
       SERA_INSTAGRAM_SESSION_ID: ${SERA_INSTAGRAM_SESSION_ID:-}
+      # This host is a datacentre and YouTube refuses it on every player client, so a
+      # connected node is asked first rather than after a refusal nobody needs to pay
+      # for. With no node connected this changes nothing.
+      SERA_NETWORK_CLASS: ${SERA_NETWORK_CLASS:-datacenter}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     expose:
       - '4000'
@@ -130,6 +134,10 @@ services:
       # An Instagram session for photo posts. Read the warning in deploy/ORACLE.md
       # before setting this on a deployment other people can reach.
       SERA_INSTAGRAM_SESSION_ID: ${SERA_INSTAGRAM_SESSION_ID:-}
+      # This host is a datacentre and YouTube refuses it on every player client, so a
+      # connected node is asked first rather than after a refusal nobody needs to pay
+      # for. With no node connected this changes nothing.
+      SERA_NETWORK_CLASS: ${SERA_NETWORK_CLASS:-datacenter}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     volumes:
       # The same volume as the API: the worker writes the file, the API serves it.
