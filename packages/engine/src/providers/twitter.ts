@@ -1,10 +1,11 @@
 import type { ContainerFormat, ProviderCapabilities } from '@sera/contracts/types';
-import { SeraError, seraError } from '../errors.js';
+import { seraError } from '../errors.js';
 import { ensureRecommendations } from '../normalize/plans.js';
 import { formatBytes, nonEmpty, qualityLabel, truncate } from '../util/format.js';
 import type { DownloadPlan, ProviderContext, ResolvedItem, ResolvedMedia } from './types.js';
 import { YtdlpProvider } from './ytdlp-base.js';
 import { declare } from './capabilities.js';
+import type { ExtractionStrategy } from '../extract/strategy.js';
 
 /**
  * X, formerly Twitter, plus the legacy and mobile hostnames.
@@ -59,7 +60,33 @@ export class TwitterProvider extends YtdlpProvider {
     return true;
   }
 
-  override async resolve(url: URL, context: ProviderContext): Promise<ResolvedMedia> {
+  /**
+   * The syndication endpoint first, then the extractor.
+   *
+   * The endpoint X's own embed widget calls sees photographs, multi-photo posts and
+   * animated GIFs; the extractor sees video and nothing else, which is why a photo post
+   * used to come back as unsupported. Behind it the extractor still gets a turn, because
+   * it renders video in several qualities the embed payload does not carry.
+   */
+  protected override strategies(
+    _url: URL,
+    _context: ProviderContext,
+  ): readonly ExtractionStrategy[] {
+    return [
+      {
+        id: 'syndication',
+        label: "the endpoint X's embed widget calls",
+        run: (target, ctx) => this.viaSyndication(target, ctx),
+      },
+      {
+        id: 'ytdlp',
+        label: 'the extractor',
+        run: (target, ctx) => this.runExtractor(target, ctx),
+      },
+    ];
+  }
+
+  private async viaSyndication(url: URL, context: ProviderContext): Promise<ResolvedMedia> {
     const tweet = await this.readTweet(url, context).catch(() => undefined);
     // A quote post carries its own media if it has any, and otherwise the media belongs
     // to the post being quoted — which is what someone pasting the link is after.
@@ -68,20 +95,18 @@ export class TwitterProvider extends YtdlpProvider {
 
     if (media.length) return this.fromEmbed(url, source!, media, context);
 
-    // No media the embed endpoint would show — either the post has none, or it would not
-    // answer. The extractor gets the last word, including on why.
-    try {
-      return await super.resolve(url, context);
-    } catch (error) {
-      const seraErr = SeraError.from(error);
-      if (tweet && seraErr.code === 'UNSUPPORTED_SOURCE') {
-        throw seraError('MEDIA_UNAVAILABLE', {
-          message: 'That post has no media to download.',
-          detail: 'twitter: embed endpoint reported no attachments',
-        });
-      }
-      throw seraErr;
+    // The endpoint answered and the post has nothing in it. That is a real answer and
+    // ends the ladder, rather than sending the extractor after media nobody posted.
+    if (tweet) {
+      throw seraError('MEDIA_UNAVAILABLE', {
+        message: 'That post has no media to download.',
+        detail: 'twitter: embed endpoint reported no attachments',
+      });
     }
+    // It did not answer at all, which the extractor may yet survive.
+    throw seraError('UNSUPPORTED_SOURCE', {
+      detail: 'twitter: the syndication endpoint did not answer',
+    });
   }
 
   private fromEmbed(

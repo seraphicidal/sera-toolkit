@@ -10,7 +10,16 @@
  * runs. This proves the thing they are both for: that a link a visitor pastes comes back
  * as a file, having been fetched somewhere else entirely.
  *
- *   npm run build && node scripts/node-check.mjs [url]
+ *   npm run check:node                  # the deployment declares itself a datacentre
+ *   npm run check:node -- --blocked     # …and instead the cloud attempt is refused
+ *   npm run check:node -- <url>
+ *
+ * The two modes reach the node through different code. Without `--blocked` the router
+ * *orders* the node first, because the provider declares no datacentre extraction and
+ * the deployment has said what it is. With `--blocked` the deployment says nothing, the
+ * cloud attempt is made and comes back with the bot challenge Oracle actually gets, and
+ * the node is reached by escalation. The second is the path a deployment takes when
+ * nobody has configured anything, so it is the one worth being sure of.
  */
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -21,7 +30,10 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const REPO = fileURLToPath(new URL('..', import.meta.url));
 const TOKEN = randomUUID().replace(/-/g, '');
-const URL_UNDER_TEST = process.argv[2] ?? 'https://youtube.com/shorts/Xz3UMZvhgeY';
+const args = process.argv.slice(2);
+const blocked = args.includes('--blocked');
+const URL_UNDER_TEST =
+  args.find((arg) => !arg.startsWith('--')) ?? 'https://youtube.com/shorts/Xz3UMZvhgeY';
 
 const apiDir = await mkdtemp(join(tmpdir(), 'sera-e2e-api-'));
 const nodeDir = await mkdtemp(join(tmpdir(), 'sera-e2e-node-'));
@@ -39,16 +51,32 @@ const engine = await SeraEngine.create({
     SERA_DATA_DIR: apiDir,
     SERA_EXTRACTION_NODE_TOKEN: TOKEN,
     SERA_EXTRACTION_CLAIM_HOLD_SECONDS: '5',
-    // The whole point: this deployment says it is a datacentre, so YouTube goes to a
-    // node first rather than after a refusal it has already measured.
-    SERA_NETWORK_CLASS: 'datacenter',
+    // Without `--blocked`, the deployment says it is a datacentre and YouTube goes to a
+    // node first rather than after a refusal already measured. With it, the deployment
+    // says nothing and the refusal is what routes.
+    ...(blocked ? {} : { SERA_NETWORK_CLASS: 'datacenter' }),
   }),
+  // The exact answer Oracle gets from YouTube, produced where extraction happens — so
+  // the classification, the escalation and the node's whole job all run for real.
+  ...(blocked
+    ? {
+        probe: () =>
+          Promise.reject(
+            Object.assign(new Error("Sign in to confirm you're not a bot"), {
+              code: 'LOGIN_REQUIRED',
+            }),
+          ),
+      }
+    : {}),
 });
 engine.startWorker();
 
 const app = await buildServer(engine);
 await app.listen({ port: 0, host: '127.0.0.1' });
 const port = app.server.address().port;
+console.log(
+  `mode     ${blocked ? 'cloud extraction refused, node reached by escalation' : 'cloud declared a datacentre, node preferred'}`,
+);
 console.log(`api      http://127.0.0.1:${port}`);
 
 const child = spawn(process.execPath, [resolve(REPO, 'apps/extractor/dist/index.js')], {
