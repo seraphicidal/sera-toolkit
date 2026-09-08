@@ -28,7 +28,7 @@
     "start": "node apps/api/dist/index.js",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "check:matrix": "node scripts/provider-matrix.mjs",
+    "check:providers": "node scripts/check-providers.mjs",
     "check:node": "node scripts/node-check.mjs",
     "test:watch": "vitest",
     "tools:fetch": "node scripts/fetch-tools.mjs",

@@ -7,14 +7,18 @@
  * here, today. The two failures worth telling apart are "SERA is broken" and "this
  * address is refused", and the failure class in each row is which.
  *
- *   node scripts/provider-matrix.mjs                 # metadata for every case
- *   node scripts/provider-matrix.mjs --download      # …and run one job through to bytes
- *   node scripts/provider-matrix.mjs youtube vimeo   # only these cases
+ *   npm run check:providers                    # metadata for every case
+ *   npm run check:providers -- --download      # …and run the declared jobs through to bytes
+ *   npm run check:providers -- youtube vimeo   # only these cases
  *
- * A case that expects a refusal counts a refusal as a pass. Instagram photographs need a
+ * A case that expects a refusal counts a refusal as a pass. Instagram carousels need a
  * session and Reddit needs an app registration; on an installation with neither, saying
  * so accurately *is* the correct behaviour, and pretending otherwise is what this file
  * exists to prevent.
+ *
+ * A failure prints what a report needs and a stack trace does not: which provider, which
+ * link, which strategy answered, the failure class, and what the ladder tried on the way
+ * there.
  */
 
 import { readFile, rm } from 'node:fs/promises';
@@ -33,29 +37,31 @@ const CASES = [
     id: 'youtube',
     url: 'https://www.youtube.com/watch?v=aqz-KE-bpKQ',
     expect: { kinds: ['video'] },
+    download: [{ kind: 'video' }, { kind: 'audio' }, { kind: 'image' }],
   },
   {
     id: 'youtube-shorts',
     url: 'https://youtube.com/shorts/Xz3UMZvhgeY',
     expect: { kinds: ['video'] },
-    download: 0,
+    download: [{ kind: 'video' }],
   },
   {
     id: 'tiktok',
     url: 'https://www.tiktok.com/@tiktok/video/7681695065927912735',
     expect: { kinds: ['video'] },
-    download: 0,
+    download: [{ kind: 'video' }],
   },
   {
     id: 'vimeo',
     url: 'https://vimeo.com/347119375',
     expect: { kinds: ['video'] },
-    download: 0,
+    download: [{ kind: 'video' }],
   },
   {
     id: 'dailymotion',
     url: 'https://www.dailymotion.com/video/xb53wii',
     expect: { kinds: ['video'] },
+    download: [{ kind: 'video' }],
   },
   {
     id: 'twitch-vod',
@@ -71,23 +77,25 @@ const CASES = [
     id: 'soundcloud',
     url: 'https://soundcloud.com/forss/city-ports',
     expect: { kinds: ['audio'] },
-    download: 0,
+    download: [{ kind: 'audio' }],
   },
   {
     id: 'bandcamp',
     url: 'https://boomkat.bandcamp.com/track/home-to-you',
     expect: { kinds: ['audio'] },
+    download: [{ kind: 'audio' }],
   },
   {
     id: 'x-photo',
     url: 'https://x.com/NASA/status/2095585125627003244',
     expect: { kinds: ['image'] },
-    download: 0,
+    download: [{ kind: 'image' }],
   },
   {
     id: 'x-video',
     url: 'https://x.com/NASA/status/2095890073031966734',
     expect: { kinds: ['video'] },
+    download: [{ kind: 'video' }, { kind: 'audio' }],
   },
   {
     id: 'x-multi-photo',
@@ -99,29 +107,33 @@ const CASES = [
     id: 'bluesky-photos',
     url: 'https://bsky.app/profile/bsky.app/post/3lifogne32c25',
     expect: { minItems: 3, kinds: ['image'] },
-    download: 0,
+    download: [{ kind: 'image' }],
   },
   {
     id: 'bluesky-video',
     url: 'https://bsky.app/profile/bsky.app/post/3mk4lzkrnk22d',
     expect: { kinds: ['video'] },
+    download: [{ kind: 'video' }],
   },
   {
     id: 'mastodon',
     url: 'https://mastodon.world/@toms_travels/117229304292401389',
     expect: { minItems: 4, kinds: ['image'] },
+    download: [{ kind: 'image' }],
   },
   {
     id: 'instagram-reel',
     url: 'https://www.instagram.com/nasajohnson/reel/DcMXl1IPNtB/',
     expect: { kinds: ['video'] },
-    download: 0,
+    download: [{ kind: 'video' }, { kind: 'audio' }],
   },
   {
     id: 'instagram-photo',
     url: 'https://www.instagram.com/p/DcOX3hWFiey/',
-    // Passes either way: with a session it is a photo post, without one it says so.
+    // With a session this is the post; without one it is the cover image Instagram
+    // publishes for embeds, which is a real public representation and not nothing.
     expect: { kinds: ['image'], orFailure: 'LOGIN_REQUIRED' },
+    download: [{ kind: 'image' }],
   },
   {
     id: 'reddit-image',
@@ -137,13 +149,13 @@ const CASES = [
     id: 'direct-image',
     url: 'https://upload.wikimedia.org/wikipedia/commons/4/47/PNG_transparency_demonstration_1.png',
     expect: { kinds: ['image'] },
-    download: 0,
+    download: [{ kind: 'image' }],
   },
   {
     id: 'direct-gif',
     url: 'https://upload.wikimedia.org/wikipedia/commons/2/2c/Rotating_earth_%28large%29.gif',
     expect: { kinds: ['gif'] },
-    download: 0,
+    download: [{ kind: 'gif' }],
   },
   {
     id: 'generic-page',
@@ -208,9 +220,19 @@ function sniff(bytes) {
   return `?${bytes.subarray(0, 4).toString('latin1')}`;
 }
 
-async function runJob(info, optionIndex) {
-  const item = info.items[0];
-  const option = item.options[optionIndex] ?? item.options[0];
+/** The first option of a kind, so a case can ask for "the audio" without an index. */
+function pickOption(info, want) {
+  const options = info.items.flatMap((item) => item.options);
+  if (typeof want === 'number') return options[want];
+  return options.find(
+    (option) =>
+      option.kind === want.kind && (!want.container || option.container === want.container),
+  );
+}
+
+async function runJob(info, want) {
+  const option = pickOption(info, want);
+  if (!option) return { ok: false, detail: `no option matching ${JSON.stringify(want)}` };
   const job = await engine.jobs.create({ infoId: info.id, optionIds: [option.id] });
 
   const deadline = Date.now() + 5 * 60_000;
@@ -228,7 +250,7 @@ async function runJob(info, optionIndex) {
   const magic = sniff(bytes);
   return {
     ok: bytes.length > 0 && !magic.startsWith('?'),
-    detail: `${state.result.filename} · ${bytes.length} bytes · ${magic}`,
+    detail: `${option.kind}/${option.label} → ${bytes.length} bytes ${magic}`,
   };
 }
 
@@ -261,11 +283,22 @@ for (const entry of cases) {
       continue;
     }
 
-    let detail = `${info.items.length} item(s) ${kinds.join('+')} · ${elapsed}`;
-    if (wantDownloads && entry.download !== undefined) {
-      const outcome = await runJob(info, entry.download);
-      detail += ` · ${outcome.detail}`;
-      report(entry.id, outcome.ok, detail);
+    const strategy = info.metadata?.extractionStrategy ?? info.metadata?.source;
+    let detail =
+      `${info.items.length} item(s) ${kinds.join('+')} · ${elapsed}` +
+      (strategy ? ` · via ${strategy}` : '') +
+      (info.metadata?.degraded ? ` · degraded:${info.metadata.degraded}` : '');
+
+    const wanted = entry.download === undefined ? [] : [entry.download].flat();
+    if (wantDownloads && wanted.length) {
+      const outcomes = [];
+      for (const want of wanted) outcomes.push(await runJob(info, want));
+      detail += ` · ${outcomes.map((outcome) => outcome.detail).join(' · ')}`;
+      report(
+        entry.id,
+        outcomes.every((outcome) => outcome.ok),
+        detail,
+      );
       continue;
     }
     report(entry.id, true, detail);
@@ -273,8 +306,15 @@ for (const entry of cases) {
     const sera = SeraError.from(error);
     const failure = classifyFailure(sera);
     const expected = entry.expect.failure ?? entry.expect.orFailure;
-    const detail = `${failure} / ${sera.code} — ${(sera.detail ?? sera.message).slice(0, 90)}`;
-    report(entry.id, failure === expected, detail);
+    const ok = failure === expected;
+    report(entry.id, ok, `${failure} / ${sera.code}`);
+    if (!ok) {
+      // What a report needs, which a stack trace does not have: which link, which
+      // ladder, and what the next thing to do about it would be.
+      console.log(`          url        ${entry.url}`);
+      console.log(`          expected   ${expected ?? 'media'}`);
+      console.log(`          detail     ${(sera.detail ?? sera.message).slice(0, 160)}`);
+    }
   }
 }
 
