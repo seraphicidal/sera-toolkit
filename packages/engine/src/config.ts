@@ -137,6 +137,15 @@ const envSchema = z.object({
    * someone's home connection must not be demoted by a measurement taken on Oracle.
    */
   SERA_NETWORK_CLASS: z.enum(['datacenter', 'residential', 'unknown']).default('unknown'),
+  /**
+   * Where a standalone worker reaches the API.
+   *
+   * Only for the extraction-node question. A node dials the API and holds the connection
+   * there, so a worker in its own container has to ask the API whether a node exists and
+   * to hand it work — otherwise a link resolves through a node and then fails at the
+   * download step, which is exactly what happened on the live deployment.
+   */
+  SERA_API_URL: z.string().default(''),
 
   SERA_QUEUE_DRIVER: z.enum(['memory', 'redis']).default('memory'),
   SERA_REDIS_URL: z.string().default('redis://127.0.0.1:6379'),
@@ -215,6 +224,14 @@ export interface EngineConfig {
 
   /** The connection this installation extracts from. See SERA_NETWORK_CLASS. */
   readonly networkClass: 'datacenter' | 'residential' | 'unknown';
+
+  /**
+   * Where this process can reach its own API, when it is not the API.
+   *
+   * A worker in its own container needs it to ask about extraction nodes: a node holds
+   * one connection to one process, and that process is the API.
+   */
+  readonly apiUrl: string;
 
   readonly instagram: {
     readonly sessionId: string;
@@ -365,6 +382,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): EngineConfig {
     },
 
     networkClass: e.SERA_NETWORK_CLASS,
+    apiUrl: e.SERA_API_URL.replace(/\/+$/, ''),
 
     instagram: {
       sessionId: e.SERA_INSTAGRAM_SESSION_ID,

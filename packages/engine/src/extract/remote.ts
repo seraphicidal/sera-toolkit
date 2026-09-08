@@ -89,6 +89,29 @@ export interface NodeStatus {
 }
 
 /**
+ * What the router and the job runner need from "somewhere a node can be reached".
+ *
+ * Two things satisfy it. `ExtractionNodeRegistry` is the real one, in the process the
+ * node dialled. `RemoteOverHttp` is the same thing seen from another process — which
+ * the worker needs, because a node holds one connection to one process and on this
+ * deployment that process is the API.
+ */
+export interface RemoteExtraction {
+  status(): NodeStatus[];
+  availableProviders(networkClass?: NetworkClass): string[];
+  hasHealthyNode(networkClass?: NetworkClass): boolean;
+  networkClasses(): NetworkClass[];
+  dispatch(
+    task: Omit<RemoteTask, 'id' | 'createdAt'>,
+    options?: { onProgress?: (progress: RemoteProgress) => void; signal?: AbortSignal },
+  ): Promise<ResolvedMedia>;
+  dispatchJob(
+    task: Omit<RemoteTask, 'id' | 'createdAt'>,
+    options?: { onProgress?: (progress: RemoteProgress) => void; signal?: AbortSignal },
+  ): Promise<readonly RemoteFile[]>;
+}
+
+/**
  * The dispatch point between the API and however many extraction nodes are connected.
  *
  * Deliberately not a queue in Redis. Remote work is only ever attempted when the local
@@ -96,7 +119,7 @@ export interface NodeStatus {
  * outlives its node should die rather than sit in durable storage waiting to surprise
  * someone. Everything here is in memory and expires.
  */
-export class ExtractionNodeRegistry {
+export class ExtractionNodeRegistry implements RemoteExtraction {
   private readonly queue: RemoteTask[] = [];
   private readonly waiting: Waiter[] = [];
   private readonly pending = new Map<string, Pending>();
@@ -403,7 +426,7 @@ export class ExtractionNodeRegistry {
  * The router's view of a set of extraction nodes: one backend, however many machines.
  */
 export function remoteBackend(
-  registry: ExtractionNodeRegistry,
+  registry: RemoteExtraction,
   networkClass: NetworkClass = 'residential',
 ): ExtractionBackend {
   return {
@@ -423,6 +446,6 @@ export function remoteBackend(
 }
 
 /** One backend per kind of connection currently connected. */
-export function remoteBackends(registry: ExtractionNodeRegistry): ExtractionBackend[] {
+export function remoteBackends(registry: RemoteExtraction): ExtractionBackend[] {
   return registry.networkClasses().map((networkClass) => remoteBackend(registry, networkClass));
 }

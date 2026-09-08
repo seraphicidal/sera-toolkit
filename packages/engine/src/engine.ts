@@ -3,7 +3,8 @@ import type { HealthCheck, HealthReport, ServiceInfo } from '@sera/contracts/typ
 import type { Dispatcher } from 'undici';
 import { loadConfig, VERSION, type EngineConfig } from './config.js';
 import { ffmpegVersion } from './convert/ffmpeg.js';
-import { ExtractionNodeRegistry, remoteBackends } from './extract/remote.js';
+import { ExtractionNodeRegistry, remoteBackends, type RemoteExtraction } from './extract/remote.js';
+import { RemoteOverHttp } from './extract/remote-http.js';
 import { version as ytdlpVersion } from './extract/ytdlp.js';
 import { JobService } from './jobs/service.js';
 import { createLogger, type Logger } from './logging.js';
@@ -89,11 +90,25 @@ export class SeraEngine {
     // Nodes on other networks, if any ever connect. The router asks this at call time,
     // so one that dials in later is usable without restarting the API.
     const extractionNodes = new ExtractionNodeRegistry(logger);
+
+    /**
+     * Where this process asks about nodes.
+     *
+     * The registry itself when this process is the one a node dialled, and the API over
+     * HTTP when it is not. A standalone worker is the second case, and getting it wrong
+     * is invisible until a download: the link resolves through the node and then fails
+     * with the datacentre block, because the process doing the downloading never knew a
+     * node was there.
+     */
+    const remote: RemoteExtraction =
+      config.extractionNodes.enabled && !config.embeddedWorker && config.apiUrl
+        ? new RemoteOverHttp(config.apiUrl, config.extractionNodes.token, logger)
+        : extractionNodes;
     const resolver = new MediaResolver({
       config,
       logger,
       registry,
-      remoteBackends: () => (config.extractionNodes.enabled ? remoteBackends(extractionNodes) : []),
+      remoteBackends: () => (config.extractionNodes.enabled ? remoteBackends(remote) : []),
       ...(options.dispatcher ? { dispatcher: options.dispatcher } : {}),
       ...(options.probe ? { probe: options.probe } : {}),
     });
@@ -105,7 +120,7 @@ export class SeraEngine {
       resolver,
       workspaces,
       backend,
-      remote: extractionNodes,
+      remote,
     });
 
     const engine = new SeraEngine({

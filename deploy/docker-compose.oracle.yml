@@ -134,6 +134,11 @@ services:
       SERA_REDIS_URL: redis://redis:6379
       SERA_DATA_DIR: /data
       SERA_WORKER_CONCURRENCY: ${SERA_WORKER_CONCURRENCY:-2}
+      # A node holds one connection to one process, and that is the API. The worker
+      # asks the API whether a node exists and hands it work through it — without this a
+      # link resolves through the node and then fails at the download step, because the
+      # process doing the downloading never knew a node was there.
+      SERA_API_URL: http://api:4000
       SERA_RETENTION_SECONDS: ${SERA_RETENTION_SECONDS:-1800}
       SERA_MAX_FILESIZE_BYTES: ${SERA_MAX_FILESIZE_BYTES:-2147483648}
       SERA_MAX_DURATION_SECONDS: ${SERA_MAX_DURATION_SECONDS:-10800}
