@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { Downloader } from '@/components/downloader';
 import { Wordmark } from '@/components/wordmark';
 
@@ -14,6 +15,17 @@ export default function HomePage() {
       </div>
 
       <Downloader />
+
+      {/* Instagram photos can't be fetched server-side; this is the way in to the browser route. */}
+      <p className="mt-6 text-center text-[0.8125rem] text-[var(--color-ink-faint)]">
+        Instagram photo post or carousel?{' '}
+        <Link
+          href="/import"
+          className="font-medium text-[var(--color-accent)] transition-opacity hover:opacity-75"
+        >
+          Send it from your browser →
+        </Link>
+      </p>
     </div>
   );
 }
