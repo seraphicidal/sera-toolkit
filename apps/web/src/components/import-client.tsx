@@ -1,10 +1,10 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { JobError, MediaInfo } from '@sera/contracts/types';
 import Link from 'next/link';
 import { ApiError, importMedia } from '@/lib/api';
-import { openImportChannel } from '@/lib/import-handshake';
+import { openImportChannel, readImportFragment } from '@/lib/import-handshake';
 import { BookmarkletLink } from './bookmarklet-link';
 import { Downloader } from './downloader';
 import { ErrorPanel } from './error-panel';
@@ -25,41 +25,67 @@ export function ImportClient() {
   const [phase, setPhase] = useState<Phase>('waiting');
   const [info, setInfo] = useState<MediaInfo>();
   const [error, setError] = useState<JobError>();
+  // Read the fragment at most once. reading it clears the hash from history, and StrictMode runs
+  // this effect twice in development — without the guard the second run would see the cleared hash
+  // and fall through to the idle page. In production the effect runs once and this is a no-op.
+  const fragment = useRef<{ read: boolean; value: ReturnType<typeof readImportFragment> }>({
+    read: false,
+    value: undefined,
+  });
 
   useEffect(() => {
-    // No opener means nobody opened this to hand it a post — someone navigated here directly.
-    // There is nothing to wait for, so explain the page at once rather than spin for the whole
-    // handshake timeout. The bookmarklet always opens this window, so it always has an opener.
+    const controller = new AbortController();
+    if (!fragment.current.read) {
+      fragment.current = { read: true, value: readImportFragment(window) };
+    }
+
+    const onResolved = (resolved: MediaInfo): void => {
+      if (controller.signal.aborted) return;
+      setInfo(resolved);
+      setPhase('ready');
+    };
+    const showError = (caught: unknown): void => {
+      if (controller.signal.aborted) return;
+      setError(
+        caught instanceof ApiError
+          ? {
+              code: caught.code,
+              message: caught.message,
+              ...(caught.hint ? { hint: caught.hint } : {}),
+              retryable: caught.retryable,
+            }
+          : { code: 'INTERNAL', message: 'Something went wrong.', retryable: true },
+      );
+      setPhase('error');
+    };
+
+    // Transport v2: the bookmarklet read the post and navigated this tab here with it in the
+    // URL fragment. The mobile-safe path, and now the default — no popup, no postMessage.
+    const fragmentRequest = fragment.current.value;
+    if (fragmentRequest) {
+      setPhase('waiting');
+      importMedia(fragmentRequest, controller.signal).then(onResolved).catch(showError);
+      return () => controller.abort();
+    }
+
+    // Transport v1: opened as a popup, post arrives over postMessage. Kept for a transition
+    // while old bookmarklets are still installed. No opener means someone navigated here
+    // directly, so explain the page at once rather than wait out the handshake timeout.
     if (!window.opener) {
       setPhase('idle');
-      return;
+      return () => controller.abort();
     }
 
     const channel = openImportChannel(window);
-    const controller = new AbortController();
-
     channel.received
       .then((request) => importMedia(request, controller.signal))
-      .then((resolved) => {
-        if (controller.signal.aborted) return;
-        setInfo(resolved);
-        setPhase('ready');
-      })
+      .then(onResolved)
       .catch((caught: unknown) => {
         if (controller.signal.aborted) return;
-        if (caught instanceof ApiError) {
-          setError({
-            code: caught.code,
-            message: caught.message,
-            ...(caught.hint ? { hint: caught.hint } : {}),
-            retryable: caught.retryable,
-          });
-          setPhase('error');
-        } else {
-          // No post arrived — opened directly, or the handshake never completed. Not a
-          // failure to apologise for; a page that needs to say how it is meant to be used.
-          setPhase('idle');
-        }
+        // A message that arrived and was refused is a real error; nothing arriving at all is
+        // just a page opened without a post, which explains itself.
+        if (caught instanceof ApiError) showError(caught);
+        else setPhase('idle');
       });
 
     return () => {
@@ -162,7 +188,7 @@ function HowItWorks() {
             <span className="font-medium">SERA</span>, and tap the bookmark.
           </span>
         </Step>
-        <Step n={3}>This page opens with the post ready to download.</Step>
+        <Step n={3}>The tab turns into SERA with the post ready to download.</Step>
       </ol>
 
       <p className="text-[0.8125rem] text-[var(--color-ink-faint)]">

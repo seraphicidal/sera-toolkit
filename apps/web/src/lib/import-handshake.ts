@@ -26,6 +26,9 @@ export const READY = 'sera-import-ready';
 export const PAYLOAD = 'sera-import-payload';
 export const ACK = 'sera-import-ack';
 
+/** Transport v2 marker in the `/import` fragment (`#v=2&p=…`). The bookmarklet writes it. */
+export const FRAGMENT_VERSION = '2';
+
 /** A message the opener sends once it has a post ready. */
 interface PayloadMessage {
   readonly type: typeof PAYLOAD;
@@ -114,4 +117,40 @@ export function openImportChannel(target: Window, timeoutMs = 20_000): ImportCha
   if (opener) opener.postMessage({ type: READY }, '*');
 
   return { received, close };
+}
+
+/**
+ * Transport v2: a post the bookmarklet placed in the URL fragment.
+ *
+ * The mobile-safe path, and now the one the bookmarklet uses. Rather than open a popup and hand
+ * the post over through it, the bookmarklet reads the post on instagram.com and navigates this
+ * same tab to `/import#v=2&p=<encoded {url,node}>`. That sidesteps the two things that broke the
+ * popup on phones: iOS Safari's pop-up blocker refusing `window.open`, and cross-origin COOP
+ * severing the opener a `postMessage` needs.
+ *
+ * The fragment never reaches the SERA server — fragments are not sent in an HTTP request — and it
+ * is cleared from history the instant it is read, so the signed media links it carries do not
+ * linger in the address bar or the back-stack. What it carries is still untrusted: the server
+ * validates and re-signs it exactly as it does a pasted or postMessage'd post.
+ */
+export function readImportFragment(target: Window): ImportRequest | undefined {
+  const hash = target.location.hash;
+  if (!new RegExp(`[#&]v=${FRAGMENT_VERSION}(?:&|$)`).test(hash)) return undefined;
+  const encoded = /[#&]p=([^&]*)/.exec(hash)?.[1];
+
+  // Cleared whether or not it parses: a malformed fragment should not survive in history either.
+  try {
+    target.history.replaceState(null, '', target.location.pathname + target.location.search);
+  } catch {
+    // A browser that refuses replaceState still works; the fragment just stays in the URL.
+  }
+  if (!encoded) return undefined;
+
+  let request: unknown;
+  try {
+    request = JSON.parse(decodeURIComponent(encoded));
+  } catch {
+    return undefined;
+  }
+  return looksLikeImport(request) ? request : undefined;
 }
