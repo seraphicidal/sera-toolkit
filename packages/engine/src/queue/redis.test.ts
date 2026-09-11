@@ -33,6 +33,19 @@ describe('queue naming', () => {
 });
 
 /**
+ * The Redis driver stores a job as `JSON.stringify` and reads it back with `JSON.parse`, and
+ * the in-memory backend does neither — so a spec field that does not survive that trip would
+ * pass every other test in the suite. An imported post is the one spec that carries a
+ * structure rather than a URL, and a job made from one cannot fall back to re-resolving.
+ */
+describe('a job carrying an imported post', () => {
+  it('survives the round trip the Redis driver puts it through', () => {
+    const job = importedRecord('i0');
+    expect(JSON.parse(JSON.stringify(job))).toEqual(job);
+  });
+});
+
+/**
  * The rest of the file needs a real Redis, because the failures worth catching here —
  * BullMQ's constructor validation, cross-connection pub/sub, custom job ids — are exactly
  * the ones a mock reproduces incorrectly.
@@ -62,6 +75,44 @@ function record(id: string, clientKey = 'client-a'): JobRecord {
     updatedAt: now,
     spec,
     clientKey,
+  };
+}
+
+function importedRecord(id: string): JobRecord {
+  const base = record(id);
+  return {
+    ...base,
+    provider: 'instagram',
+    spec: {
+      ...base.spec,
+      provider: 'instagram',
+      url: 'https://www.instagram.com/p/DcOX3hWFiey',
+      selections: [{ itemIndex: 0, sourceId: 'slide-1', planKey: 'image/jpg/Original' }],
+      imported: {
+        entries: [
+          {
+            s: 'slide-1',
+            kind: 'image',
+            url: 'https://scontent-vie1-1.cdninstagram.com/v/t51/a.jpg?oh=00_x&oe=6A0B0C0D',
+            w: 1440,
+            h: 1800,
+            container: 'jpg',
+          },
+          {
+            s: 'slide-2',
+            kind: 'video',
+            url: 'https://instagram.fvie1-1.fna.fbcdn.net/o1/v/t16/b.mp4?oh=00_y&oe=6A0B0C0D',
+            w: 720,
+            h: 1280,
+            container: 'mp4',
+            d: 12.5,
+          },
+        ],
+        title: 'Three pictures',
+        author: 'NASA',
+        expiresAt: 1_778_060_301,
+      },
+    },
   };
 }
 
@@ -190,6 +241,12 @@ describe.skipIf(!REDIS_URL)('RedisJobBackend against a live Redis', () => {
     } finally {
       await worker.close();
     }
+  });
+
+  it('keeps an imported post intact through Redis itself', async () => {
+    const job = importedRecord('b9');
+    await backend.submit(job);
+    expect((await backend.get('b9'))?.spec.imported).toEqual(job.spec.imported);
   });
 
   it('reports the waiting count', async () => {

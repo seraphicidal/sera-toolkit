@@ -191,7 +191,10 @@ export interface JobResultFile {
  * discover it by looking at the pixels.
  */
 export interface JobDelivery {
-  /** Which extraction backend produced the file: `local`, or the node that did. */
+  /**
+   * Where the media was read: `local`, the extraction node that did, or `visitor-browser` for
+   * a post the visitor's own browser read and sent.
+   */
   readonly backend: string;
   /** One entry per selection that had to be met with something else. */
   readonly substituted?: readonly { readonly requested: string; readonly actual: string }[];
@@ -275,6 +278,49 @@ export interface ResolveRequest {
   readonly url: string;
 }
 
+/** One rendition of an imported image or video, as Instagram's web client lists it. */
+export interface ImportedCandidate {
+  readonly url?: string;
+  readonly width?: number;
+  readonly height?: number;
+}
+
+/**
+ * One post (or one slide of it), in the shape Instagram's own web client reads.
+ *
+ * Only the fields SERA uses. The bookmarklet trims to these before sending, so the fields
+ * Instagram returns about the *viewer* — whether they liked it, saved it, follow the
+ * author — never leave the visitor's browser; and the server's schema strips anything else
+ * that arrives anyway.
+ */
+export interface ImportedPostNode {
+  readonly id?: string;
+  /** The shortcode. Checked against the URL it was read from, as a consistency check. */
+  readonly code?: string;
+  /** 1 image, 2 video, 8 carousel. */
+  readonly media_type?: number;
+  readonly carousel_media?: readonly ImportedPostNode[];
+  readonly image_versions2?: { readonly candidates?: readonly ImportedCandidate[] };
+  readonly video_versions?: readonly ImportedCandidate[];
+  readonly video_duration?: number;
+  readonly accessibility_caption?: string;
+  readonly user?: { readonly username?: string; readonly full_name?: string };
+  readonly caption?: { readonly text?: string };
+}
+
+/**
+ * A post the visitor's own logged-in browser read, sent for SERA to process.
+ *
+ * The server never holds an Instagram session for this: the browser that was already
+ * signed in does the one read, and SERA does everything after it. What arrives is not
+ * trusted — the server builds the options itself and admits only Instagram's CDN hosts.
+ */
+export interface ImportRequest {
+  /** The post's own URL, as the visitor had it open. */
+  readonly url: string;
+  readonly node: ImportedPostNode;
+}
+
 export type PackagingMode = 'auto' | 'zip' | 'individual';
 
 export interface CreateJobRequest {
@@ -355,6 +401,17 @@ export interface ProviderCapabilities {
    * anyway, because a wrong guess must never turn into a refusal SERA invented.
    */
   readonly cloudExtraction: boolean;
+
+  /* ---- what a visitor's own browser can do ---- */
+
+  /**
+   * Whether a visitor's own signed-in browser can read a post and hand it to this server.
+   *
+   * The answer to "needs an account" that puts no account on the server: the browser that is
+   * already signed in reads the one post it is showing, and SERA fetches the media that
+   * browser was given. True only where SERA can check what arrives, which is Instagram.
+   */
+  readonly browserImport: boolean;
 
   /**
    * Present when part of this provider needs credentials the installation lacks. Names

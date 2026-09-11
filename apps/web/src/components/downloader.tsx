@@ -17,6 +17,17 @@ import { UrlForm } from './url-form';
 
 type Phase = 'idle' | 'analyzing' | 'ready' | 'submitting' | 'running' | 'done';
 
+/** The starting kind, selection and quality for a resolution, chosen the same way everywhere. */
+function seedFrom(info: MediaInfo): {
+  kind: SelectableKind;
+  selectedIds: Set<string>;
+  label: string | undefined;
+} {
+  const kind = initialKind(info);
+  const selectedIds = new Set(info.items.map((item) => item.id));
+  return { kind, selectedIds, label: qualityLabels(info, kind, selectedIds)[0] };
+}
+
 /**
  * The whole interaction, in one component.
  *
@@ -24,17 +35,28 @@ type Phase = 'idle' | 'analyzing' | 'ready' | 'submitting' | 'running' | 'done';
  * Keeping it in one place is what makes the transitions honest — every phase knows what
  * the previous one produced, so the screen can never show a stale preview beside a fresh
  * error, and pressing Escape or changing the link always returns to a coherent state.
+ *
+ * `initialInfo` is the one entry that skips the paste-and-analyze step: a post the visitor's
+ * own browser already read, handed to /import. There is no link to type in that mode, so the
+ * form is gone and "Start over" returns to the post rather than to an empty page.
  */
-export function Downloader() {
+export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo } = {}) {
+  const importMode = initialInfo !== undefined;
   const [url, setUrl] = useState('');
-  const [phase, setPhase] = useState<Phase>('idle');
-  const [info, setInfo] = useState<MediaInfo | undefined>();
+  const [phase, setPhase] = useState<Phase>(initialInfo ? 'ready' : 'idle');
+  const [info, setInfo] = useState<MediaInfo | undefined>(initialInfo);
   const [error, setError] = useState<JobError | undefined>();
   const [jobId, setJobId] = useState<string | undefined>();
 
-  const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(new Set());
-  const [kind, setKind] = useState<SelectableKind>('video');
-  const [label, setLabel] = useState<string | undefined>();
+  const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() =>
+    initialInfo ? seedFrom(initialInfo).selectedIds : new Set(),
+  );
+  const [kind, setKind] = useState<SelectableKind>(() =>
+    initialInfo ? seedFrom(initialInfo).kind : 'video',
+  );
+  const [label, setLabel] = useState<string | undefined>(() =>
+    initialInfo ? seedFrom(initialInfo).label : undefined,
+  );
   const [filename, setFilename] = useState('');
   const [packaging, setPackaging] = useState<PackagingMode>('auto');
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -46,16 +68,27 @@ export function Downloader() {
 
   const reset = useCallback(() => {
     analyzeAbort.current?.abort();
-    setPhase('idle');
-    setInfo(undefined);
     setError(undefined);
     setJobId(undefined);
-    setSelectedIds(new Set());
-    setLabel(undefined);
     setFilename('');
     setPackaging('auto');
     setShowAdvanced(false);
-  }, []);
+    // Import mode has nowhere to go back to but the post the browser read: reseed it rather
+    // than leaving a blank page with no way to type a link.
+    if (initialInfo) {
+      const seeded = seedFrom(initialInfo);
+      setInfo(initialInfo);
+      setKind(seeded.kind);
+      setSelectedIds(seeded.selectedIds);
+      setLabel(seeded.label);
+      setPhase('ready');
+      return;
+    }
+    setPhase('idle');
+    setInfo(undefined);
+    setSelectedIds(new Set());
+    setLabel(undefined);
+  }, [initialInfo]);
 
   const analyze = useCallback(async (raw: string) => {
     analyzeAbort.current?.abort();
@@ -191,28 +224,39 @@ export function Downloader() {
         },
       });
     }
+    // The one refusal a different route answers: Instagram serves photos only to a signed-in
+    // browser, and the visitor has one. /import is where that route is explained and begun.
+    if (!importMode && error.code === 'PROVIDER_AUTH_REQUIRED') {
+      actions.push({
+        label: 'Download from your browser',
+        primary: !error.retryable,
+        onClick: () => window.open('/import', '_blank', 'noopener'),
+      });
+    }
     if (info) actions.push({ label: 'Change format', onClick: () => setError(undefined) });
     actions.push({ label: info ? 'Start over' : 'Clear', onClick: reset });
     return actions;
-  }, [error, info, url, analyze, start, reset]);
+  }, [error, info, url, importMode, analyze, start, reset]);
 
   return (
     <div className="flex flex-col gap-4">
-      <UrlForm
-        value={url}
-        onChange={(next) => {
-          setUrl(next);
-          if (info || error) {
-            setInfo(undefined);
-            setError(undefined);
-            setJobId(undefined);
-            setPhase('idle');
-          }
-        }}
-        onSubmit={(next) => void analyze(next)}
-        busy={busy}
-        disabled={working}
-      />
+      {!importMode && (
+        <UrlForm
+          value={url}
+          onChange={(next) => {
+            setUrl(next);
+            if (info || error) {
+              setInfo(undefined);
+              setError(undefined);
+              setJobId(undefined);
+              setPhase('idle');
+            }
+          }}
+          onSubmit={(next) => void analyze(next)}
+          busy={busy}
+          disabled={working}
+        />
+      )}
 
       {busy && <AnalyzingSkeleton />}
 

@@ -124,7 +124,70 @@ describe('the line a resolve writes', () => {
   });
 });
 
+describe('the lines a visitor import writes', () => {
+  const signed =
+    'https://scontent-vie1-1.cdninstagram.com/v/t51/SECRETPATH.jpg?oh=SECRETSIGNATURE&oe=FFFFFFFF';
+  const node = (url: string) => ({
+    code: 'ABC123',
+    media_type: 1,
+    image_versions2: { candidates: [{ url, width: 1080 }] },
+  });
+
+  it('say what an operator correlates on, and never which post or which media', () => {
+    const { logger, lines } = capture();
+    const resolver = new MediaResolver({
+      config: loadConfig({
+        NODE_ENV: 'test',
+        SERA_SECRET: 'observability-secret',
+        SERA_DATA_DIR: '.data/test',
+      }),
+      logger,
+    });
+
+    const post = 'https://www.instagram.com/p/ABC123/';
+    resolver.importSubmitted({ url: post, node: node(signed) }, 'req-7');
+    try {
+      resolver.importSubmitted({
+        url: post,
+        node: node('https://evil.example/SECRETPATH.jpg?oh=SECRETSIGNATURE'),
+      });
+    } catch {
+      // Refused, which is the point: a refusal writes a line as well.
+    }
+
+    const written = lines();
+    expect(written.find((line) => line.msg === 'imported')).toMatchObject({
+      requestId: 'req-7',
+      provider: 'instagram',
+      strategy: 'visitor-browser',
+      source: 'www.instagram.com/p',
+      items: 1,
+    });
+    expect(written.find((line) => line.msg === 'import refused')).toMatchObject({
+      errorCode: 'BLOCKED_ADDRESS',
+    });
+    for (const line of written) {
+      const serialized = JSON.stringify(line);
+      for (const secret of ['SECRETPATH', 'SECRETSIGNATURE', 'ABC123', 'evil.example']) {
+        expect(serialized, secret).not.toContain(secret);
+      }
+    }
+  });
+});
+
 describe('the redaction list', () => {
+  it('covers what a visitor import carries, wherever it is spread', () => {
+    const { logger, lines } = capture();
+    const entries = [
+      { s: '1', kind: 'image', url: 'https://scontent.cdninstagram.com/v/a.jpg?oh=SIGNED' },
+    ];
+    logger.info(
+      { imported: { entries }, spec: { imported: { entries } } },
+      'a line that should say nothing',
+    );
+    expect(JSON.stringify(lines()[0])).not.toContain('SIGNED');
+  });
+
   it('covers every kind of credential this service can hold', () => {
     const { logger, lines } = capture();
     logger.info(

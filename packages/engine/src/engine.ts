@@ -9,6 +9,7 @@ import { version as ytdlpVersion } from './extract/ytdlp.js';
 import { JobService } from './jobs/service.js';
 import { createLogger, type Logger } from './logging.js';
 import { ProviderRegistry } from './providers/index.js';
+import type { MediaHostPolicy } from './providers/instagram-media.js';
 import { MemoryJobBackend } from './queue/memory.js';
 import type { JobBackend, WorkerHandle } from './queue/types.js';
 import { MediaResolver, type ResolverDependencies } from './resolver.js';
@@ -30,6 +31,14 @@ export interface EngineOptions {
   readonly dispatcher?: Dispatcher;
   /** Overrides the metadata probe, so the whole pipeline is testable without yt-dlp. */
   readonly probe?: ResolverDependencies['probe'];
+  /**
+   * Where the media of a post a visitor's browser sends may be fetched from.
+   *
+   * Instagram's CDN, and deliberately not settable from the environment: widening it changes
+   * what this server will fetch for anyone who asks, so it takes a code change. Tests point
+   * it at their loopback origin.
+   */
+  readonly importHosts?: MediaHostPolicy;
 }
 
 export class SeraEngine {
@@ -116,6 +125,7 @@ export class SeraEngine {
       remoteBackends: () => (config.extractionNodes.enabled ? remoteBackends(remote) : []),
       ...(options.dispatcher ? { dispatcher: options.dispatcher } : {}),
       ...(options.probe ? { probe: options.probe } : {}),
+      ...(options.importHosts ? { importHosts: options.importHosts } : {}),
     });
     const workspaces = new WorkspaceManager(config.dataDir, config.retentionSeconds, logger);
     const backend = options.backend ?? (await createBackend(config, logger));

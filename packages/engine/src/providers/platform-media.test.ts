@@ -487,6 +487,7 @@ describe('provider capabilities', () => {
       'requiresOauth',
       'residentialFallback',
       'cloudExtraction',
+      'browserImport',
     ] as const;
 
     for (const provider of registry.list()) {
@@ -517,6 +518,17 @@ describe('provider capabilities', () => {
       .filter((provider) => !provider.capabilities.cloudExtraction)
       .map((provider) => provider.id);
     expect(refused).toEqual(['youtube']);
+  });
+
+  it('takes a post from a visitor’s browser only where SERA can check what arrives', () => {
+    // Visitor import believes nothing in the payload except what the media allowlist admits,
+    // and the only allowlist there is belongs to Instagram. A provider claiming this without
+    // one would be an open fetcher with a friendly name.
+    const importing = registry
+      .list()
+      .filter((provider) => provider.capabilities.browserImport)
+      .map((provider) => provider.id);
+    expect(importing).toEqual(['instagram']);
   });
 
   it('describes a platform by what it serves, not by what the base class assumed', () => {

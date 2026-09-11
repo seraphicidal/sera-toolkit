@@ -1,11 +1,18 @@
 import type { FastifyInstance } from 'fastify';
-import { resolveRequestSchema } from '@sera/contracts';
+import { importRequestSchema, resolveRequestSchema } from '@sera/contracts';
 import type { SeraEngine } from '@sera/engine';
 import { header, safeFetch, seraError, SeraError } from '@sera/engine';
 import { clientAbortSignal } from '../plugins/disconnect.js';
 
 /** Thumbnails are small; anything larger is not a preview image. */
 const MAX_THUMBNAIL_BYTES = 4 * 1024 * 1024;
+
+/**
+ * Ceiling for a post a visitor's browser sends. Trimmed the way the bookmarklet trims it, a
+ * post is a few kilobytes a slide; this is a full carousel with room to spare, and far short
+ * of a body worth sending to exhaust memory. Anything larger is refused before it is parsed.
+ */
+const MAX_IMPORT_BODY_BYTES = 512 * 1024;
 
 const IMAGE_TYPES = new Set([
   'image/jpeg',
@@ -56,6 +63,45 @@ export function registerMediaRoutes(app: FastifyInstance, engine: SeraEngine): v
             error instanceof SeraError ? error.code : undefined,
           );
         }
+        throw error;
+      }
+    },
+  );
+
+  /**
+   * Accept a post the visitor's own browser read.
+   *
+   * How Instagram photographs reach a server that holds no Instagram session. The visitor's
+   * browser, signed in already, reads the one post it is showing and hands it to the /import
+   * page, which sends it here, same-origin. What arrives is untrusted and treated that way:
+   * the resolver admits only media on Instagram's CDN and signs what it admitted.
+   */
+  app.post(
+    '/api/media/import',
+    {
+      bodyLimit: MAX_IMPORT_BODY_BYTES,
+      config: {
+        rateLimit: {
+          max: engine.config.rateLimitResolvePerMinute,
+          timeWindow: '1 minute',
+        },
+      },
+    },
+    async (request, reply) => {
+      engine.abuse.assertAllowed(request.clientKey);
+      const body = importRequestSchema.parse(request.body);
+
+      try {
+        const info = engine.resolver.importSubmitted(body, request.id);
+        engine.abuse.recordSuccess(request.clientKey);
+        return await reply.header('cache-control', 'no-store').send(info);
+      } catch (error) {
+        // Media named off Instagram's hosts counts: nothing Instagram serves produces that,
+        // so it is someone finding out what this endpoint will fetch.
+        engine.abuse.recordFailure(
+          request.clientKey,
+          error instanceof SeraError ? error.code : undefined,
+        );
         throw error;
       }
     },
