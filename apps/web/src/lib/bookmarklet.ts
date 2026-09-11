@@ -22,17 +22,29 @@ const APP_ID = '936619743392459';
  *     the viewer — liked, saved, following — never leaves the tab.
  *
  * It is self-contained by necessity: instagram.com's CSP forbids loading a script, and a
- * user-invoked bookmarklet is the one thing exempt from it, so everything is inline.
+ * user-invoked bookmarklet is the one thing exempt from it, so everything is inline — and
+ * nothing it does loads, fetches or evaluates code. Its only network call reads Instagram's own
+ * media-info endpoint for data; it never fetches from the SERA origin, and never evaluates
+ * anything it receives. That property is the whole trust boundary: it runs on instagram.com
+ * with the visitor's session, so if it pulled code from SERA, a compromised SERA server would
+ * compromise every user's Instagram account. `bookmarkletSource` is exported so the page can
+ * show the exact code the link carries, and `bookmarklet.test.ts` asserts it stays inert.
  */
-export function buildBookmarklet(seraOrigin: string): string {
+
+/**
+ * The exact code the bookmarklet runs, with the deployment's origin substituted in.
+ *
+ * This is what `buildBookmarklet` encodes into the `javascript:` URL and what the /import page
+ * shows the visitor — the same string, so "read what you are about to install" is literally
+ * true. Compact, but not minified: every statement is on its own line.
+ */
+export function bookmarkletSource(seraOrigin: string): string {
   const origin = JSON.stringify(seraOrigin.replace(/\/+$/, ''));
   const appId = JSON.stringify(APP_ID);
   const ready = JSON.stringify(READY);
   const payload = JSON.stringify(PAYLOAD);
 
-  // Kept compact but not mangled: a bookmarklet has no build step, and being able to read what
-  // you are about to put in your bookmarks bar is worth more than the bytes.
-  const source = `(function(){
+  return `(function(){
   var SERA=${origin};
   var m=location.pathname.match(/^\\/(?:[^/]+\\/)?(?:p|reel|reels|tv)\\/([A-Za-z0-9_-]+)/);
   if(!m){alert('Open a single Instagram post, reel or video first.');return;}
@@ -62,6 +74,9 @@ export function buildBookmarklet(seraOrigin: string): string {
     .then(function(j){var it=j&&j.items&&j.items[0];if(!it){alert('SERA could not read that post. Make sure you are signed in to Instagram.');win.close();return;}post=keep(it);send();})
     .catch(function(){alert('SERA could not read that post. Make sure you are signed in to Instagram.');win.close();});
 })();`;
+}
 
-  return `javascript:${encodeURIComponent(source)}`;
+/** The bookmarklet as a `javascript:` URL — exactly `bookmarkletSource`, encoded. */
+export function buildBookmarklet(seraOrigin: string): string {
+  return `javascript:${encodeURIComponent(bookmarkletSource(seraOrigin))}`;
 }
