@@ -21,6 +21,16 @@ import { SpinnerIcon } from './icons';
  */
 type Phase = 'waiting' | 'ready' | 'error' | 'idle';
 
+/** "instagram.com/p/<code>" from the post's canonical URL, for the provenance line. */
+function sourceLabel(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return parsed.hostname.replace(/^www\./, '') + parsed.pathname.replace(/\/+$/, '');
+  } catch {
+    return url;
+  }
+}
+
 export function ImportClient() {
   const [phase, setPhase] = useState<Phase>('waiting');
   const [info, setInfo] = useState<MediaInfo>();
@@ -61,10 +71,22 @@ export function ImportClient() {
 
     // Transport v2: the bookmarklet read the post and navigated this tab here with it in the
     // URL fragment. The mobile-safe path, and now the default — no popup, no postMessage.
-    const fragmentRequest = fragment.current.value;
-    if (fragmentRequest) {
-      setPhase('waiting');
-      importMedia(fragmentRequest, controller.signal).then(onResolved).catch(showError);
+    const fragmentResult = fragment.current.value;
+    if (fragmentResult) {
+      if (fragmentResult.ok) {
+        setPhase('waiting');
+        importMedia(fragmentResult.request, controller.signal).then(onResolved).catch(showError);
+      } else {
+        // A crafted link pointing at media off Instagram's CDN. Refuse it here and POST nothing —
+        // the server would count the block as abuse against this browser's own address.
+        setError({
+          code: 'BLOCKED_ADDRESS',
+          message: 'That link points at media somewhere other than Instagram.',
+          hint: 'Open the post on Instagram and send it from there.',
+          retryable: false,
+        });
+        setPhase('error');
+      }
       return () => controller.abort();
     }
 
@@ -96,7 +118,12 @@ export function ImportClient() {
 
   if (phase === 'ready' && info) {
     return (
-      <div className="flex flex-1 flex-col justify-center py-8">
+      <div className="flex flex-1 flex-col justify-center gap-3 py-8">
+        {/* Provenance: a crafted /import link is now possible, so say plainly which post this is,
+            above everything, before any download. Plain text; the URL was validated server-side. */}
+        <p className="text-[0.8125rem] text-[var(--color-ink-faint)]">
+          From <span className="text-[var(--color-ink-muted)]">{sourceLabel(info.url)}</span>
+        </p>
         <Downloader initialInfo={info} />
       </div>
     );
