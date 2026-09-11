@@ -5,6 +5,7 @@ import type { JobError, MediaInfo } from '@sera/contracts/types';
 import Link from 'next/link';
 import { ApiError, importMedia } from '@/lib/api';
 import { openImportChannel } from '@/lib/import-handshake';
+import { BookmarkletLink } from './bookmarklet-link';
 import { Downloader } from './downloader';
 import { ErrorPanel } from './error-panel';
 import { SpinnerIcon } from './icons';
@@ -26,6 +27,14 @@ export function ImportClient() {
   const [error, setError] = useState<JobError>();
 
   useEffect(() => {
+    // No opener means nobody opened this to hand it a post — someone navigated here directly.
+    // There is nothing to wait for, so explain the page at once rather than spin for the whole
+    // handshake timeout. The bookmarklet always opens this window, so it always has an opener.
+    if (!window.opener) {
+      setPhase('idle');
+      return;
+    }
+
     const channel = openImportChannel(window);
     const controller = new AbortController();
 
@@ -109,10 +118,15 @@ function HowItWorks() {
         its own server. This page takes the other route: your own browser, already signed in, reads
         the post and sends just the media here. Your Instagram login never reaches SERA.
       </p>
-      <ol className="flex flex-col gap-2 text-[0.9375rem] text-[var(--color-ink-muted)]">
-        <Step n={1}>Open the photo post or carousel you want on instagram.com.</Step>
-        <Step n={2}>Use the SERA bookmarklet in your bookmarks bar.</Step>
-        <Step n={3}>This page opens with the post ready to download.</Step>
+      <ol className="flex flex-col gap-3 text-[0.9375rem] text-[var(--color-ink-muted)]">
+        <Step n={1}>
+          <span className="flex flex-wrap items-center gap-2">
+            <span>Drag this to your bookmarks bar, once:</span>
+            <BookmarkletLink />
+          </span>
+        </Step>
+        <Step n={2}>Open the photo post or carousel you want on instagram.com.</Step>
+        <Step n={3}>Click the bookmark. This page opens with the post ready to download.</Step>
       </ol>
       <p className="text-[0.8125rem] text-[var(--color-ink-faint)]">
         Reels and videos need none of this — paste their link on the{' '}
