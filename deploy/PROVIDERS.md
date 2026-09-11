@@ -80,6 +80,19 @@ degraded, only after every backend has refused. A carousel's cover is its first 
 the full post still needs `SERA_INSTAGRAM_SESSION_ID`; read the warning in
 [ORACLE.md](ORACLE.md) before setting one on a deployment other people can reach.
 
+**The third route needs no session on the server: the visitor's own browser.** Instagram
+will serve a photo post to a client that is logged in, and a visitor is — in their own
+browser, not on the server. So SERA offers "visitor import": the visitor reads the post
+where their session already is (a bookmarklet, then an extension, on `instagram.com`) and
+sends SERA just the media descriptor over `postMessage` to `/import`. The server holds no
+session, makes no request to Instagram, and trusts nothing in what arrives — it admits only
+media URLs on `cdninstagram.com` / `fbcdn.net`, signs what it admitted, and downloads that
+through the same guarded client as any direct link. This is what the `browserImport`
+capability marks, and it is why a photo post no longer dead-ends at "needs an account": it
+needs an account, and the visitor brings their own. It defeats no Instagram control — the
+visitor reaches only what they were already logged in to see. The full trust model is in
+[SECURITY-REVIEW.md](SECURITY-REVIEW.md).
+
 ## Is gallery-dl useful here?
 
 It was installed and run against exactly the links SERA cannot fully serve.

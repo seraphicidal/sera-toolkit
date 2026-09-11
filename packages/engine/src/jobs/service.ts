@@ -57,7 +57,9 @@ export class JobService {
     const { config, resolver, backend } = this.deps;
 
     const info = resolver.verifyInfoId(request.infoId);
-    const expectedHash = resolver.resolutionHash(info.u, info.p);
+    // An imported post's hash covers the media approved from it, so an option minted for one
+    // import of a post cannot be spent against another import of the same post.
+    const expectedHash = resolver.resolutionHash(info.u, info.p, info.m);
     const selections: JobSelection[] = [];
 
     for (const optionId of request.optionIds) {
@@ -106,6 +108,18 @@ export class JobService {
       selections,
       packaging: request.packaging ?? 'auto',
       ...(request.filename ? { filename: request.filename } : {}),
+      // Carried whole, because the job cannot read the post again. It only ever comes from a
+      // token this server signed; nothing in the request body can reach it.
+      ...(info.m
+        ? {
+            imported: {
+              entries: info.m,
+              title: info.t ?? '',
+              ...(info.a ? { author: info.a } : {}),
+              ...(info.x !== undefined ? { expiresAt: info.x } : {}),
+            },
+          }
+        : {}),
     };
 
     const now = new Date().toISOString();
@@ -123,7 +137,13 @@ export class JobService {
 
     await backend.submit(record);
     this.deps.logger.info(
-      { jobId: spec.jobId, provider: info.p, source: logSafeUrl(info.u), items: selections.length },
+      {
+        jobId: spec.jobId,
+        provider: info.p,
+        source: logSafeUrl(info.u),
+        items: selections.length,
+        ...(spec.imported ? { strategy: 'visitor-browser' } : {}),
+      },
       'job queued',
     );
     return toPublicJob(record);

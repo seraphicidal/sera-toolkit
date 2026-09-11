@@ -51,6 +51,11 @@ export const REDACTED_PATHS: readonly string[] = [
   '*.proxy',
   'authorization',
   '*.authorization',
+  // A post a visitor's browser sent, and the job made from it. The media URLs inside work
+  // for anyone holding them until they expire, so they are kept out like credentials;
+  // `logSafeUrl` of the post is what gets logged instead.
+  'imported',
+  '*.imported',
 ];
 
 export const REDACTION_CENSOR = '[redacted]';

@@ -179,3 +179,152 @@ rather than a gap in it.
   door this leaves open is a stolen token letting an attacker _receive_ work, which
   reveals which links visitors submitted to a deployment they already had a credential
   for.
+
+---
+
+# Security review — visitor import
+
+Reviewed 11 September 2026, against the `instagram-visitor-import` branch, before it reaches
+the public deployment. The branch adds one thing with a security surface: an endpoint that
+accepts a description of an Instagram post from the visitor's own browser and turns it into a
+download. It is deliberately the answer to the one thing this deployment cannot otherwise do —
+Instagram photographs, which Instagram serves only to a signed-in client — **without** putting
+an Instagram session on the server. The whole design question is therefore: what can a browser,
+or something pretending to be one, make this endpoint do?
+
+## Why the browser at all
+
+Instagram serves a public photo post's media only to a logged-in client, from any network —
+measured repeatedly, from a home connection as much as from the datacentre (see
+`deploy/PROVIDERS.md`). The only two ways past that are to give the server an account, or to
+use the account the visitor already has. The first was measured and rejected on the deployment:
+a single `SERA_INSTAGRAM_SESSION_ID` makes every visitor's download the operator's account
+activity, and Instagram suspends accounts for exactly that. The second is this branch. The
+visitor's browser, already signed in, reads the one post it is showing — a same-origin read on
+`instagram.com`, nothing SERA is party to — and hands SERA the media descriptor. SERA holds no
+session, sees no cookie, and makes no request to read the post.
+
+**This defeats no platform control, and that was the line the whole design was held to.** The
+visitor reaches only what they were already logged in to reach; SERA fetches only the CDN
+objects that read produced. There is no paywall crossed, no private post opened, no account
+impersonated, no rate limit dodged on Instagram's behalf. The post's own URL, pasted on the
+home page, still leads to "this needs an account" — because from the server it genuinely does.
+
+## Why postMessage, not CORS
+
+The obvious shape — SERA's page calls Instagram's API with the visitor's credentials — cannot
+exist. `instagram.com` does not send SERA's origin an `Access-Control-Allow-Origin`, so a
+cross-origin `fetch` with credentials is unreadable by construction, and it would also mean SERA
+scripting the visitor's Instagram session, which is the thing being avoided. So the read happens
+where the session lives — a content script on `instagram.com` — and only the result crosses to
+SERA, over `postMessage`, which is not subject to CORS and carries no ambient credentials.
+
+## The question that matters most
+
+**Can a payload make SERA fetch an address it was not meant to fetch?**
+
+The payload is attacker-controlled: it arrives from a browser SERA cannot see into, and a hostile
+sender can put anything in it. The design assumes that from the start. Nothing in the payload is
+believed except after it clears the media-host allowlist, and only what clears it is ever
+fetched.
+
+| Reached through                                 | What stops it                                                                                                                                        |
+| ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A media URL in the payload                      | `assertCdnHosts` / `isAllowedMediaUrl`: HTTPS only, no port, no credentials, host is `cdninstagram.com` or `fbcdn.net` or a subdomain — nothing else |
+| A thumbnail URL in the payload                  | The same check, over the thumbnails too, because the thumbnail proxy fetches those                                                                   |
+| A redirect off the CDN at download time         | `downloadDirect` is given an `allowUrl` that re-applies the same host check on **every hop**, the first included — a redirect is a new destination   |
+| The post URL itself                             | `parseUserUrl` (http/https, no credentials, no odd port, no private IP literal), then the provider must be Instagram and declare `browserImport`     |
+| A private or internal address behind a CDN name | The SSRF address guard (`guardedLookup`) is unchanged and still filters inside the socket's own DNS lookup, on every hop                             |
+| A URL edited into the signed token after issue  | The token is HMAC-signed; editing `m` breaks the signature, and the resolution hash digests `m` so an option from one import will not match another  |
+
+**The worst a forged payload achieves:** SERA fetches an object on Instagram's own CDN that the
+sender must already hold a signed link to — the CDN URLs are signed and expire, so the sender
+had to have obtained them, and fetching one gains them nothing they did not already have. It
+gives no reach onto SERA's network (the address guard is untouched), no reach onto an arbitrary
+host (the allowlist is two registrable domains), and no amplification worth the name (one fetch,
+bounded by the same size and item ceilings as any job). This is why the allowlist is a code
+constant and not an environment variable: widening it changes what the server will fetch for
+anyone who asks, so it takes a commit and a review, not a config line.
+
+## Approved means signed
+
+"Approved" has a precise meaning here: the media the resolver admitted, and only that, is signed
+into the resolution token — the same self-contained HMAC token every resolution already uses,
+now carrying the imported entries (`o: 'visitor'`, `m: [...]`). A job made from an imported post
+does **not** re-resolve — it cannot; there is no session to re-read the post with — so the runner
+rebuilds the plan deterministically from the signed entries (`mediaFromImport`, a pure function)
+and fetches exactly those. Three consequences were checked:
+
+- **No cross-import spending.** The resolution hash digests `m`, so an option minted for one
+  import of a post does not match a second import of the same post carrying different media.
+  Tested end to end: import A's option against import B's token is refused with "different link".
+- **No re-resolution.** The end-to-end suite wires the probe to throw, so any attempt to
+  re-resolve an imported job fails the test rather than the payload.
+- **Expiry is bound, and checked before fetching.** The token's lifetime is `min` of the option
+  TTL and the earliest `oe` Instagram signed into the URLs; a job that waits in the queue past
+  that is refused before a byte is fetched (`assertImportFresh`), and a URL the CDN refuses with
+  a 403 at download time is reported as expired, not as a network fault. The signature covers
+  `oe`, so the expiry cannot be extended by editing the URL.
+
+## The COOP exception
+
+The handshake needs the popup SERA opens to keep its `window.opener`, and SERA's site-wide
+`Cross-Origin-Opener-Policy: same-origin` severs it: opening a cross-origin popup switches
+browsing-context groups and the opener comes up `null`. Measured in a real browser across all
+three policies — `same-origin` and `same-origin-allow-popups` both sever it; only `unsafe-none`
+keeps it. So `/import` alone is served `unsafe-none`, as a later, narrower `headers()` rule that
+overrides that one key and leaves every other security header in place. The exposure `unsafe-none`
+reintroduces is that another page in the same browsing-context group could reach this window's
+global — and it is acceptable here precisely because `/import` holds nothing worth reaching: no
+credential, no state, no stored anything, and it is `noindex`. It reads a post, builds a request,
+and forgets it.
+
+## Abuse and limits
+
+- **Off-allowlist media counts as abuse.** A payload naming media anywhere but Instagram's CDN is
+  refused `BLOCKED_ADDRESS` and recorded against the client's failure budget — nothing Instagram
+  serves produces that, so it is someone probing what the endpoint will fetch. Tested: repeated
+  forged posts trip the cooldown, and the cooldown is per-client, so it neither leaks across
+  clients nor blocks a genuine sender elsewhere.
+- **The body is capped at 512 KB**, on the route, so an oversized payload is refused (413) before
+  it is parsed. The item ceiling (`maxItemsPerJob`) and the schema's own 50-slide cap both apply,
+  the resolver refuses a post over either, and the mint refuses a resolution token that would
+  exceed `MAX_INFO_TOKEN_LENGTH` — so the limit is enforced where the token is made, never
+  discovered when someone presses Download.
+- **Rate limited** exactly as `/api/media/info` is.
+
+## Log leakage
+
+The imported entries carry signed CDN URLs, which work for anyone holding them until they expire,
+so they are treated like credentials: `imported` and `*.imported` are on `REDACTED_PATHS`, and
+the post is logged only through `logSafeUrl` (`www.instagram.com/p`, never the shortcode). A test
+writes an import — success and refusal — and asserts no path, signature, shortcode or off-host
+name survives to the log.
+
+## Found in passing, and fixed
+
+`downloadDirect` destroyed the response body with a raw `.destroy()` on a 4xx or oversized
+response. undici raises an `AbortError` from `destroy()` that surfaces as an unhandled rejection
+unless a listener is already attached — which the `discard()` helper exists to do. Nothing had
+driven a 4xx into that path before; an imported post whose signed URL has expired is the ordinary
+way to reach it (the CDN answers 403), so the import tests surfaced it. Both spots now use
+`discard()`.
+
+## What did not change, and stays true
+
+The SSRF address guard, the signed-token model, the subprocess rules, the filename and ZIP
+handling — none of it is touched. The imported path fetches through the same guarded dispatcher
+as every other direct download, with a host allowlist layered on top of the address guard rather
+than in place of it.
+
+## Accepted risk
+
+- **The shortcode consistency check is not a security boundary, and is not treated as one.** The
+  sender controls both the URL and the post, so it cannot prove they match; it catches an honest
+  race — the page moving to another post between reading one and sending it — and the security
+  properties rest entirely on the media-host allowlist and the signature, neither of which trusts
+  the shortcode.
+- **A signed CDN URL is bearer-ish until it expires.** Anyone who obtains one can fetch it, from
+  anywhere, until `oe` passes — this is Instagram's design, not SERA's, and it is why the URLs are
+  kept out of logs and why the token's lifetime is bounded by theirs. SERA neither widens that
+  window nor narrows it.
