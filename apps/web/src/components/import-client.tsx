@@ -127,23 +127,42 @@ function HowItWorks() {
         <div className="flex flex-col gap-2.5 text-[0.8125rem] leading-relaxed text-[var(--color-ink-muted)]">
           <p>
             <span className="font-medium text-[var(--color-ink)]">On a computer:</span> drag the
-            button to your bookmarks bar.
+            button to your bookmarks bar. Click it while you’re viewing a post.
           </p>
           <p>
             <span className="font-medium text-[var(--color-ink)]">On iPhone (Safari):</span> tap{' '}
             <span className="font-medium">Copy code</span>, bookmark this page (Share → Add
-            Bookmark), then edit that bookmark and replace its address with the copied code.
+            Bookmark) and name it <span className="font-medium">SERA</span>, then edit that bookmark
+            and replace its address with the copied code.
           </p>
-          <p className="text-[var(--color-ink-faint)]">
-            Android Chrome can’t run a bookmarklet from a bookmark. Use Firefox for Android, or wait
-            for the SERA extension.
+          <p>
+            <span className="font-medium text-[var(--color-ink)]">On Android (Chrome):</span> tap{' '}
+            <span className="font-medium">Copy code</span>, bookmark any page, then edit it, name it{' '}
+            <span className="font-medium">SERA</span>, and paste the code as the address.
           </p>
         </div>
       </div>
 
+      <div className="rounded-[var(--radius-panel)] border border-[var(--color-line)] bg-[var(--color-sunken)] px-4 py-3 text-[0.8125rem] leading-relaxed text-[var(--color-ink-muted)]">
+        You have to be{' '}
+        <span className="font-medium text-[var(--color-ink)]">
+          signed in to instagram.com in this browser
+        </span>
+        . It doesn’t work from the Instagram app — in the app, tap Share → Copy link and open that
+        link in your browser. On iPhone, if the link opens the app instead of Safari, paste it into
+        Safari’s address bar.
+      </div>
+
       <ol className="flex flex-col gap-3 text-[0.9375rem] text-[var(--color-ink-muted)]">
-        <Step n={1}>Open the photo post or carousel you want on instagram.com.</Step>
-        <Step n={2}>Run the bookmark. This page opens with the post ready to download.</Step>
+        <Step n={1}>Open the photo post or carousel on instagram.com, signed in.</Step>
+        <Step n={2}>
+          Run the <span className="font-medium">SERA</span> bookmark:
+          <span className="mt-1 block text-[0.8125rem] text-[var(--color-ink-faint)]">
+            On a computer, click it in the bookmarks bar. On a phone, tap the address bar, type{' '}
+            <span className="font-medium">SERA</span>, and tap the bookmark.
+          </span>
+        </Step>
+        <Step n={3}>This page opens with the post ready to download.</Step>
       </ol>
 
       <p className="text-[0.8125rem] text-[var(--color-ink-faint)]">
