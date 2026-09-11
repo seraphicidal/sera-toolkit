@@ -333,11 +333,13 @@ than in place of it.
 
 # Addendum — the fragment transport (v2)
 
-Reviewed 12 September 2026. Phone testing showed the popup transport does not work on mobile:
-iOS Safari's pop-up setting blocks `window.open` (and we cannot ask a visitor to change that
-setting), and where a bookmarklet does run it is severed from its opener by cross-origin COOP.
-So the bookmarklet now hands the post over a different way, and this notes what that changes for
-the trust model — which is very little, by design.
+Reviewed 12 September 2026. This was built **pre-emptively**, not in response to a test result:
+the popup transport is known to be fragile on phones — a browser's pop-up blocker can refuse
+`window.open`, and a backgrounded or cross-origin popup can lose the opener a `postMessage` needs
+— and we cannot ask a visitor to change a pop-up setting. **Real-device testing is still pending**
+(iPhone Safari, Android Chrome); what those show may change the instructions, but the transport
+below is the mobile-safe design regardless. This notes what it changes for the trust model, which
+is small, and one thing it genuinely adds.
 
 **What changed.** Instead of opening `/import` as a popup and posting the post to it, the
 bookmarklet reads the post on instagram.com and navigates the **same tab** to
@@ -352,19 +354,42 @@ Instagram's CDN hosts, and signs only what it admitted. A hostile fragment can d
 hostile postMessage could — at most, have SERA fetch a CDN object the sender already held a signed
 link to.
 
-**What the fragment adds, and how it is contained.**
+**What the fragment genuinely adds: a crafted link, and how it is contained.** Under v1 only an
+instagram.com opener could hand a post over; with v2 anyone can send someone a `/import#v=2&p=…`
+link. Two consequences, both handled on the client so a recipient is never harmed by opening one:
 
-- **The fragment never reaches the SERA server.** A URL fragment is not sent in an HTTP request,
-  so the signed CDN URLs in it arrive at the server only through the same `POST /api/media/import`
-  body as before — never in a GET URL, never in a server log. Confirmed by how the browser treats
-  `#`; and SERA sends `Referrer-Policy: no-referrer`, so the fragment cannot leak by referrer
-  either.
-- **It does not linger client-side.** `readImportFragment` calls `history.replaceState` to drop
-  the fragment from the current history entry the instant it reads it — whether or not it parsed —
-  so the media links do not sit in the address bar or the back-stack. Tested.
-- **Smaller by design.** The bookmarklet trims each slide to its single widest rendition before
-  encoding, so a full carousel is a few kilobytes rather than tens, well inside browser URL
-  limits. A post too large to encode simply fails closed at the bookmarklet with nothing sent.
-- **Still inert.** The bookmarklet loads, fetches and evaluates no code; its one network call
-  reads Instagram's media endpoint for data, never the SERA origin. Asserted in
-  `bookmarklet.test.ts`.
+- **No download without a tap.** A crafted link only ever _resolves_ to the picker; a job starts
+  only from the Download button's click. Confirmed: the downloader's `start()` is called from the
+  button (and a retry action), never from an effect.
+- **The recipient's address is not spent on a crafted link.** The server counts a
+  `BLOCKED_ADDRESS` (off-allowlist media) toward abuse, keyed on the requester's address. A crafted
+  fragment with off-allowlist URLs would otherwise make the _recipient's_ browser POST them and
+  collect the strikes. So `readImportFragment` mirrors the server's host allowlist on the client —
+  HTTPS, no port, no credentials, host on `cdninstagram.com` / `fbcdn.net`, over every media and
+  thumbnail URL in the node — and if any URL fails, it returns "refused" and **POSTs nothing**. The
+  server check stays authoritative for a direct POST. Both are tested.
+- **Provenance is shown.** `/import` prints "From instagram.com/p/&lt;code&gt;", from the payload's
+  own `url`, above the picker, so a recipient sees which post they are about to download. Caption
+  and author render as plain React text (escaped); no `dangerouslySetInnerHTML` touches them.
+
+**What the fragment adds to the URL, and how it is contained.**
+
+- **The fragment never reaches the SERA server.** A URL fragment is not sent in an HTTP request at
+  all — it is not in the request line and, by the URL spec, is never placed in a `Referer` header
+  regardless of referrer policy — so the signed CDN URLs in it arrive at the server only through
+  the same `POST /api/media/import` body as before, never in a GET URL and never in a server log.
+- **It does not linger in this tab.** `readImportFragment` calls `history.replaceState` to drop the
+  fragment from the current session-history entry the instant it reads it — whether or not it
+  parsed. That covers the address bar and this tab's back-stack; a browser's _global_ history or a
+  synced-tabs feature may still record the original URL. Low impact: the signed links inside expire
+  within hours. Tested (the reader clears the hash on every path).
+- **Bounded in size, measured not guessed.** With one widest rendition per slide and the caption
+  trimmed to 300 chars and each alt-text to 150 (the server truncates titles to 200/120 anyway, so
+  nothing shown is lost), the final `/import#…` URL measures — using the real Gate 1 CDN URLs as
+  templates — about **1.3 KB for a 1-slide post, 12 KB for 10 images, 24 KB for 20 images, and 36
+  KB for a 20-slide carousel with ten videos** (the realistic worst case). The bookmarklet refuses
+  to navigate to a URL over **60 KB** (`alert`, no navigation), and `readImportFragment` refuses a
+  hash over **64 KB** before it decodes or parses anything (still clearing it). Both sit above the
+  measured worst case and below where a browser gives up.
+- **Still inert.** The bookmarklet loads, fetches and evaluates no code; its one network call reads
+  Instagram's media endpoint for data, never the SERA origin. Asserted in `bookmarklet.test.ts`.

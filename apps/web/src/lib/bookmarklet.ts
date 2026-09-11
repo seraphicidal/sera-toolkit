@@ -4,6 +4,17 @@ import { FRAGMENT_VERSION } from './import-handshake';
 const APP_ID = '936619743392459';
 
 /**
+ * Largest `/import#…` URL the bookmarklet will navigate to.
+ *
+ * Measured with real CDN URLs (caption trimmed to 300, alt to 150, one widest rendition per
+ * slide): a 1-slide post is ~1.3 KB, a 20-image carousel ~24 KB, and a 20-slide carousel with
+ * ten videos ~36 KB — the realistic worst case. 60 KB leaves headroom over that while staying
+ * well under the point where a mobile browser refuses to navigate. Over it, the bookmarklet says
+ * so and does nothing rather than produce a URL that might silently fail.
+ */
+const MAX_IMPORT_URL = 60_000;
+
+/**
  * The bookmarklet that sends the post you're looking at to SERA.
  *
  * It runs on instagram.com, in the tab where you are signed in, so it can read the one post
@@ -52,18 +63,19 @@ export function bookmarkletSource(seraOrigin: string): string {
   var code=m[1];
   var A='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
   var pk=0n;for(var i=0;i<code.length;i++){pk=pk*64n+BigInt(A.indexOf(code[i]));}
+  function clip(s,n){return typeof s==='string'?s.slice(0,n):undefined;}
   function widest(a){return (a||[]).slice().sort(function(x,y){return (y.width||0)-(x.width||0);})[0];}
   function pick(c){return c?{url:c.url,width:c.width,height:c.height}:undefined;}
   function keep(n){
     if(!n||typeof n!=='object')return undefined;
-    var out={id:n.id,code:n.code,media_type:n.media_type,video_duration:n.video_duration,accessibility_caption:n.accessibility_caption};
+    var out={id:n.id,code:n.code,media_type:n.media_type,video_duration:n.video_duration,accessibility_caption:clip(n.accessibility_caption,150)};
     var img=n.image_versions2&&pick(widest(n.image_versions2.candidates));
     if(img)out.image_versions2={candidates:[img]};
     var vid=pick(widest(n.video_versions));
     if(vid)out.video_versions=[vid];
     if(n.carousel_media)out.carousel_media=n.carousel_media.map(keep);
     if(n.user)out.user={username:n.user.username,full_name:n.user.full_name};
-    if(n.caption)out.caption={text:n.caption.text};
+    if(n.caption)out.caption={text:clip(n.caption.text,300)};
     return out;
   }
   fetch('/api/v1/media/'+pk.toString()+'/info/',{headers:{'x-ig-app-id':${appId},'x-requested-with':'XMLHttpRequest'},credentials:'include'})
@@ -72,7 +84,9 @@ export function bookmarkletSource(seraOrigin: string): string {
       var it=j&&j.items&&j.items[0];
       if(!it){alert('SERA could not read that post. Make sure you are signed in to Instagram.');return;}
       var payload={url:'https://www.instagram.com/p/'+code+'/',node:keep(it)};
-      location.href=SERA+'/import#v='+${version}+'&p='+encodeURIComponent(JSON.stringify(payload));
+      var href=SERA+'/import#v='+${version}+'&p='+encodeURIComponent(JSON.stringify(payload));
+      if(href.length>${MAX_IMPORT_URL}){alert('This post is too large to send this way. Try a post with fewer slides.');return;}
+      location.href=href;
     })
     .catch(function(){alert('SERA could not read that post. Make sure you are signed in to Instagram.');});
 })();`;
