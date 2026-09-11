@@ -79,16 +79,22 @@ export function bookmarkletSource(seraOrigin: string): string {
     return out;
   }
   fetch('/api/v1/media/'+pk.toString()+'/info/',{headers:{'x-ig-app-id':${appId},'x-requested-with':'XMLHttpRequest'},credentials:'include'})
-    .then(function(r){return r.json();})
-    .then(function(j){
-      var it=j&&j.items&&j.items[0];
-      if(!it){alert('SERA could not read that post. Make sure you are signed in to Instagram.');return;}
+    .then(function(r){return r.text().then(function(t){var j=null;try{j=JSON.parse(t);}catch(e){}return {r:r,j:j};});})
+    .then(function(res){
+      var r=res.r,j=res.j;
+      var msg=j?(j.message||((j.require_login||j.requires_login)?'login_required':'')):'';
+      if(msg)msg=String(msg).slice(0,120);
+      if(r.redirected||(msg&&/login/i.test(msg))){alert("SERA: you're not signed in to instagram.com in this browser. The Instagram app's login doesn't count. Sign in on the website, then try again.");return;}
+      if(!r.ok){alert('SERA: Instagram answered HTTP '+r.status+' ('+(msg||'not JSON')+'). Are you signed in to instagram.com in this browser?');return;}
+      if(!j){alert("SERA: you're not signed in to instagram.com in this browser. The Instagram app's login doesn't count. Sign in on the website, then try again.");return;}
+      var it=j.items&&j.items[0];
+      if(!it){alert('SERA: Instagram returned no media for this post.');return;}
       var payload={url:'https://www.instagram.com/p/'+code+'/',node:keep(it)};
       var href=SERA+'/import#v='+${version}+'&p='+encodeURIComponent(JSON.stringify(payload));
-      if(href.length>${MAX_IMPORT_URL}){alert('This post is too large to send this way. Try a post with fewer slides.');return;}
+      if(href.length>${MAX_IMPORT_URL}){alert('SERA: this post is too large to send ('+Math.round(href.length/1024)+' KB).');return;}
       location.href=href;
     })
-    .catch(function(){alert('SERA could not read that post. Make sure you are signed in to Instagram.');});
+    .catch(function(e){alert('SERA: network error reading the post ('+((e&&e.name)||'error')+').');});
 })();`;
 }
 

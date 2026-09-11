@@ -80,8 +80,28 @@ describe('buildBookmarklet', () => {
 
   it('refuses to navigate to an over-long URL instead of producing one that might fail', () => {
     // Measured: even a 20-slide carousel with videos is ~36 KB; the cap sits above that.
-    expect(source).toContain('href.length>60000');
-    expect(source).toMatch(/if\(href\.length>60000\)\{alert\([^)]*\);return;\}/);
+    expect(source).toContain('if(href.length>60000){alert(');
+    expect(source).toContain("' KB).');return;");
+  });
+
+  it('makes every failure diagnosable from the alert alone (no devtools on a phone)', () => {
+    // The login wall, an HTTP error with its status, no-media, size, and a network error.
+    expect(source).toContain("you're not signed in to instagram.com in this browser");
+    expect(source).toContain("'SERA: Instagram answered HTTP '+r.status+'");
+    expect(source).toContain('SERA: Instagram returned no media for this post.');
+    expect(source).toContain("SERA: network error reading the post ('+((e&&e.name)||'error')+')");
+    // The login wall is detected explicitly — a redirect or a non-JSON body — not left to throw.
+    expect(source).toContain('r.redirected');
+    expect(source).toContain('JSON.parse(t)');
+  });
+
+  it('never puts a URL, cookie, or the response body into an alert', () => {
+    // Alerts carry only the status code, Instagram's short message, error names, and a KB count.
+    for (const match of source.matchAll(/alert\(([^;]*)\)/g)) {
+      expect(match[1], match[1]).not.toMatch(
+        /https?:\/\/|cdninstagram|fbcdn|document\.|\bcookie\b|sessionid|credentials|stringify/i,
+      );
+    }
   });
 
   it('carries a shortcode→id decode that matches Instagram’s own numbering', () => {
