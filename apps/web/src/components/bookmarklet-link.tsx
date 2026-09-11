@@ -20,10 +20,12 @@ import { bookmarkletSource, buildBookmarklet } from '@/lib/bookmarklet';
  */
 export function BookmarkletLink() {
   const ref = useRef<HTMLAnchorElement>(null);
+  const manualRef = useRef<HTMLTextAreaElement>(null);
   const [href, setHref] = useState('');
   const [source, setSource] = useState('');
   const [copied, setCopied] = useState(false);
   const [nudge, setNudge] = useState(false);
+  const [manual, setManual] = useState(false);
 
   useEffect(() => {
     const origin = window.location.origin;
@@ -33,8 +35,19 @@ export function BookmarkletLink() {
     setSource(bookmarkletSource(origin));
   }, []);
 
+  // When both copy paths fail, the manual box appears with the code already selected, so a
+  // long-press → Copy is all that's left to do.
+  useEffect(() => {
+    if (manual && manualRef.current) {
+      manualRef.current.focus();
+      manualRef.current.select();
+    }
+  }, [manual]);
+
   const copy = async (): Promise<void> => {
     const done = (): void => {
+      setManual(false);
+      setNudge(false);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     };
@@ -55,9 +68,10 @@ export function BookmarkletLink() {
         const ok = document.execCommand('copy');
         document.body.removeChild(ta);
         if (ok) done();
-        else setNudge(true);
+        else setManual(true);
       } catch {
-        setNudge(true);
+        // Nothing automatic worked: hand the visitor the code to copy by hand.
+        setManual(true);
       }
     }
   };
@@ -84,12 +98,26 @@ export function BookmarkletLink() {
         >
           {copied ? 'Copied ✓' : 'Copy code'}
         </button>
-        {nudge && !copied && (
+        {nudge && !copied && !manual && (
           <span className="text-[0.75rem] text-[var(--color-ink-faint)]">
             Drag to your bookmarks bar, or copy the code.
           </span>
         )}
       </span>
+
+      {manual && (
+        <label className="flex flex-col gap-1 text-[0.75rem] text-[var(--color-ink-faint)]">
+          Couldn’t copy automatically — long-press to select, then Copy:
+          <textarea
+            ref={manualRef}
+            readOnly
+            value={href}
+            rows={3}
+            onFocus={(event) => event.currentTarget.select()}
+            className="w-full resize-none rounded-lg border border-[var(--color-line)] bg-[var(--color-canvas)] p-2 font-mono text-[0.6875rem] break-all text-[var(--color-ink-muted)]"
+          />
+        </label>
+      )}
 
       {source && (
         <details className="text-[0.75rem] text-[var(--color-ink-faint)]">
