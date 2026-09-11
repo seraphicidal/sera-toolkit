@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PAYLOAD, trustedImport } from './import-handshake';
+import { FRAGMENT_VERSION, PAYLOAD, readImportFragment, trustedImport } from './import-handshake';
 
 /**
  * The gate on the /import handshake, tested as pure input.
@@ -61,5 +61,57 @@ describe('trustedImport', () => {
       trustedImport(event({ data: { type: PAYLOAD, url: post.url, node: [] } }), opener),
     ).toBeUndefined();
     expect(trustedImport(event({ data: undefined }), opener)).toBeUndefined();
+  });
+});
+
+/**
+ * Transport v2: the post arrives in the URL fragment instead of over a popup message. The reader
+ * must accept a well-formed one, refuse anything else, and — every time — clear the fragment from
+ * history so the signed media links it carries do not linger in the URL.
+ */
+describe('readImportFragment', () => {
+  const post = {
+    url: 'https://www.instagram.com/p/DcOX3hWFiey/',
+    node: { code: 'DcOX3hWFiey', media_type: 1 },
+  };
+  const frag = (payload: unknown) =>
+    `#v=${FRAGMENT_VERSION}&p=${encodeURIComponent(JSON.stringify(payload))}`;
+
+  function windowWith(hash: string): { win: Window; replacedTo: () => string | undefined } {
+    const replaced: string[] = [];
+    const win = {
+      location: { hash, pathname: '/import', search: '' },
+      history: {
+        replaceState: (_state: unknown, _title: string, url: string) => replaced.push(url),
+      },
+    } as unknown as Window;
+    return { win, replacedTo: () => replaced.at(-1) };
+  }
+
+  it('reads a well-formed post and clears the fragment from history', () => {
+    const { win, replacedTo } = windowWith(frag(post));
+    expect(readImportFragment(win)).toEqual(post);
+    // The hash is gone from the current history entry.
+    expect(replacedTo()).toBe('/import');
+  });
+
+  it('ignores a fragment that is not this transport version', () => {
+    expect(
+      readImportFragment(windowWith(`#v=1&p=${encodeURIComponent(JSON.stringify(post))}`).win),
+    ).toBeUndefined();
+    expect(readImportFragment(windowWith('#something-else').win)).toBeUndefined();
+    expect(readImportFragment(windowWith('').win)).toBeUndefined();
+  });
+
+  it('refuses a malformed payload but still clears it from history', () => {
+    const { win, replacedTo } = windowWith(`#v=${FRAGMENT_VERSION}&p=%7Bnot-json`);
+    expect(readImportFragment(win)).toBeUndefined();
+    expect(replacedTo()).toBe('/import');
+  });
+
+  it('refuses a payload that is not shaped like a post', () => {
+    for (const bad of [{ url: 42, node: {} }, { url: post.url }, { url: post.url, node: [] }, {}]) {
+      expect(readImportFragment(windowWith(frag(bad)).win), JSON.stringify(bad)).toBeUndefined();
+    }
   });
 });
