@@ -393,3 +393,9 @@ link. Two consequences, both handled on the client so a recipient is never harme
   measured worst case and below where a browser gives up.
 - **Still inert.** The bookmarklet loads, fetches and evaluates no code; its one network call reads
   Instagram's media endpoint for data, never the SERA origin. Asserted in `bookmarklet.test.ts`.
+- **Diagnostic alerts carry nothing sensitive.** A phone has no devtools, so each failure `alert`s a
+  plain reason — but only the HTTP status, Instagram's own short `message` field (clipped to 120
+  chars), an error name, or a KB count. Never a response body, a URL, or a cookie. The bookmarklet
+  reads the body as text and parses it itself so a redirect or a non-JSON login page is reported as
+  "sign in on the website" rather than thrown into a generic catch. A test asserts no `alert` in the
+  built source contains a URL, CDN host, cookie or the serialized payload.

@@ -119,7 +119,10 @@ describe('readImportFragment', () => {
       'https://cdninstagram.com.evil.example/x.jpg', // lookalike host
       'not-a-url',
     ]) {
-      expect(readImportFragment(windowWith(frag(image(bad))).win), bad).toEqual({ ok: false });
+      expect(readImportFragment(windowWith(frag(image(bad))).win), bad).toEqual({
+        ok: false,
+        reason: 'off-cdn',
+      });
     }
   });
 
@@ -135,12 +138,15 @@ describe('readImportFragment', () => {
         ],
       },
     };
-    expect(readImportFragment(windowWith(frag(mixed)).win)).toEqual({ ok: false });
+    expect(readImportFragment(windowWith(frag(mixed)).win)).toEqual({
+      ok: false,
+      reason: 'off-cdn',
+    });
   });
 
   it('refuses an oversized fragment before decoding it, and still clears it', () => {
     const { win, replacedTo } = windowWith(`#v=${FRAGMENT_VERSION}&p=${'A'.repeat(70_000)}`);
-    expect(readImportFragment(win)).toBeUndefined();
+    expect(readImportFragment(win)).toEqual({ ok: false, reason: 'too-large' });
     expect(replacedTo()).toBe('/import');
   });
 

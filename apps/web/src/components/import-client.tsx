@@ -77,14 +77,23 @@ export function ImportClient() {
         setPhase('waiting');
         importMedia(fragmentResult.request, controller.signal).then(onResolved).catch(showError);
       } else {
-        // A crafted link pointing at media off Instagram's CDN. Refuse it here and POST nothing —
-        // the server would count the block as abuse against this browser's own address.
-        setError({
-          code: 'BLOCKED_ADDRESS',
-          message: 'That link points at media somewhere other than Instagram.',
-          hint: 'Open the post on Instagram and send it from there.',
-          retryable: false,
-        });
+        // Refused before any POST. Off-CDN media on a crafted link would otherwise cost this
+        // browser's own address an abuse strike; an oversized fragment is a broken or hostile link.
+        setError(
+          fragmentResult.reason === 'too-large'
+            ? {
+                code: 'TOO_LARGE',
+                message: 'That import link is too large to open.',
+                hint: 'Open the post on Instagram and send it again.',
+                retryable: false,
+              }
+            : {
+                code: 'BLOCKED_ADDRESS',
+                message: 'That link points at media somewhere other than Instagram.',
+                hint: 'Open the post on Instagram and send it from there.',
+                retryable: false,
+              },
+        );
         setPhase('error');
       }
       return () => controller.abort();
@@ -172,9 +181,22 @@ function HowItWorks() {
         the post and sends just the media here. Your Instagram login never reaches SERA.
       </p>
 
+      {/* The one thing a phone user most often misses, so it leads and stands out. */}
+      <div className="rounded-[var(--radius-panel)] border border-[var(--color-accent)]/40 bg-[var(--color-accent)]/8 px-4 py-3.5">
+        <p className="text-[0.9375rem] leading-relaxed text-[var(--color-ink)]">
+          <span className="font-semibold">First — sign in to instagram.com in this browser.</span>{' '}
+          <span className="text-[var(--color-ink-muted)]">
+            The Instagram app’s login doesn’t carry over; you have to be logged in on the website
+            itself, in the same browser you run SERA from. From the app, tap Share → Copy link and
+            open that link in your browser (on iPhone, if it opens the app, paste the link into
+            Safari’s address bar).
+          </span>
+        </p>
+      </div>
+
       <div className="flex flex-col gap-3 rounded-[var(--radius-panel)] border border-[var(--color-line)] bg-[var(--color-surface)] p-4 sm:p-5">
         <p className="text-[0.8125rem] font-medium tracking-wide text-[var(--color-ink-faint)] uppercase">
-          Install it, once
+          Then install it, once
         </p>
         <BookmarkletLink />
         <div className="flex flex-col gap-2.5 text-[0.8125rem] leading-relaxed text-[var(--color-ink-muted)]">
@@ -196,18 +218,10 @@ function HowItWorks() {
         </div>
       </div>
 
-      <div className="rounded-[var(--radius-panel)] border border-[var(--color-line)] bg-[var(--color-sunken)] px-4 py-3 text-[0.8125rem] leading-relaxed text-[var(--color-ink-muted)]">
-        You have to be{' '}
-        <span className="font-medium text-[var(--color-ink)]">
-          signed in to instagram.com in this browser
-        </span>
-        . It doesn’t work from the Instagram app — in the app, tap Share → Copy link and open that
-        link in your browser. On iPhone, if the link opens the app instead of Safari, paste it into
-        Safari’s address bar.
-      </div>
-
       <ol className="flex flex-col gap-3 text-[0.9375rem] text-[var(--color-ink-muted)]">
-        <Step n={1}>Open the photo post or carousel on instagram.com, signed in.</Step>
+        <Step n={1}>
+          Open the photo post or carousel on instagram.com, signed in <span>(see above)</span>.
+        </Step>
         <Step n={2}>
           Run the <span className="font-medium">SERA</span> bookmark:
           <span className="mt-1 block text-[0.8125rem] text-[var(--color-ink-faint)]">
