@@ -37,8 +37,8 @@ describe('buildBookmarklet', () => {
   });
 
   it('hands the post to /import in the URL fragment the page reads', () => {
-    expect(source).toContain(`'/import#v='+"${FRAGMENT_VERSION}"+'&p='`);
-    expect(source).toContain('location.href=SERA+');
+    expect(source).toContain(`var href=SERA+'/import#v='+"${FRAGMENT_VERSION}"+'&p='`);
+    expect(source).toContain('location.href=href');
     expect(source).toContain('encodeURIComponent(JSON.stringify(payload))');
   });
 
@@ -46,8 +46,8 @@ describe('buildBookmarklet', () => {
     expect((source.match(/\bfetch\s*\(/g) ?? []).length).toBe(1);
     expect(source).toContain("fetch('/api/v1/media/'+");
     expect(source).not.toMatch(/fetch\s*\(\s*SERA|fetch\s*\(\s*['"]https?:/);
-    // The SERA origin is only ever a navigation target, never used to build a URL that loads code.
-    expect(source).toContain('location.href=SERA+');
+    // The SERA origin is only ever used to build the navigation target, never to load code.
+    expect(source).toContain("var href=SERA+'/import");
     expect(source).not.toMatch(/(?:src|href)\s*=\s*[^;]*SERA\s*\+\s*[^;]*\.(?:js|json)\b/);
   });
 
@@ -70,6 +70,18 @@ describe('buildBookmarklet', () => {
     expect(source).toContain('function widest(');
     expect(source).toContain('out.image_versions2={candidates:[img]}');
     expect(source).toContain('out.video_versions=[vid]');
+  });
+
+  it('caps the caption and alt text so a chatty post does not blow the URL out', () => {
+    // The server truncates titles to 200 and 120 anyway, so nothing shown is lost.
+    expect(source).toContain('clip(n.caption.text,300)');
+    expect(source).toContain('clip(n.accessibility_caption,150)');
+  });
+
+  it('refuses to navigate to an over-long URL instead of producing one that might fail', () => {
+    // Measured: even a 20-slide carousel with videos is ~36 KB; the cap sits above that.
+    expect(source).toContain('href.length>60000');
+    expect(source).toMatch(/if\(href\.length>60000\)\{alert\([^)]*\);return;\}/);
   });
 
   it('carries a shortcode→id decode that matches Instagram’s own numbering', () => {
