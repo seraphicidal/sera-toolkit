@@ -176,7 +176,8 @@ function mediaUrlsOf(node: unknown): string[] {
  * through to the v1 path or the explainer.
  */
 export type ImportFragment =
-  { readonly ok: true; readonly request: ImportRequest } | { readonly ok: false };
+  | { readonly ok: true; readonly request: ImportRequest }
+  | { readonly ok: false; readonly reason: 'off-cdn' | 'too-large' };
 
 /**
  * Transport v2: a post the bookmarklet placed in the URL fragment.
@@ -199,14 +200,15 @@ export function readImportFragment(target: Window): ImportFragment | undefined {
   const hash = target.location.hash;
   if (!new RegExp(`[#&]v=${FRAGMENT_VERSION}(?:&|$)`).test(hash)) return undefined;
   // Capped before it is decoded or parsed. Still cleared, below, whether or not it is over.
-  const encoded =
-    hash.length > MAX_IMPORT_FRAGMENT_LENGTH ? undefined : /[#&]p=([^&]*)/.exec(hash)?.[1];
+  const tooLong = hash.length > MAX_IMPORT_FRAGMENT_LENGTH;
+  const encoded = tooLong ? undefined : /[#&]p=([^&]*)/.exec(hash)?.[1];
 
   try {
     target.history.replaceState(null, '', target.location.pathname + target.location.search);
   } catch {
     // A browser that refuses replaceState still works; the fragment just stays in the URL.
   }
+  if (tooLong) return { ok: false, reason: 'too-large' };
   if (!encoded) return undefined;
 
   let request: unknown;
@@ -218,6 +220,6 @@ export function readImportFragment(target: Window): ImportFragment | undefined {
   if (!looksLikeImport(request)) return undefined;
 
   const urls = mediaUrlsOf(request.node);
-  if (urls.some((url) => !onInstagramCdn(url))) return { ok: false };
+  if (urls.some((url) => !onInstagramCdn(url))) return { ok: false, reason: 'off-cdn' };
   return { ok: true, request };
 }
