@@ -22,6 +22,30 @@ describe('buildBookmarklet', () => {
     expect(source).not.toMatch(/import\s+[\w{*]|\brequire\(|createElement\(['"]script/);
   });
 
+  it('loads no code and evaluates nothing — the whole trust boundary', () => {
+    // It runs on instagram.com with the visitor's session. If it could pull or run code from
+    // SERA, a compromised SERA server would be a compromise of every user's Instagram account.
+    // So: no eval, no Function constructor, no dynamic import, no script injection, no writing
+    // markup, and no scheduling a string.
+    expect(source).not.toMatch(
+      /\beval\s*\(|\bnew\s+Function\b|\bFunction\s*\(|\bimport\s*\(|importScripts|document\.write|inner(HTML|Text)|outerHTML|insertAdjacent|\bsrc\s*=|setTimeout\s*\(\s*['"]|setInterval\s*\(\s*['"]/,
+    );
+  });
+
+  it('makes its one request to Instagram, never to the SERA origin', () => {
+    // The single fetch reads Instagram's own media-info endpoint, same-origin on instagram.com,
+    // for DATA. Nothing is ever fetched from SERA — SERA only receives, over postMessage.
+    expect((source.match(/\bfetch\s*\(/g) ?? []).length).toBe(1);
+    expect(source).toContain("fetch('/api/v1/media/'+");
+    expect(source).not.toMatch(/fetch\s*\(\s*SERA|fetch\s*\(\s*['"]https?:/);
+    // The SERA origin is used only as a window.open target, a postMessage targetOrigin, and the
+    // origin the reply is checked against — never to build a URL that fetches or loads code.
+    expect(source).toContain("window.open(SERA+'/import'");
+    expect(source).toContain(',SERA)'); // postMessage targetOrigin
+    expect(source).toContain('e.origin===SERA');
+    expect(source).not.toMatch(/(?:src|href)\s*=\s*[^;]*SERA|SERA\s*\+\s*[^;]*\.(?:js|json)\b/);
+  });
+
   it('sends only to the SERA origin it was built for, with no trailing slash', () => {
     const trimmed = decodeURIComponent(
       buildBookmarklet('https://sera.example/').replace(/^javascript:/, ''),
