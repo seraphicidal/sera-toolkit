@@ -4,7 +4,7 @@ import { pipeline } from 'node:stream/promises';
 import { Transform } from 'node:stream';
 import type { Dispatcher } from 'undici';
 import { seraError, SeraError } from '../errors.js';
-import { header, safeOpen } from '../security/http.js';
+import { discard, header, safeOpen } from '../security/http.js';
 
 /**
  * Streams a media URL straight to disk through the SSRF-guarded client.
@@ -22,6 +22,8 @@ export interface DirectDownloadRequest {
   readonly maxBytes: number;
   readonly timeoutMs: number;
   readonly signal?: AbortSignal;
+  /** Checked on every hop; see `SafeFetchOptions.allowUrl`. */
+  readonly allowUrl?: (url: URL) => boolean;
   readonly onProgress?: (progress: {
     bytesDownloaded: number;
     bytesTotal?: number;
@@ -46,11 +48,15 @@ export async function downloadDirect(
   const opened = await safeOpen(new URL(request.url), {
     dispatcher: request.dispatcher,
     timeoutMs: request.timeoutMs,
+    ...(request.allowUrl ? { allowUrl: request.allowUrl } : {}),
     ...(request.signal ? { signal: request.signal } : {}),
   });
 
   if (opened.status >= 400) {
-    opened.body.destroy();
+    // discard, not a raw destroy: undici raises an AbortError from destroy() that surfaces as
+    // an unhandled rejection unless a listener is already on the body. A CDN answering 403 to
+    // an expired signed URL is the ordinary way this path is reached.
+    discard(opened.body);
     throw seraError(opened.status === 404 ? 'MEDIA_UNAVAILABLE' : 'NETWORK_ERROR', {
       detail: `GET ${opened.status}`,
     });
@@ -59,7 +65,7 @@ export async function downloadDirect(
   const declared = Number(header(opened.headers, 'content-length'));
   const bytesTotal = Number.isFinite(declared) && declared > 0 ? declared : undefined;
   if (bytesTotal && bytesTotal > request.maxBytes) {
-    opened.body.destroy();
+    discard(opened.body);
     throw seraError('TOO_LARGE', { detail: `content-length ${bytesTotal} > ${request.maxBytes}` });
   }
 

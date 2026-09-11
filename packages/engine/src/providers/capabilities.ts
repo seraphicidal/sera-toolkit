@@ -28,6 +28,7 @@ export const DEFAULT_CAPABILITIES: ProviderCapabilities = {
   requiresOauth: false,
   residentialFallback: true,
   cloudExtraction: true,
+  browserImport: false,
 };
 
 /** A provider's capabilities: the defaults above, with its differences applied. */

@@ -1,5 +1,6 @@
-import { createHmac } from 'node:crypto';
-import type { DownloadOption, MediaInfo, MediaItem } from '@sera/contracts/types';
+import { createHash, createHmac } from 'node:crypto';
+import { MAX_INFO_TOKEN_LENGTH } from '@sera/contracts';
+import type { DownloadOption, ImportRequest, MediaInfo, MediaItem } from '@sera/contracts/types';
 import type { Dispatcher } from 'undici';
 import type { EngineConfig } from './config.js';
 import { seraError, SeraError } from './errors.js';
@@ -13,6 +14,21 @@ import {
 import type { YtdlpInfo } from './extract/ytdlp-types.js';
 import { createLogger, logSafeUrl, type Logger } from './logging.js';
 import { normalizeForProvider, ProviderRegistry } from './providers/index.js';
+import {
+  assertCdnHosts,
+  authorUrlFor,
+  cdnExpiry,
+  importExpired,
+  INSTAGRAM_MEDIA_HOSTS,
+  isImportedEntries,
+  mediaFromImport,
+  shortcodeFrom,
+  slideCount,
+  slidesFrom,
+  titleFor,
+  type ImportedEntry,
+  type MediaHostPolicy,
+} from './providers/instagram-media.js';
 import type {
   DownloadPlan,
   ProviderContext,
@@ -21,9 +37,9 @@ import type {
 } from './providers/types.js';
 import { planKey } from './providers/types.js';
 import { createSafeDispatcher, header, safeFetch } from './security/http.js';
-import { normalizeUrl, parseUserUrl } from './security/url.js';
+import { hostMatchesAny, normalizeUrl, parseUserUrl } from './security/url.js';
 import { TtlCache } from './util/cache.js';
-import { signToken, verifyToken } from './util/tokens.js';
+import { readToken, signToken, verifyToken } from './util/tokens.js';
 
 /**
  * Turns a pasted link into the model the UI renders.
@@ -56,11 +72,46 @@ interface OptionTokenPayload {
 interface InfoTokenPayload {
   readonly u: string;
   readonly p: string;
+  /**
+   * Where the resolution came from when this server did not make it: `visitor` for a post
+   * the visitor's own browser read and sent. Absent on every ordinary resolution.
+   */
+  readonly o?: 'visitor';
+  /**
+   * The media approved from that post. A job fetches exactly these and re-resolves nothing,
+   * because nothing on this side can read the post again.
+   */
+  readonly m?: readonly ImportedEntry[];
+  /** The post's title and author, for naming files, for the same reason. */
+  readonly t?: string;
+  readonly a?: string;
+  /** The earliest expiry Instagram signed into those URLs, epoch seconds. */
+  readonly x?: number;
 }
 
 interface ThumbTokenPayload {
   readonly t: string;
 }
+
+/** What an imported post signs into its resolution token besides the link. */
+interface ImportedSignature {
+  readonly entries: readonly ImportedEntry[];
+  readonly title: string;
+  readonly author?: string;
+  readonly expiresAt?: number;
+}
+
+/**
+ * The lifetime of an imported post whose media URLs carry no expiry of their own. Instagram's
+ * always do; one without is unusual enough not to be given the full option lifetime.
+ */
+const IMPORT_UNSIGNED_TTL_SECONDS = 600;
+
+/**
+ * Less than this left, and an import is refused as expired. It is about what choosing a
+ * format takes, and a token that lapses while someone is still choosing helps nobody.
+ */
+const IMPORT_MIN_REMAINING_SECONDS = 60;
 
 export interface ResolverDependencies {
   readonly config: EngineConfig;
@@ -72,6 +123,11 @@ export interface ResolverDependencies {
    * in later is usable without restarting the API.
    */
   readonly remoteBackends?: () => readonly ExtractionBackend[];
+  /**
+   * Where the media of a post a visitor's browser sends may be fetched from. Instagram's CDN
+   * unless a test says otherwise; see `EngineOptions.importHosts`.
+   */
+  readonly importHosts?: MediaHostPolicy;
   /** Overridable so tests can exercise the whole pipeline with no yt-dlp installed. */
   readonly probe?: (
     url: string,
@@ -91,6 +147,8 @@ export class MediaResolver {
   readonly logger: Logger;
   readonly registry: ProviderRegistry;
   readonly dispatcher: Dispatcher;
+  /** Hosts an imported post's media may come from. The runner checks them on every hop. */
+  readonly importHosts: MediaHostPolicy;
 
   private readonly probeImpl: NonNullable<ResolverDependencies['probe']>;
   /** Short-lived, so submitting a job just after analyzing does not re-hit the provider. */
@@ -98,6 +156,7 @@ export class MediaResolver {
 
   constructor(deps: ResolverDependencies) {
     this.config = deps.config;
+    this.importHosts = deps.importHosts ?? INSTAGRAM_MEDIA_HOSTS;
     this.logger =
       deps.logger ??
       createLogger({ level: deps.config.logLevel, pretty: !deps.config.isProduction });
@@ -269,6 +328,190 @@ export class MediaResolver {
   }
 
   /**
+   * Accepts a post the visitor's own signed-in browser read.
+   *
+   * The answer to "photo posts need an account" that does not put an account on this server.
+   * The browser that is already signed in reads the one post it is showing and sends it here.
+   * Nothing in the request is believed: the media is derived with the same functions the
+   * operator's session route uses, only URLs on Instagram's CDN are admitted, and what was
+   * admitted is signed into the resolution token — so a job fetches exactly that, and nothing
+   * a client adds afterwards.
+   *
+   * It makes no request of its own. There is nothing to ask Instagram that the visitor's
+   * browser has not just asked, and nothing on this side to ask it with.
+   */
+  importSubmitted(request: ImportRequest, requestId?: string, now = Date.now()): MediaInfo {
+    const started = Date.now();
+    let source = '(unparsed)';
+
+    try {
+      const { url } = parseUserUrl(request.url, {
+        allowPrivateAddresses: this.config.allowPrivateAddresses,
+      });
+      source = logSafeUrl(url);
+      if (hostMatchesAny(url.hostname, this.config.blockedHosts)) {
+        throw seraError('UNSUPPORTED_SOURCE', { detail: 'host is on the deny list' });
+      }
+      const provider = this.registry.detect(url);
+      if (provider?.id !== 'instagram' || !provider.capabilities.browserImport) {
+        throw seraError('UNSUPPORTED_SOURCE', {
+          message: 'Only Instagram posts can be sent from your browser.',
+          detail: `import: no importing provider for ${url.hostname}`,
+        });
+      }
+
+      const canonical = normalizeUrl(normalizeForProvider(provider, url));
+      const shortcode = shortcodeFrom(canonical);
+      if (!shortcode) {
+        throw seraError('UNSUPPORTED_SOURCE', {
+          message: 'Open a single post on Instagram, then send it.',
+          detail: 'import: the link is not a post',
+        });
+      }
+      // A consistency check, not a boundary: the sender controls both values. What it catches
+      // is an honest race, the page moving on to another post between reading one and
+      // sending it.
+      if (request.node.code !== undefined && request.node.code !== shortcode) {
+        throw seraError('INVALID_URL', {
+          message: "That post doesn't match the page it was sent from.",
+          hint: 'Reload the post on Instagram and send it again.',
+          detail: 'import: the shortcode does not match the link',
+        });
+      }
+
+      const count = slideCount(request.node);
+      if (count > this.config.maxItemsPerJob) {
+        throw seraError('TOO_LARGE', {
+          message: `A single download can include at most ${this.config.maxItemsPerJob} items.`,
+          detail: `import: ${count} slides`,
+        });
+      }
+      const slides = slidesFrom(request.node, count);
+      if (!slides.length) {
+        throw seraError('MEDIA_UNAVAILABLE', {
+          message: 'That post has no photos or videos to download.',
+          detail: 'import: no usable media',
+        });
+      }
+
+      const entries = slides.map((slide) => slide.entry);
+      // The thumbnails as well: the proxy fetches those, so they are destinations too.
+      assertCdnHosts(
+        [
+          ...entries.map((entry) => entry.url),
+          ...slides.flatMap((slide) => (slide.thumbnailUrl ? [slide.thumbnailUrl] : [])),
+        ],
+        this.importHosts,
+      );
+
+      const { ttlSeconds, expiresAt } = this.importLifetime(entries, now);
+      const { title, author } = titleFor(request.node);
+      const resolved = mediaFromImport({
+        url: canonical.toString(),
+        title,
+        ...(author ? { author } : {}),
+        entries,
+      });
+
+      // What the person choosing sees and a job has no use for, laid over the resolution the
+      // job will rebuild. None of it is signed, so none of it can change what gets fetched.
+      const authorUrl = authorUrlFor(request.node);
+      const cover = slides[0]?.thumbnailUrl;
+      const presented: ResolvedMedia = {
+        ...resolved,
+        ...(authorUrl ? { authorUrl } : {}),
+        ...(cover ? { thumbnailUrl: cover } : {}),
+        items: resolved.items.map((item, index) => {
+          const slide = slides[index];
+          return {
+            ...item,
+            ...(slide ? { title: slide.title } : {}),
+            ...(slide?.thumbnailUrl ? { thumbnailUrl: slide.thumbnailUrl } : {}),
+          };
+        }),
+      };
+
+      const info = this.toMediaInfo(presented, {
+        ttlSeconds,
+        imported: {
+          entries,
+          title,
+          ...(author ? { author } : {}),
+          ...(expiresAt !== undefined ? { expiresAt } : {}),
+        },
+      });
+      // Refused where the token is made, so the ceiling is never discovered at the moment
+      // someone presses Download.
+      if (info.id.length > MAX_INFO_TOKEN_LENGTH) {
+        throw seraError('TOO_LARGE', {
+          message: 'That post is too large to download in one go.',
+          detail: `import: a resolution token of ${info.id.length} characters`,
+        });
+      }
+
+      this.logger.info(
+        {
+          ...(requestId ? { requestId } : {}),
+          provider: provider.id,
+          source,
+          strategy: 'visitor-browser',
+          mediaType: resolved.type,
+          mediaKinds: [...new Set(entries.map((entry) => entry.kind))],
+          items: entries.length,
+          ttlSeconds,
+          durationMs: Date.now() - started,
+        },
+        'imported',
+      );
+      return info;
+    } catch (error) {
+      const failure = SeraError.from(error);
+      this.logger.info(
+        {
+          ...(requestId ? { requestId } : {}),
+          provider: 'instagram',
+          source,
+          strategy: 'visitor-browser',
+          errorCode: failure.code,
+          detail: failure.detail,
+        },
+        'import refused',
+      );
+      throw failure;
+    }
+  }
+
+  /**
+   * How long an imported post stays usable, and when the links in it run out.
+   *
+   * The ordinary option lifetime, unless Instagram's own signature ends sooner — a token that
+   * outlived the URLs inside it would only turn into a 403 at download time. A URL with no
+   * expiry signed into it gets a short window instead, because its real lifetime is unknown.
+   */
+  private importLifetime(
+    entries: readonly ImportedEntry[],
+    now: number,
+  ): { ttlSeconds: number; expiresAt?: number } {
+    const nowSeconds = Math.floor(now / 1000);
+    const known = entries
+      .map((entry) => cdnExpiry(entry.url))
+      .filter((expiry): expiry is number => expiry !== undefined);
+    const expiresAt = known.length ? Math.min(...known) : undefined;
+
+    if (expiresAt !== undefined && expiresAt - nowSeconds < IMPORT_MIN_REMAINING_SECONDS) {
+      throw importExpired('import: the media links have expired, or are about to');
+    }
+
+    const bounds = [this.config.optionTtlSeconds];
+    if (expiresAt !== undefined) bounds.push(expiresAt - nowSeconds);
+    if (known.length < entries.length) bounds.push(IMPORT_UNSIGNED_TTL_SECONDS);
+    return {
+      ttlSeconds: Math.min(...bounds),
+      ...(expiresAt !== undefined ? { expiresAt } : {}),
+    };
+  }
+
+  /**
    * Resolves an already-canonical URL through a known provider.
    *
    * The download pipeline calls this to re-derive a plan at job time, which is why the
@@ -388,12 +631,33 @@ export class MediaResolver {
   /*  Token minting and verification                                     */
   /* ------------------------------------------------------------------ */
 
-  toMediaInfo(resolved: ResolvedMedia): MediaInfo {
-    const ttl = this.config.optionTtlSeconds;
-    const items: MediaItem[] = resolved.items.map((item) => this.toMediaItem(resolved, item, ttl));
+  toMediaInfo(
+    resolved: ResolvedMedia,
+    options: { readonly ttlSeconds?: number; readonly imported?: ImportedSignature } = {},
+  ): MediaInfo {
+    const ttl = options.ttlSeconds ?? this.config.optionTtlSeconds;
+    const { imported } = options;
+    // Once per resolution, not once per option: an imported carousel's digest covers every
+    // URL in it.
+    const hash = this.resolutionHash(resolved.url, resolved.provider, imported?.entries);
+    const items: MediaItem[] = resolved.items.map((item) =>
+      this.toMediaItem(resolved, item, ttl, hash),
+    );
 
     const infoId = signToken<InfoTokenPayload>(
-      { u: resolved.url, p: resolved.provider },
+      {
+        u: resolved.url,
+        p: resolved.provider,
+        ...(imported
+          ? {
+              o: 'visitor' as const,
+              m: imported.entries,
+              t: imported.title,
+              ...(imported.author ? { a: imported.author } : {}),
+              ...(imported.expiresAt !== undefined ? { x: imported.expiresAt } : {}),
+            }
+          : {}),
+      },
       this.config.secret,
       ttl,
     );
@@ -417,10 +681,15 @@ export class MediaResolver {
     };
   }
 
-  private toMediaItem(resolved: ResolvedMedia, item: ResolvedItem, ttl: number): MediaItem {
+  private toMediaItem(
+    resolved: ResolvedMedia,
+    item: ResolvedItem,
+    ttl: number,
+    hash: string,
+  ): MediaItem {
     const itemId = `${resolved.provider}:${item.index}`;
     const options: DownloadOption[] = item.plans.map((plan) =>
-      this.toDownloadOption(resolved, item, plan, itemId, ttl),
+      this.toDownloadOption(item, plan, itemId, ttl, hash),
     );
 
     return {
@@ -440,15 +709,15 @@ export class MediaResolver {
   }
 
   private toDownloadOption(
-    resolved: ResolvedMedia,
     item: ResolvedItem,
     plan: DownloadPlan,
     itemId: string,
     ttl: number,
+    hash: string,
   ): DownloadOption {
     const id = signToken<OptionTokenPayload>(
       {
-        h: this.resolutionHash(resolved.url, resolved.provider),
+        h: hash,
         i: item.index,
         ...(item.sourceId ? { s: item.sourceId } : {}),
         k: planKey(plan),
@@ -496,10 +765,40 @@ export class MediaResolver {
     return payload.t;
   }
 
-  verifyInfoId(infoId: string): InfoTokenPayload {
-    const payload = verifyToken<InfoTokenPayload>(infoId, this.config.secret);
+  /**
+   * Recovers a resolution from its token, or throws.
+   *
+   * Expiry is judged here rather than inside the token check, because what to say depends on
+   * what expired. An ordinary resolution is refreshed by analyzing the link again; an imported
+   * post cannot be, since the link alone leads straight back to "needs an account".
+   */
+  verifyInfoId(infoId: string, now = Date.now()): InfoTokenPayload {
+    const payload = readToken<InfoTokenPayload>(infoId, this.config.secret);
     if (typeof payload.u !== 'string' || typeof payload.p !== 'string') {
       throw seraError('EXPIRED', { detail: 'malformed info token' });
+    }
+
+    const imported = payload.o !== undefined || payload.m !== undefined;
+    if (
+      imported &&
+      (payload.o !== 'visitor' || !isImportedEntries(payload.m) || typeof payload.t !== 'string')
+    ) {
+      throw seraError('EXPIRED', { detail: 'malformed import token' });
+    }
+
+    if (payload.e * 1000 < now) {
+      throw imported
+        ? importExpired('import token past its expiry')
+        : seraError('EXPIRED', { detail: 'token past its expiry' });
+    }
+
+    if (payload.m) {
+      // Signed here, so these passed when the token was made. Checked again because the host
+      // list is allowed to tighten in between, and a token must not outlive that.
+      assertCdnHosts(
+        payload.m.map((entry) => entry.url),
+        this.importHosts,
+      );
     }
     return payload;
   }
@@ -521,17 +820,39 @@ export class MediaResolver {
    *
    * Keyed rather than plain: a plain hash of a public URL could be recomputed by anyone,
    * which would let a client mint option tokens for a resolution the server never ran.
+   *
+   * An imported post is identified by the media approved from it as well as by its link.
+   * Two imports of one post can carry different media — a forged one and a real one, say —
+   * and an option minted for one must not be spendable against the other.
    */
-  resolutionHash(url: string, provider: string): string {
-    return (
-      createHmac('sha256', this.config.secret)
-        // A NUL separator: it cannot occur in either value, so no provider/URL pair
-        // can be made to collide with another by moving the boundary.
-        .update(`${provider}\u0000${url}`)
-        .digest('base64url')
-        .slice(0, 22)
-    );
+  resolutionHash(url: string, provider: string, imported?: readonly ImportedEntry[]): string {
+    const hmac = createHmac('sha256', this.config.secret)
+      // A NUL separator: it cannot occur in either value, so no provider/URL pair
+      // can be made to collide with another by moving the boundary.
+      .update(`${provider}\u0000${url}`);
+    if (imported) hmac.update(NUL).update('visitor').update(NUL).update(importDigest(imported));
+    return hmac.digest('base64url').slice(0, 22);
   }
+}
+
+/** The separator byte in a resolution hash. It cannot occur in any of the parts it separates. */
+const NUL = Buffer.alloc(1);
+
+/**
+ * A digest of an imported post's approved media, over a spelling fixed here rather than
+ * whatever key order a trip through JSON happens to produce.
+ */
+function importDigest(entries: readonly ImportedEntry[]): string {
+  const canonical = entries.map((entry) => [
+    entry.s,
+    entry.kind,
+    entry.url,
+    entry.w ?? null,
+    entry.h ?? null,
+    entry.container,
+    entry.d ?? null,
+  ]);
+  return createHash('sha256').update(JSON.stringify(canonical)).digest('base64url');
 }
 
 export type { OptionTokenPayload, InfoTokenPayload };

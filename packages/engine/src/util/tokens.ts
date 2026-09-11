@@ -42,16 +42,15 @@ export function signToken<T extends object>(
 }
 
 /**
- * Verifies and decodes a token.
+ * Verifies a token's signature and decodes it, leaving its expiry to the caller.
+ *
+ * For the caller that has to know what an expired token was before it can say so usefully.
+ * Everything else wants `verifyToken`, which refuses one outright.
  *
  * The signature is checked before the payload is parsed, so malformed JSON from an
  * attacker never reaches `JSON.parse`, and comparison is constant-time.
  */
-export function verifyToken<T extends object>(
-  token: string,
-  secret: Buffer,
-  now = Date.now(),
-): T & SignedPayload {
+export function readToken<T extends object>(token: string, secret: Buffer): T & SignedPayload {
   const index = token.indexOf(SEPARATOR);
   if (index <= 0 || index === token.length - 1) {
     throw seraError('EXPIRED', { detail: 'malformed token' });
@@ -75,7 +74,20 @@ export function verifyToken<T extends object>(
   }
 
   const payload = parsed as T & SignedPayload;
-  if (typeof payload.e !== 'number' || payload.e * 1000 < now) {
+  if (typeof payload.e !== 'number') {
+    throw seraError('EXPIRED', { detail: 'token past its expiry' });
+  }
+  return payload;
+}
+
+/** Verifies and decodes a token, refusing one past its expiry. */
+export function verifyToken<T extends object>(
+  token: string,
+  secret: Buffer,
+  now = Date.now(),
+): T & SignedPayload {
+  const payload = readToken<T>(token, secret);
+  if (payload.e * 1000 < now) {
     throw seraError('EXPIRED', { detail: 'token past its expiry' });
   }
   return payload;

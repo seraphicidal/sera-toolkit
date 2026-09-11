@@ -9,6 +9,7 @@ import {
   mediaIdFor,
   oembedFor,
   sessionHeaders,
+  shortcodeFrom,
   titleFor,
   type InstagramNode,
 } from './instagram-media.js';
@@ -60,6 +61,9 @@ export class InstagramProvider extends YtdlpProvider {
       // The operator may configure a session of their own. Whether one is set is the
       // line above; this says the mechanism exists.
       authenticatedMode: true,
+      // And the route that needs no session on this side at all: the visitor's own browser,
+      // signed in already, reads the post and sends it. Available whether or not one is set.
+      browserImport: true,
       ...(withSession ? {} : { authRequiredFor: ['photo posts', 'carousels'] }),
     });
   }
@@ -85,7 +89,7 @@ export class InstagramProvider extends YtdlpProvider {
    * anything a client can see.
    */
   private async viaSession(url: URL, context: ProviderContext): Promise<ResolvedMedia> {
-    const shortcode = /\/(?:p|reel|reels|tv)\/([A-Za-z0-9_-]+)/.exec(url.pathname)?.[1];
+    const shortcode = shortcodeFrom(url);
     if (!shortcode) throw seraError('UNSUPPORTED_SOURCE', { detail: 'instagram: no shortcode' });
 
     const mediaId = await mediaIdFor(shortcode, (endpoint, maxBytes) =>
@@ -191,7 +195,7 @@ export class InstagramProvider extends YtdlpProvider {
       if (failure.code !== 'UNSUPPORTED_SOURCE') throw failure;
       throw seraError('PROVIDER_AUTH_REQUIRED', {
         message: 'Instagram photo posts need an account, and this server does not have one.',
-        hint: "Reels and video posts work. Instagram stopped serving photographs to anonymous clients, and offers no API that returns another account's posts.",
+        hint: 'Reels and video posts work. A photo post can still be sent to SERA from your own browser, where you are already signed in to Instagram.',
         detail: failure.detail ?? 'instagram: no video in post',
       });
     }

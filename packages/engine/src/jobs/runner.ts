@@ -8,6 +8,13 @@ import { downloadDirect } from '../extract/direct-download.js';
 import { download as ytdlpDownload } from '../extract/ytdlp.js';
 import { classifyFailure } from '../extract/failure.js';
 import { logSafeUrl, type Logger } from '../logging.js';
+import {
+  importExpired,
+  importRefused,
+  isAllowedMediaUrl,
+  mediaFromImport,
+  type ImportedEntry,
+} from '../providers/instagram-media.js';
 import type { DownloadPlan, ResolvedItem, ResolvedMedia } from '../providers/types.js';
 import { planKey } from '../providers/types.js';
 import { contradicts, sniffContainer, sniffTextImposter, SNIFF_BYTES } from '../util/sniff.js';
@@ -44,6 +51,24 @@ export interface JobSpec {
   readonly packaging: PackagingMode;
   /** User-supplied filename stem. Sanitized before use. */
   readonly filename?: string;
+  /**
+   * Present when the job came from a post the visitor's own browser read.
+   *
+   * A job like that fetches these and never re-resolves: nothing on this side can read the
+   * post again, which is the point — there is no session here to read it with.
+   */
+  readonly imported?: ImportedJob;
+}
+
+/** A post the visitor's browser read, as the server approved and signed it. */
+export interface ImportedJob {
+  /** The media to fetch, exactly as signed. */
+  readonly entries: readonly ImportedEntry[];
+  /** For naming the files. */
+  readonly title: string;
+  readonly author?: string;
+  /** When Instagram stops honouring the earliest of those URLs, epoch seconds. */
+  readonly expiresAt?: number;
 }
 
 export interface JobUpdate {
@@ -89,8 +114,18 @@ export class JobRunner {
     report({ state: 'resolving', step: 'Reading the link', progress: { percent: 0 } });
 
     // Re-resolving rather than trusting a URL from the client is what keeps expired CDN
-    // links, and forged ones, out of the pipeline.
-    const resolved = await resolver.resolveCanonical(new URL(spec.url), spec.provider, signal);
+    // links, and forged ones, out of the pipeline. An imported post is the exception, and not
+    // a hole in that rule: it cannot be re-read, so its media was checked against Instagram's
+    // hosts when it arrived and signed into the token this spec came from. The client has had
+    // no chance to change a byte of it since.
+    const resolved = spec.imported
+      ? mediaFromImport({
+          url: spec.url,
+          title: spec.imported.title,
+          ...(spec.imported.author ? { author: spec.imported.author } : {}),
+          entries: spec.imported.entries,
+        })
+      : await resolver.resolveCanonical(new URL(spec.url), spec.provider, signal);
     const matched = spec.selections.map((selection) => matchSelection(resolved, selection));
 
     assertWithinLimits(matched, config);
@@ -158,6 +193,7 @@ export class JobRunner {
     } else {
       for (const [index, { item, plan }] of matched.entries()) {
         if (signal?.aborted) throw seraError('CANCELLED');
+        if (spec.imported) assertImportFresh(spec.imported);
 
         const fileProgress = (fraction: number, extra: Partial<JobProgress> = {}): JobProgress => ({
           percent: Math.min(99, ((index + Math.min(fraction, 1)) / totalFiles) * 100),
@@ -173,6 +209,7 @@ export class JobRunner {
           index,
           report,
           fileProgress,
+          ...(spec.imported ? { imported: true } : {}),
           ...(signal ? { signal } : {}),
         });
         if (used !== plan) delivered.push({ requested: plan.label, actual: used.label });
@@ -202,11 +239,13 @@ export class JobRunner {
 
     const packaged = await this.package(spec, resolved, workspace, produced, report, signal);
     // Said out loud rather than left for someone to notice in the pixels: which backend
-    // produced this, and anything that had to be met with a different rendition.
+    // produced this, and anything that had to be met with a different rendition. An imported
+    // post names the visitor's browser, because that is where the post was read.
+    const backend = spec.imported ? 'visitor-browser' : (remoteBackend ?? 'local');
     const result: JobResult = {
       ...packaged,
       delivery: {
-        backend: remoteBackend ?? 'local',
+        backend,
         ...(delivered.length ? { substituted: delivered } : {}),
       },
     };
@@ -219,7 +258,7 @@ export class JobRunner {
         jobId: spec.jobId,
         provider: spec.provider,
         source: logSafeUrl(spec.url),
-        strategy: remoteBackend ?? 'local',
+        strategy: backend,
         ...(delivered.length ? { substituted: delivered } : {}),
         mediaType: resolved.type,
         mediaKinds: [...new Set(matched.map(({ item }) => item.kind))],
@@ -260,6 +299,8 @@ export class JobRunner {
     index: number;
     report: ReportFn;
     fileProgress: (fraction: number, extra?: Partial<JobProgress>) => JobProgress;
+    /** The item came from a post the visitor's browser read. */
+    imported?: boolean;
     signal?: AbortSignal;
   }): Promise<{ path: string; plan: DownloadPlan }> {
     const candidates = [args.plan, ...lowerQualityAlternatives(args.item, args.plan)];
@@ -297,6 +338,7 @@ export class JobRunner {
     index: number;
     report: ReportFn;
     fileProgress: (fraction: number, extra?: Partial<JobProgress>) => JobProgress;
+    imported?: boolean;
     signal?: AbortSignal;
   }): Promise<string> {
     const { config } = this.deps;
@@ -310,12 +352,16 @@ export class JobRunner {
 
     if (plan.fetch.via === 'direct') {
       const destination = join(scratch, `media.${plan.container}`);
+      const importHosts = args.imported ? this.deps.resolver.importHosts : undefined;
       await downloadDirect({
         url: plan.fetch.url,
         destination,
         dispatcher: this.deps.resolver.dispatcher,
         maxBytes: config.maxFilesizeBytes,
         timeoutMs: config.jobTimeoutSeconds * 1000,
+        // Every hop, not only the first. A redirect is a new destination, and following one
+        // off Instagram's hosts would undo the check the import passed on arrival.
+        ...(importHosts ? { allowUrl: (url: URL) => isAllowedMediaUrl(url, importHosts) } : {}),
         ...(signal ? { signal } : {}),
         onProgress: (progress) => {
           const fraction = progress.bytesTotal
@@ -334,6 +380,12 @@ export class JobRunner {
             }),
           });
         },
+      }).catch((error: unknown) => {
+        // Instagram's CDN answers a link whose signature has run out with a 403, which would
+        // otherwise reach the visitor as "we couldn't retrieve this media".
+        throw importHosts && isForbidden(error)
+          ? importRefused('import: the cdn answered 403')
+          : error;
       });
       // The provider named this format before it had the file, from a URL or a header,
       // and either can be wrong — Bluesky's CDN serves WebP from URLs ending in `@jpeg`.
@@ -674,6 +726,22 @@ export function matchSelection(resolved: ResolvedMedia, selection: JobSelection)
     });
   }
   return { item, plan };
+}
+
+/**
+ * Refuses to start a fetch Instagram is going to refuse.
+ *
+ * A job can wait in the queue past the moment the signed URLs in it run out, and asking the
+ * CDN anyway turns a clear answer into a 403 that reads like a network fault.
+ */
+function assertImportFresh(imported: ImportedJob, now = Date.now()): void {
+  if (imported.expiresAt !== undefined && imported.expiresAt * 1000 <= now) {
+    throw importExpired('import: the media urls expired before the job reached them');
+  }
+}
+
+function isForbidden(error: unknown): boolean {
+  return error instanceof SeraError && error.code === 'NETWORK_ERROR' && error.detail === 'GET 403';
 }
 
 function assertWithinLimits(matched: readonly MatchedSelection[], config: EngineConfig): void {
