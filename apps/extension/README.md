@@ -70,8 +70,12 @@ logic, spelled out. Keep the two in step.
   var pk = 0n;
   for (var i = 0; i < code.length; i++) pk = pk * 64n + BigInt(A.indexOf(code[i]));
 
-  // Keep only the widest rendition of each slide, and only the fields SERA uses. Everything
-  // about the viewer stays in this tab, and the payload stays small enough to put in a URL.
+  // Keep only the widest rendition of each slide, and only the fields SERA uses; cap the caption
+  // and alt text (the server truncates titles anyway). Everything about the viewer stays in this
+  // tab, and the payload stays small enough to put in a URL.
+  function clip(s, n) {
+    return typeof s === 'string' ? s.slice(0, n) : undefined;
+  }
   function widest(a) {
     return (a || []).slice().sort(function (x, y) {
       return (y.width || 0) - (x.width || 0);
@@ -87,7 +91,7 @@ logic, spelled out. Keep the two in step.
       code: n.code,
       media_type: n.media_type,
       video_duration: n.video_duration,
-      accessibility_caption: n.accessibility_caption,
+      accessibility_caption: clip(n.accessibility_caption, 150),
     };
     var img = n.image_versions2 && pick(widest(n.image_versions2.candidates));
     if (img) out.image_versions2 = { candidates: [img] };
@@ -95,7 +99,7 @@ logic, spelled out. Keep the two in step.
     if (vid) out.video_versions = [vid];
     if (n.carousel_media) out.carousel_media = n.carousel_media.map(keep);
     if (n.user) out.user = { username: n.user.username, full_name: n.user.full_name };
-    if (n.caption) out.caption = { text: n.caption.text };
+    if (n.caption) out.caption = { text: clip(n.caption.text, 300) };
     return out;
   }
 
@@ -115,7 +119,14 @@ logic, spelled out. Keep the two in step.
         return;
       }
       var payload = { url: 'https://www.instagram.com/p/' + code + '/', node: keep(it) };
-      location.href = SERA + '/import#v=2&p=' + encodeURIComponent(JSON.stringify(payload));
+      var href = SERA + '/import#v=2&p=' + encodeURIComponent(JSON.stringify(payload));
+      // ~36 KB is the measured worst case (20-slide carousel with videos); refuse anything that
+      // would build a URL a browser might not carry, rather than navigate to one that fails.
+      if (href.length > 60000) {
+        alert('This post is too large to send this way. Try a post with fewer slides.');
+        return;
+      }
+      location.href = href;
     })
     .catch(function () {
       alert('SERA could not read that post. Make sure you are signed in to Instagram.');
