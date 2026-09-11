@@ -109,7 +109,7 @@ export function ImportClient() {
  */
 function HowItWorks() {
   return (
-    <section className="animate-fade-up mx-auto flex max-w-[34rem] flex-1 flex-col justify-center gap-4 py-12">
+    <section className="animate-fade-up mx-auto flex w-full max-w-[34rem] flex-1 flex-col justify-center gap-5 py-10 sm:py-12">
       <h1 className="text-lg font-medium text-[var(--color-ink)]">
         Send an Instagram post to SERA
       </h1>
@@ -118,16 +118,34 @@ function HowItWorks() {
         its own server. This page takes the other route: your own browser, already signed in, reads
         the post and sends just the media here. Your Instagram login never reaches SERA.
       </p>
+
+      <div className="flex flex-col gap-3 rounded-[var(--radius-panel)] border border-[var(--color-line)] bg-[var(--color-surface)] p-4 sm:p-5">
+        <p className="text-[0.8125rem] font-medium tracking-wide text-[var(--color-ink-faint)] uppercase">
+          Install it, once
+        </p>
+        <BookmarkletLink />
+        <div className="flex flex-col gap-2.5 text-[0.8125rem] leading-relaxed text-[var(--color-ink-muted)]">
+          <p>
+            <span className="font-medium text-[var(--color-ink)]">On a computer:</span> drag the
+            button to your bookmarks bar.
+          </p>
+          <p>
+            <span className="font-medium text-[var(--color-ink)]">On iPhone (Safari):</span> tap{' '}
+            <span className="font-medium">Copy code</span>, bookmark this page (Share → Add
+            Bookmark), then edit that bookmark and replace its address with the copied code.
+          </p>
+          <p className="text-[var(--color-ink-faint)]">
+            Android Chrome can’t run a bookmarklet from a bookmark. Use Firefox for Android, or wait
+            for the SERA extension.
+          </p>
+        </div>
+      </div>
+
       <ol className="flex flex-col gap-3 text-[0.9375rem] text-[var(--color-ink-muted)]">
-        <Step n={1}>
-          <span className="flex flex-wrap items-center gap-2">
-            <span>Drag this to your bookmarks bar, once:</span>
-            <BookmarkletLink />
-          </span>
-        </Step>
-        <Step n={2}>Open the photo post or carousel you want on instagram.com.</Step>
-        <Step n={3}>Click the bookmark. This page opens with the post ready to download.</Step>
+        <Step n={1}>Open the photo post or carousel you want on instagram.com.</Step>
+        <Step n={2}>Run the bookmark. This page opens with the post ready to download.</Step>
       </ol>
+
       <p className="text-[0.8125rem] text-[var(--color-ink-faint)]">
         Reels and videos need none of this — paste their link on the{' '}
         <Link href="/" className="text-[var(--color-accent)] hover:opacity-75">
