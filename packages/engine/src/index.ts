@@ -20,11 +20,20 @@ export {
   type ResolvedItem,
   type ResolvedMedia,
 } from './providers/index.js';
+export {
+  INSTAGRAM_MEDIA_HOSTS,
+  isAllowedMediaUrl,
+  mediaFromImport,
+  type ImportedEntry,
+  type ImportedPost,
+  type MediaHostPolicy,
+} from './providers/instagram-media.js';
 
 export { JobService, type JobServiceDependencies } from './jobs/service.js';
 export {
   JobRunner,
   matchSelection,
+  type ImportedJob,
   type JobSelection,
   type JobSpec,
   type JobUpdate,
@@ -112,7 +121,7 @@ export {
   contentDispositionValue,
 } from './util/filename.js';
 export { formatBytes, formatDuration, qualityLabel, codecLabel, truncate } from './util/format.js';
-export { signToken, verifyToken, newJobId } from './util/tokens.js';
+export { readToken, signToken, verifyToken, newJobId } from './util/tokens.js';
 export {
   ExtractionRouter,
   type ExtractionBackend,

@@ -47,7 +47,7 @@ than what it aspires to:
 | Bluesky, Mastodon                                        | Photos and video, every item in a post                     |
 | SoundCloud, direct files, pages that declare their media | Yes                                                        |
 | Instagram Reels                                          | Yes                                                        |
-| Instagram photo posts                                    | Needs an account nobody can get for someone else's post    |
+| Instagram photo posts                                    | From your own browser — you're logged in, the server isn't |
 | Reddit                                                   | Needs a Reddit app; images then work, `v.redd.it` does not |
 | YouTube                                                  | Blocked on address reputation, from every cloud            |
 
@@ -66,6 +66,15 @@ for its web client, on any address.
 What still works from a datacentre: direct file links, SoundCloud, and every provider
 that does not gate on the requesting network. What does not: anything that does, for as
 long as it does.
+
+Instagram photo posts are a different kind of block, and have a different answer. Instagram
+gates them on being **logged in**, not on the requesting address, so no host and no proxy
+changes it — but a visitor is logged in, in their own browser. SERA lets that browser do
+the one read it is entitled to and send back just the media, over a page at `/import`; the
+server keeps no Instagram session and reads nothing itself. This defeats no control — the
+visitor reaches only their own logged-in view — which is exactly why it is in scope where
+supplying the server an account is not. See
+[Providers](deploy/PROVIDERS.md) and [the security review](deploy/SECURITY-REVIEW.md).
 
 SERA does not ship a way around this, and adding one is out of scope. Supplying account
 cookies to defeat a bot check means handing a server your credentials to act as you, and

@@ -107,6 +107,14 @@ export interface SafeFetchOptions {
   /** Aborts once this many bytes have been read. */
   readonly maxBytes?: number;
   readonly maxRedirects?: number;
+  /**
+   * Refuses any hop this returns false for, the first included.
+   *
+   * For a fetch whose destinations were approved by host. The address guard keeps every hop
+   * off private networks; this keeps every hop on the hosts that were approved, because a
+   * redirect is a new destination and following one elsewhere would undo the approval.
+   */
+  readonly allowUrl?: (url: URL) => boolean;
   readonly headers?: Readonly<Record<string, string>>;
   readonly signal?: AbortSignal;
 }
@@ -157,6 +165,15 @@ export async function safeOpen(url: URL, options: SafeFetchOptions): Promise<Ope
   for (let hop = 0; hop <= maxRedirects; hop += 1) {
     if (current.protocol !== 'http:' && current.protocol !== 'https:') {
       throw seraError('BLOCKED_ADDRESS', { detail: `redirect to ${current.protocol}` });
+    }
+    if (options.allowUrl && !options.allowUrl(current)) {
+      // Which hop, not where it pointed: this detail reaches the log.
+      throw seraError('BLOCKED_ADDRESS', {
+        detail:
+          hop === 0
+            ? 'destination is not on the allowed hosts'
+            : `redirect ${hop} left the allowed hosts`,
+      });
     }
 
     let response: Dispatcher.ResponseData;

@@ -1,5 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { itemsFrom, titleFor, sessionHeaders, type InstagramNode } from './instagram-media.js';
+import {
+  cdnExpiry,
+  INSTAGRAM_MEDIA_HOSTS,
+  isAllowedMediaUrl,
+  itemsFrom,
+  mediaFromImport,
+  sessionHeaders,
+  shortcodeFrom,
+  slidesFrom,
+  titleFor,
+  type InstagramNode,
+} from './instagram-media.js';
+import { planKey } from './types.js';
 
 /**
  * The shapes Instagram's web API returns, trimmed from real responses.
@@ -131,5 +143,100 @@ describe('sessionHeaders', () => {
     // No Authorization header, no bearer, nothing that would end up in a proxy log line
     // under a name something else might decide to record.
     expect(Object.keys(headers).sort()).toEqual(['cookie', 'x-ig-app-id', 'x-requested-with']);
+  });
+});
+
+/* ------------------------------------------------------------ visitor import */
+
+describe('the hosts an imported post may name', () => {
+  it('admits Instagram’s CDN over HTTPS', () => {
+    for (const url of [
+      'https://scontent-vie1-1.cdninstagram.com/v/t51.2885-15/a.jpg?oh=00_x&oe=6A0B0C0D',
+      'https://scontent.cdninstagram.com/v/a.jpg',
+      'https://instagram.fvie1-1.fna.fbcdn.net/o1/v/t16/f2/m86/a.mp4?oe=6A0B0C0D',
+    ]) {
+      expect(isAllowedMediaUrl(url, INSTAGRAM_MEDIA_HOSTS), url).toBe(true);
+    }
+  });
+
+  it('refuses everything else, including what looks close', () => {
+    for (const url of [
+      'http://scontent.cdninstagram.com/a.jpg',
+      'https://scontent.cdninstagram.com:444/a.jpg',
+      'https://u:p@scontent.cdninstagram.com/a.jpg',
+      'https://cdninstagram.com.example.org/a.jpg',
+      'https://notcdninstagram.com/a.jpg',
+      'https://www.instagram.com/p/DcOX3hWFiey/',
+      'javascript:alert(1)',
+      'data:image/jpeg;base64,AAAA',
+      '/relative/a.jpg',
+    ]) {
+      expect(isAllowedMediaUrl(url, INSTAGRAM_MEDIA_HOSTS), url).toBe(false);
+    }
+  });
+});
+
+describe('cdnExpiry', () => {
+  it('reads the expiry Instagram signs into a URL', () => {
+    expect(cdnExpiry('https://scontent.cdninstagram.com/a.jpg?oh=00_x&oe=68C7A2B1')).toBe(
+      0x68c7a2b1,
+    );
+  });
+
+  it('has nothing to say about a URL without one, or with a garbled one', () => {
+    expect(cdnExpiry('https://scontent.cdninstagram.com/a.jpg')).toBeUndefined();
+    expect(cdnExpiry('https://scontent.cdninstagram.com/a.jpg?oe=soon')).toBeUndefined();
+    expect(cdnExpiry('not a url')).toBeUndefined();
+  });
+});
+
+describe('shortcodeFrom', () => {
+  it('finds the post in every path Instagram serves one at', () => {
+    for (const path of [
+      '/p/DcOX3hWFiey/',
+      '/reel/DcOX3hWFiey',
+      '/reels/DcOX3hWFiey/',
+      '/tv/DcOX3hWFiey/',
+      '/nasa/p/DcOX3hWFiey/',
+    ]) {
+      expect(shortcodeFrom(new URL(`https://www.instagram.com${path}`)), path).toBe('DcOX3hWFiey');
+    }
+    expect(shortcodeFrom(new URL('https://www.instagram.com/nasa/'))).toBeUndefined();
+  });
+});
+
+describe('mediaFromImport', () => {
+  const mixed: InstagramNode = {
+    media_type: 8,
+    carousel_media: [
+      image('1', 1080, 'https://cdn/1.jpg'),
+      video('2'),
+      image('3', 1080, 'https://cdn/3.jpg'),
+    ],
+  };
+  const post = {
+    url: 'https://www.instagram.com/p/DcOX3hWFiey',
+    title: 'A post',
+    entries: slidesFrom(mixed, 50).map((slide) => slide.entry),
+  };
+
+  it('rebuilds the same plans from the same entries, after a trip through a token', () => {
+    // The job sees entries that went through JSON, a queue and JSON again. Nothing about
+    // the result may depend on which side of that trip built it.
+    const atImport = mediaFromImport(post);
+    const atJob = mediaFromImport(JSON.parse(JSON.stringify(post)) as typeof post);
+    expect(atJob).toEqual(atImport);
+    expect(atJob.items.flatMap((item) => item.plans.map(planKey))).toEqual([
+      'image/jpg/Original',
+      'video/mp4/Original',
+      'audio/mp3/MP3',
+      'image/jpg/Original',
+    ]);
+  });
+
+  it('offers exactly what the session route offers for the same post', () => {
+    expect(mediaFromImport(post).items.map((item) => item.plans)).toEqual(
+      itemsFrom(mixed, 50).map((item) => item.plans),
+    );
   });
 });

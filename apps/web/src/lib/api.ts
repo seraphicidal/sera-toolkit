@@ -1,6 +1,7 @@
 import type {
   ApiErrorBody,
   CreateJobRequest,
+  ImportRequest,
   Job,
   JobError,
   MediaInfo,
@@ -72,6 +73,22 @@ export function resolveMedia(url: string, signal?: AbortSignal): Promise<MediaIn
   return call<MediaInfo>('/api/media/info', {
     method: 'POST',
     body: JSON.stringify({ url }),
+    ...(signal ? { signal } : {}),
+  });
+}
+
+/**
+ * Hands the API a post the visitor's own browser read.
+ *
+ * The one resolve that does not start from a pasted link: the bytes describing the post come
+ * from the visitor's signed-in session on instagram.com, so this server never holds one. What
+ * comes back is an ordinary `MediaInfo` — the server admitted only Instagram's CDN and signed
+ * what it admitted, so from here on an imported post is downloaded like anything else.
+ */
+export function importMedia(request: ImportRequest, signal?: AbortSignal): Promise<MediaInfo> {
+  return call<MediaInfo>('/api/media/import', {
+    method: 'POST',
+    body: JSON.stringify(request),
     ...(signal ? { signal } : {}),
   });
 }

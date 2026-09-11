@@ -68,6 +68,17 @@ const nextConfig: NextConfig = {
           },
         ],
       },
+      {
+        // /import is opened as a popup by a bookmarklet on instagram.com and talks back to it
+        // over postMessage. Under the site-wide `same-origin` above, opening a cross-origin
+        // popup switches browsing-context groups and the popup's `window.opener` comes up null,
+        // so no message can flow — verified in a real browser across all three policies. Only
+        // `unsafe-none` keeps the opener, and Next lets the later matching rule win for this one
+        // key while every other header above still applies. It is the narrowest exception that
+        // makes the handshake possible, on a page that holds no state of its own.
+        source: '/import',
+        headers: [{ key: 'cross-origin-opener-policy', value: 'unsafe-none' }],
+      },
     ]);
   },
 };

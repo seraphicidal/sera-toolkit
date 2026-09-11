@@ -93,6 +93,19 @@ export default async function AboutPage() {
                     <span className="text-[var(--color-ink)]">{provider.label}</span>:{' '}
                     {provider.capabilities.authRequiredFor!.join(' and ')} need an account this
                     server does not have. Everything else from it works.
+                    {provider.capabilities.browserImport && (
+                      <>
+                        {' '}
+                        You can still{' '}
+                        <Link
+                          href="/import"
+                          className="text-[var(--color-accent)] transition-opacity hover:opacity-75"
+                        >
+                          send one from your own browser
+                        </Link>
+                        , where you are already signed in.
+                      </>
+                    )}
                   </li>
                 ))}
               </ul>
