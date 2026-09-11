@@ -38,6 +38,11 @@ export function ErrorPanel({
           {error.hint && (
             <p className="mt-1 text-[0.8125rem] text-[var(--color-ink-muted)]">{error.hint}</p>
           )}
+          {/* The code, small, so a bug report can name the exact failure — especially on a phone
+              with no devtools. */}
+          <p className="mt-1.5 font-mono text-[0.6875rem] tracking-wide text-[var(--color-ink-faint)]">
+            {error.code}
+          </p>
 
           {actions.length > 0 && (
             <div className="mt-3.5 flex flex-wrap gap-2">
