@@ -52,6 +52,23 @@ const ERROR_BACKOFF_MS = 5_000;
 const MAX_BACKOFF_MS = 60_000;
 const PROGRESS_INTERVAL_MS = 1_000;
 
+/**
+ * How long a claim may take before its connection is presumed dead.
+ *
+ * The API holds a claim open for SERA_EXTRACTION_CLAIM_HOLD_SECONDS (25 by default) and then
+ * answers. Without a ceiling of its own, a claim sent just before the network changes — Wi-Fi
+ * reconnecting after boot, a laptop moving between networks — waits on a socket nothing will
+ * ever answer until undici gives up at five minutes, while the API stops offering this node
+ * work after ninety seconds. Seen on a laptop node: connected at boot, then silent for seven
+ * minutes, and every YouTube link in that window went to the datacentre and was refused.
+ *
+ * Must stay above the API's hold, or every idle claim would time out.
+ */
+const CLAIM_TIMEOUT_MS = 60_000;
+
+/** Every other control-plane call is small and answered at once. */
+const REQUEST_TIMEOUT_MS = 30_000;
+
 class Node {
   private readonly apiUrl: string;
   private readonly token: string;
@@ -125,12 +142,16 @@ class Node {
   }
 
   private async claim(): Promise<RemoteTask | undefined> {
-    const response = await this.post('/internal/extraction/claim', {
-      nodeId: this.nodeId,
-      providers: this.providers,
-      capacity: 1,
-      networkClass: this.networkClass,
-    });
+    const response = await this.post(
+      '/internal/extraction/claim',
+      {
+        nodeId: this.nodeId,
+        providers: this.providers,
+        capacity: 1,
+        networkClass: this.networkClass,
+      },
+      CLAIM_TIMEOUT_MS,
+    );
     if (response.status === 204) {
       await sleep(IDLE_BACKOFF_MS);
       return undefined;
@@ -321,7 +342,7 @@ class Node {
     }
   }
 
-  private post(path: string, body: unknown): Promise<Response> {
+  private post(path: string, body: unknown, timeoutMs = REQUEST_TIMEOUT_MS): Promise<Response> {
     return fetch(`${this.apiUrl}${path}`, {
       method: 'POST',
       headers: {
@@ -329,6 +350,7 @@ class Node {
         'content-type': 'application/json',
       },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   }
 }
