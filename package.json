@@ -24,6 +24,7 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "serve:local": "node scripts/serve-public.mjs --local",
+    "serve:node": "node --env-file=.env.node.local apps/extractor/dist/index.js",
     "serve:public": "node scripts/serve-public.mjs",
     "start": "node apps/api/dist/index.js",
     "test": "vitest run",

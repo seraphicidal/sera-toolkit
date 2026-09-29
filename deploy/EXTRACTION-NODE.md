@@ -66,6 +66,16 @@ node apps/extractor/dist/index.js
 
 It needs `yt-dlp` and `ffmpeg`; `npm run tools:fetch` puts pinned copies in `.tools/`.
 
+The same settings can live in `.env.node.local` at the repository root instead — git
+ignores it, and it is the form that works unchanged in PowerShell:
+
+```bash
+npm run serve:node
+```
+
+More than one machine can be a node at once. Give each its own `SERA_NODE_ID` — `home`,
+`laptop` — and whichever is up takes the work; nodes sharing an ID are counted as one.
+
 `SERA_NODE_PROVIDERS` is a comma-separated allow-list. Leaving it empty means the node
 will take work for any provider, which is rarely what you want — naming `youtube` keeps
 your connection out of everything the server can already do for itself.
