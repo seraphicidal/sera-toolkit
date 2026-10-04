@@ -31,6 +31,13 @@ export interface RemoteTask {
   readonly filename?: string;
   /** For a job: the part of its one item to keep, in seconds. The node does the cutting. */
   readonly trim?: TrimRange;
+  /** For a job: a subtitle track to embed or deliver, fetched by the node with the media. */
+  readonly subtitles?: {
+    readonly lang: string;
+    readonly auto: boolean;
+    readonly format: 'srt' | 'vtt' | 'embed';
+    readonly only: boolean;
+  };
   readonly createdAt: number;
 }
 

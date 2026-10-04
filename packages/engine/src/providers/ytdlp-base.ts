@@ -1,4 +1,5 @@
 import type { ContainerFormat, MediaInfoType, ProviderCapabilities } from '@sera/contracts/types';
+import { subtitleTracks } from './subtitles.js';
 import { declare } from './capabilities.js';
 import { seraError } from '../errors.js';
 import type { YtdlpInfo, YtdlpThumbnail } from '../extract/ytdlp-types.js';
@@ -244,6 +245,7 @@ export abstract class YtdlpProvider implements MediaProvider {
     const container = (str(entry.ext) ?? plans[0]?.container) as ContainerFormat | undefined;
     const thumbnailUrl = pickThumbnail(entry);
     const thumbnailFallbackUrl = str(entry.thumbnail);
+    const subtitles = kind === 'video' || kind === 'audio' ? subtitleTracks(entry) : [];
     const title = str(entry.title);
     const filesize = num(entry.filesize) ?? num(entry.filesize_approx);
     const sourceId = str(entry.id);
@@ -263,6 +265,7 @@ export abstract class YtdlpProvider implements MediaProvider {
         ? { thumbnailFallbackUrl }
         : {}),
       ...(Object.keys(tags).length ? { tags } : {}),
+      ...(subtitles.length ? { subtitles } : {}),
       ...(width ? { width } : {}),
       ...(height ? { height } : {}),
       ...(duration !== undefined ? { duration } : {}),

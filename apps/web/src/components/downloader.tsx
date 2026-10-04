@@ -1,12 +1,24 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { Job, JobError, MediaInfo, PackagingMode } from '@sera/contracts/types';
+import type {
+  Job,
+  JobError,
+  MediaInfo,
+  PackagingMode,
+  SubtitleFormat,
+} from '@sera/contracts/types';
 import { ApiError, cancelJob, createJob, resolveMedia } from '@/lib/api';
 import { cx, formatBytes, formatDuration, isRunning, pluralize } from '@/lib/format';
 import { addToHistory } from '@/lib/history';
 import { initialKind, qualityLabels, resolveSelection, type SelectableKind } from '@/lib/selection';
 import { urlFromFragment } from '@/lib/share';
+import {
+  subtitleChoices,
+  subtitleRequest,
+  trackValue,
+  type SubtitleChoices,
+} from '@/lib/subtitles';
 import { endPlaceholder, summarizeTrim, type TrimSummary } from '@/lib/trim';
 import { useJob } from '@/lib/use-job';
 import { DownloadIcon, SpinnerIcon } from './icons';
@@ -65,6 +77,9 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
   const [trimStart, setTrimStart] = useState('');
   const [trimEnd, setTrimEnd] = useState('');
   const [packaging, setPackaging] = useState<PackagingMode>('auto');
+  const [subtitleTrack, setSubtitleTrack] = useState('');
+  const [subtitleFormat, setSubtitleFormat] = useState<SubtitleFormat>('embed');
+  const [subtitlesOnly, setSubtitlesOnly] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   const analyzeAbort = useRef<AbortController | undefined>(undefined);
@@ -79,6 +94,9 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
     setFilename('');
     setTrimStart('');
     setTrimEnd('');
+    setSubtitleTrack('');
+    setSubtitleFormat('embed');
+    setSubtitlesOnly(false);
     setPackaging('auto');
     setShowAdvanced(false);
     // Import mode has nowhere to go back to but the post the browser read: reseed it rather
@@ -173,11 +191,30 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
     [info, selectedIds, kind, label],
   );
 
+  const singleItem =
+    info && selection?.fileCount === 1
+      ? info.items.find((item) => selectedIds.has(item.id))
+      : undefined;
+
+  // Subtitles: one item that has tracks, as video or audio. A track is never added to a
+  // trimmed download (the server would refuse it), so a trim typed first hides the choice,
+  // and a track chosen first hides the trim.
+  const subtitles = subtitleChoices(
+    singleItem,
+    singleItem?.options.find((option) => option.id === selection?.optionIds[0]),
+  );
+  const subtitlesRequested = subtitleRequest(
+    subtitles,
+    subtitleTrack,
+    subtitleFormat,
+    subtitlesOnly,
+  );
+
   // Trimming applies to one video or audio item; for anything else the fields are hidden and
   // whatever was typed in them is ignored.
   const trimItem =
-    info && selection?.fileCount === 1 && (kind === 'video' || kind === 'audio')
-      ? info.items.find((item) => selectedIds.has(item.id))
+    singleItem && (kind === 'video' || kind === 'audio') && !subtitlesRequested
+      ? singleItem
       : undefined;
   const trim: TrimSummary = useMemo(
     () =>
@@ -199,6 +236,7 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
         packaging,
         ...(filename.trim() ? { filename: filename.trim() } : {}),
         ...(trim.state === 'ok' ? { trim: trim.request } : {}),
+        ...(subtitlesRequested ? { subtitles: subtitlesRequested } : {}),
       });
       setJobId(created.id);
       setPhase('running');
@@ -215,7 +253,7 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
       );
       setPhase('ready');
     }
-  }, [info, selection, packaging, filename, trim]);
+  }, [info, selection, packaging, filename, trim, subtitlesRequested]);
 
   // Follow the job to its conclusion.
   useEffect(() => {
@@ -358,6 +396,18 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
                 onLabelChange={setLabel}
               />
 
+              {subtitles && trim.state !== 'ok' && (
+                <SubtitleFields
+                  choices={subtitles}
+                  track={subtitleTrack}
+                  onTrackChange={setSubtitleTrack}
+                  format={subtitlesRequested?.format ?? subtitleFormat}
+                  onFormatChange={setSubtitleFormat}
+                  only={subtitlesOnly}
+                  onOnlyChange={setSubtitlesOnly}
+                />
+              )}
+
               <AdvancedOptions
                 open={showAdvanced}
                 onToggle={() => setShowAdvanced((open) => !open)}
@@ -391,10 +441,12 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
                 )}
               >
                 <DownloadIcon size={17} />
-                {selection && selection.fileCount > 1
-                  ? `Download ${pluralize(selection.fileCount, 'file')}`
-                  : 'Download'}
-                {trim.state === 'ok' && trim.estimatedBytes ? (
+                {subtitlesRequested?.only
+                  ? 'Download subtitles'
+                  : selection && selection.fileCount > 1
+                    ? `Download ${pluralize(selection.fileCount, 'file')}`
+                    : 'Download'}
+                {subtitlesRequested?.only ? null : trim.state === 'ok' && trim.estimatedBytes ? (
                   <span className="tabular font-normal opacity-75">
                     · ~{formatBytes(trim.estimatedBytes)}
                   </span>
@@ -525,6 +577,93 @@ const FIELD_LABEL =
   'mb-1.5 block text-xs font-medium tracking-wide text-[var(--color-ink-faint)] uppercase';
 const FIELD_INPUT =
   'tabular w-full rounded-xl border border-[var(--color-line)] bg-[var(--color-canvas)] px-3.5 py-2.5 text-[0.875rem] text-[var(--color-ink)] transition-colors outline-none placeholder:text-[var(--color-ink-faint)] focus:border-[var(--color-accent)] aria-[invalid=true]:border-[var(--color-danger)]';
+
+/**
+ * A subtitle track: the language, then how it comes — embedded in the video as a track the
+ * player can switch on, or as an SRT or VTT file beside it or on its own.
+ */
+function SubtitleFields({
+  choices,
+  track,
+  onTrackChange,
+  format,
+  onFormatChange,
+  only,
+  onOnlyChange,
+}: {
+  readonly choices: SubtitleChoices;
+  readonly track: string;
+  readonly onTrackChange: (value: string) => void;
+  readonly format: SubtitleFormat;
+  readonly onFormatChange: (value: SubtitleFormat) => void;
+  readonly only: boolean;
+  readonly onOnlyChange: (value: boolean) => void;
+}) {
+  const formats: readonly (readonly [SubtitleFormat, string])[] = [
+    ...(choices.canEmbed ? ([['embed', 'In the video']] as const) : []),
+    ['srt', 'SRT file'],
+    ['vtt', 'VTT file'],
+  ];
+  return (
+    <fieldset className="flex flex-col gap-2.5">
+      <legend className={FIELD_LABEL}>Subtitles</legend>
+      <label htmlFor="sera-subtitles" className="sr-only">
+        Subtitle language
+      </label>
+      <select
+        id="sera-subtitles"
+        value={track}
+        onChange={(event) => onTrackChange(event.target.value)}
+        className={cx(FIELD_INPUT, 'cursor-pointer')}
+      >
+        <option value="">None</option>
+        {choices.tracks.map((candidate) => (
+          <option key={trackValue(candidate)} value={trackValue(candidate)}>
+            {candidate.label}
+          </option>
+        ))}
+      </select>
+      {choices.tracks.some((candidate) => trackValue(candidate) === track) && (
+        <>
+          <div
+            role="radiogroup"
+            aria-label="Subtitle format"
+            className="flex gap-1 rounded-xl bg-[var(--color-sunken)] p-1"
+          >
+            {formats.map(([value, text]) => (
+              <button
+                key={value}
+                type="button"
+                role="radio"
+                aria-checked={format === value}
+                onClick={() => onFormatChange(value)}
+                className={cx(
+                  'flex-1 cursor-pointer rounded-lg px-2 py-2 text-[0.8125rem] font-medium transition-all duration-150',
+                  format === value
+                    ? 'bg-[var(--color-surface)] text-[var(--color-ink)] shadow-[0_1px_2px_oklch(0_0_0/0.06)]'
+                    : 'text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]',
+                )}
+              >
+                {text}
+              </button>
+            ))}
+          </div>
+          {format !== 'embed' && (
+            <label className="flex cursor-pointer items-center gap-2 text-[0.8125rem] text-[var(--color-ink-muted)]">
+              <input
+                type="checkbox"
+                checked={only}
+                onChange={(event) => onOnlyChange(event.target.checked)}
+                className="size-4 cursor-pointer accent-[var(--color-accent)]"
+              />
+              Only the subtitles
+            </label>
+          )}
+        </>
+      )}
+    </fieldset>
+  );
+}
 
 /** Start and end times, with what they keep or why they cannot be used. */
 function TrimFields({

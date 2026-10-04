@@ -14,7 +14,7 @@ import { squareCover, tagAudio, TAGGABLE_AUDIO } from '../convert/tags.js';
 import { trimMedia } from '../convert/trim.js';
 import { seraError, SeraError } from '../errors.js';
 import { downloadDirect } from '../extract/direct-download.js';
-import { download as ytdlpDownload } from '../extract/ytdlp.js';
+import { download as ytdlpDownload, downloadSubtitles } from '../extract/ytdlp.js';
 import { classifyFailure } from '../extract/failure.js';
 import { logSafeUrl, type Logger } from '../logging.js';
 import {
@@ -62,6 +62,8 @@ export interface JobSpec {
   readonly filename?: string;
   /** Keep only this part of the one item, in seconds. Single-item video and audio only. */
   readonly trim?: TrimRange;
+  /** A subtitle track to embed or deliver as a file. Single item only. */
+  readonly subtitles?: JobSubtitles;
   /**
    * Present when the job came from a post the visitor's own browser read.
    *
@@ -69,6 +71,14 @@ export interface JobSpec {
    * post again, which is the point — there is no session here to read it with.
    */
   readonly imported?: ImportedJob;
+}
+
+/** `SubtitleRequest`, with its defaults filled in. */
+export interface JobSubtitles {
+  readonly lang: string;
+  readonly auto: boolean;
+  readonly format: 'srt' | 'vtt' | 'embed';
+  readonly only: boolean;
 }
 
 /** A post the visitor's browser read, as the server approved and signed it. */
@@ -164,6 +174,8 @@ export class JobRunner {
           // The node cuts the file itself: shipping the whole thing to cut it here would
           // spend its upload on what is thrown away.
           ...(spec.trim ? { trim: spec.trim } : {}),
+          // So are subtitles: the track is fetched on the same network as the media.
+          ...(spec.subtitles ? { subtitles: spec.subtitles } : {}),
         },
         {
           onProgress: (progress) =>
@@ -215,6 +227,36 @@ export class JobRunner {
           ...extra,
         });
 
+        if (spec.subtitles) assertSubtitlesOffered(item, spec.subtitles);
+
+        // The subtitle file alone: no media is fetched at all.
+        if (spec.subtitles?.only) {
+          report({
+            state: 'downloading',
+            step: 'Downloading subtitles',
+            progress: fileProgress(0),
+          });
+          const path = await this.fetchSubtitles({
+            resolved,
+            item,
+            workspace,
+            index,
+            subtitles: spec.subtitles,
+            signal,
+          });
+          const name = dedupeFilename(
+            subtitleName(
+              this.nameFor(spec, resolved, item, plan, path, totalFiles),
+              spec.subtitles.lang,
+            ),
+            taken,
+          );
+          const destination = workspace.outputPath(name);
+          await rename(path, destination);
+          produced.push({ path: destination, name });
+          continue;
+        }
+
         const { path: downloaded, plan: used } = await this.fetchWithFallback({
           workspace,
           resolved,
@@ -225,6 +267,7 @@ export class JobRunner {
           fileProgress,
           ...(spec.imported ? { imported: true } : {}),
           ...(spec.trim ? { trim: spec.trim } : {}),
+          ...(spec.subtitles?.format === 'embed' ? { embedSubtitles: spec.subtitles } : {}),
           ...(signal ? { signal } : {}),
         });
         if (used !== plan) delivered.push({ requested: plan.label, actual: used.label });
@@ -261,6 +304,33 @@ export class JobRunner {
         const destination = workspace.outputPath(name);
         await rename(finished, destination);
         produced.push({ path: destination, name });
+
+        // A subtitle file beside the media, named after it: "Title.en.srt" next to "Title.mp4".
+        if (spec.subtitles && spec.subtitles.format !== 'embed') {
+          report({
+            state: 'downloading',
+            step: 'Downloading subtitles',
+            progress: fileProgress(0.99),
+          });
+          const path = await this.fetchSubtitles({
+            resolved,
+            item,
+            workspace,
+            index,
+            subtitles: spec.subtitles,
+            signal,
+          });
+          const subtitle = dedupeFilename(
+            subtitleName(
+              name.replace(/\.[^.]+$/, `.${spec.subtitles.format}`),
+              spec.subtitles.lang,
+            ),
+            taken,
+          );
+          const subtitleDestination = workspace.outputPath(subtitle);
+          await rename(path, subtitleDestination);
+          produced.push({ path: subtitleDestination, name: subtitle });
+        }
       }
     }
 
@@ -329,6 +399,7 @@ export class JobRunner {
     /** The item came from a post the visitor's browser read. */
     imported?: boolean;
     trim?: TrimRange;
+    embedSubtitles?: JobSubtitles;
     signal?: AbortSignal;
   }): Promise<{ path: string; plan: DownloadPlan }> {
     const candidates = [args.plan, ...lowerQualityAlternatives(args.item, args.plan)];
@@ -368,6 +439,7 @@ export class JobRunner {
     fileProgress: (fraction: number, extra?: Partial<JobProgress>) => JobProgress;
     imported?: boolean;
     trim?: TrimRange;
+    embedSubtitles?: JobSubtitles;
     signal?: AbortSignal;
   }): Promise<string> {
     const { config } = this.deps;
@@ -380,6 +452,12 @@ export class JobRunner {
     report({ state: 'downloading', step, progress: fileProgress(0) });
 
     if (plan.fetch.via === 'direct') {
+      if (args.embedSubtitles) {
+        throw seraError('MEDIA_UNAVAILABLE', {
+          message: 'Subtitles cannot be embedded in this file.',
+          detail: 'embed requested on a direct download',
+        });
+      }
       const destination = join(scratch, `media.${plan.container}`);
       const importHosts = args.imported ? this.deps.resolver.importHosts : undefined;
       await downloadDirect({
@@ -469,6 +547,9 @@ export class JobRunner {
       ...(args.resolved.items.length > 1 ? { playlistItem: item.index + 1 } : {}),
       ...(plan.filesizeBytes ? { expectedTotalBytes: plan.filesizeBytes } : {}),
       ...(fetchPlan.extractorArgs ? { extractorArgs: fetchPlan.extractorArgs } : {}),
+      ...(args.embedSubtitles
+        ? { subtitles: { lang: args.embedSubtitles.lang, auto: args.embedSubtitles.auto } }
+        : {}),
       ...(args.trim
         ? {
             sections: {
@@ -595,6 +676,34 @@ export class JobRunner {
       );
       return args.input;
     }
+  }
+
+  /** One subtitle track as a file, fetched with yt-dlp from the item's own page. */
+  private async fetchSubtitles(args: {
+    resolved: ResolvedMedia;
+    item: ResolvedItem;
+    workspace: Workspace;
+    index: number;
+    subtitles: JobSubtitles;
+    signal?: AbortSignal;
+  }): Promise<string> {
+    const { config } = this.deps;
+    const workdir = join(args.workspace.scratchDir, `subs-${args.index}`);
+    await mkdir(workdir, { recursive: true });
+    const proxy = config.proxyFor(args.resolved.provider);
+    return downloadSubtitles({
+      binary: config.ytdlpPath,
+      ffmpegPath: config.ffmpegPath,
+      timeoutMs: Math.min(config.jobTimeoutSeconds * 1000, 120_000),
+      url: args.resolved.url,
+      workdir,
+      lang: args.subtitles.lang,
+      auto: args.subtitles.auto,
+      format: args.subtitles.format === 'vtt' ? 'vtt' : 'srt',
+      ...(args.resolved.items.length > 1 ? { playlistItem: args.item.index + 1 } : {}),
+      ...(proxy ? { proxy } : {}),
+      ...(args.signal ? { signal: args.signal } : {}),
+    });
   }
 
   private async convertOne(args: {
@@ -942,6 +1051,31 @@ function stepForPostprocessor(name: string, plan: DownloadPlan): string {
 }
 
 /** Locates the one media file yt-dlp produced in a per-selection scratch directory. */
+/**
+ * Whether the item still offers the track asked for. The resolution the job was created
+ * from listed it; a re-resolution that no longer does means the site took it down.
+ */
+function assertSubtitlesOffered(item: ResolvedItem, subtitles: JobSubtitles): void {
+  const offered = item.subtitles?.some(
+    (track) => track.lang === subtitles.lang && track.auto === subtitles.auto,
+  );
+  if (!offered) {
+    throw seraError('MEDIA_UNAVAILABLE', {
+      message: 'Those subtitles are not available any more.',
+      detail: `subtitles ${subtitles.lang}${subtitles.auto ? ' (auto)' : ''} not offered`,
+    });
+  }
+}
+
+/** "Title.srt" → "Title.en.srt": the language before the extension, as players expect. */
+function subtitleName(name: string, lang: string): string {
+  const dot = name.lastIndexOf('.');
+  // `en-orig` is YouTube's key for the original-language automatic track; a player looks
+  // for the language itself.
+  const safe = lang.replace(/-orig$/, '').replace(/[^A-Za-z0-9_-]/g, '');
+  return `${name.slice(0, dot)}.${safe}${name.slice(dot)}`;
+}
+
 async function findSingleFile(directory: string): Promise<string> {
   const entries = await readdir(directory, { withFileTypes: true });
   const files = entries

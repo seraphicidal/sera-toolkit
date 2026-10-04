@@ -193,6 +193,8 @@ export class Workspace {
 
 /** Content types for the containers SERA produces. */
 export const MIME_TYPES: Readonly<Record<string, string>> = {
+  srt: 'application/x-subrip',
+  vtt: 'text/vtt',
   mp4: 'video/mp4',
   webm: 'video/webm',
   mov: 'video/quicktime',

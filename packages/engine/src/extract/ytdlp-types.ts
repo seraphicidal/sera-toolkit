@@ -82,6 +82,11 @@ export interface YtdlpInfo {
   readonly formats?: readonly YtdlpFormat[];
   readonly entries?: readonly (YtdlpInfo | null)[];
   readonly is_live?: boolean | null;
+  /** Subtitles by language code: written by people, and machine-generated. */
+  readonly subtitles?: Readonly<Record<string, readonly YtdlpSubtitle[]>> | null;
+  readonly automatic_captions?: Readonly<Record<string, readonly YtdlpSubtitle[]>> | null;
+  /** The language of the media itself, where the site says. */
+  readonly language?: string | null;
   /** Music metadata, where the site publishes it (YouTube Music, SoundCloud, Bandcamp). */
   readonly artist?: string | null;
   readonly album?: string | null;
@@ -120,4 +125,11 @@ export function str(value: unknown): string | undefined {
   const trimmed = value.trim();
   if (!trimmed || trimmed === 'NA' || trimmed === 'none' || trimmed === 'null') return undefined;
   return trimmed;
+}
+
+/** One downloadable rendition of a subtitle track. */
+export interface YtdlpSubtitle {
+  readonly ext?: string;
+  readonly url?: string;
+  readonly name?: string | null;
 }
