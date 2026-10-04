@@ -68,12 +68,37 @@ function childEnv(extra?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 /** stdin is ignored, so the child exposes only stdout and stderr. */
 type PipedChild = ChildProcessByStdio<null, Readable, Readable>;
 
-/** Terminates a child, escalating to SIGKILL if it lingers. */
+/**
+ * Signals a child and everything it started.
+ *
+ * yt-dlp runs FFmpeg as its own child, and ending yt-dlp alone left FFmpeg running — still
+ * downloading, and holding the pipes it inherited open, so `close` never came and a
+ * cancelled or timed-out job never finished. On POSIX the child leads its own process group
+ * (`detached`), which is signalled whole; Windows has no group to signal, so `taskkill /T`
+ * ends the tree, forcibly, since a console-less process ignores the polite request.
+ */
+function signalTree(child: PipedChild, signal: NodeJS.Signals): void {
+  if (child.pid === undefined) return;
+  if (process.platform === 'win32') {
+    spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], {
+      stdio: 'ignore',
+      windowsHide: true,
+    }).on('error', () => child.kill(signal));
+    return;
+  }
+  try {
+    process.kill(-child.pid, signal);
+  } catch {
+    child.kill(signal);
+  }
+}
+
+/** Terminates a child and its own children, escalating to SIGKILL if they linger. */
 function terminate(child: PipedChild): void {
   if (child.exitCode !== null || child.signalCode !== null) return;
-  child.kill('SIGTERM');
+  signalTree(child, 'SIGTERM');
   const timer = setTimeout(() => {
-    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    if (child.exitCode === null && child.signalCode === null) signalTree(child, 'SIGKILL');
   }, KILL_GRACE_MS);
   timer.unref();
 }
@@ -93,6 +118,9 @@ export async function run(command: string, options: RunOptions): Promise<RunResu
     shell: false,
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],
+    // Its own process group, so `terminate` can end what it starts as well (POSIX only;
+    // on Windows this would open a console window instead).
+    detached: process.platform !== 'win32',
   });
 
   const maxStdout = options.maxStdoutBytes ?? DEFAULT_MAX_STDOUT_BYTES;
