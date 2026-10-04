@@ -6,6 +6,8 @@ import { z } from 'zod';
 
 const bytes = z.coerce.number().int().positive();
 const seconds = z.coerce.number().int().positive();
+/** Seconds where 0 is meaningful: "fall back to the shared value". */
+const secondsOrZero = z.coerce.number().int().nonnegative();
 
 const booleanish = z
   .union([z.boolean(), z.string()])
@@ -29,8 +31,6 @@ const envSchema = z.object({
 
   SERA_HOST: z.string().default('0.0.0.0'),
   SERA_PORT: z.coerce.number().int().min(1).max(65535).default(4000),
-  /** Public origin of the API, used to build absolute download URLs in logs and docs. */
-  SERA_PUBLIC_URL: z.string().default(''),
   /** Comma-separated list of allowed browser origins. Empty means same-origin only. */
   SERA_CORS_ORIGINS: csv,
 
@@ -65,10 +65,10 @@ const envSchema = z.object({
    * a slow provider must not be able to hold the single worker this instance has. A
    * value of 0 means "use SERA_RESOLVE_TIMEOUT_SECONDS".
    */
-  SERA_RESOLVE_TIMEOUT_YOUTUBE_SECONDS: seconds.default(60),
-  SERA_RESOLVE_TIMEOUT_INSTAGRAM_SECONDS: seconds.default(30),
-  SERA_RESOLVE_TIMEOUT_TWITTER_SECONDS: seconds.default(25),
-  SERA_RESOLVE_TIMEOUT_REDDIT_SECONDS: seconds.default(25),
+  SERA_RESOLVE_TIMEOUT_YOUTUBE_SECONDS: secondsOrZero.default(60),
+  SERA_RESOLVE_TIMEOUT_INSTAGRAM_SECONDS: secondsOrZero.default(30),
+  SERA_RESOLVE_TIMEOUT_TWITTER_SECONDS: secondsOrZero.default(25),
+  SERA_RESOLVE_TIMEOUT_REDDIT_SECONDS: secondsOrZero.default(25),
 
   /**
    * Reddit's Data API. Anonymous access is refused outright from hosted ranges, so
@@ -213,7 +213,6 @@ export interface EngineConfig {
 
   readonly host: string;
   readonly port: number;
-  readonly publicUrl: string;
   readonly corsOrigins: readonly string[];
 
   readonly secret: Buffer;
@@ -368,7 +367,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): EngineConfig {
 
     host: e.SERA_HOST,
     port: e.SERA_PORT,
-    publicUrl: e.SERA_PUBLIC_URL.replace(/\/+$/, ''),
     corsOrigins: e.SERA_CORS_ORIGINS,
 
     secret,

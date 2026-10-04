@@ -231,11 +231,8 @@ export class MediaResolver {
       allowPrivateAddresses: this.config.allowPrivateAddresses,
     });
 
-    if (this.config.blockedHosts.length) {
-      const { hostMatchesAny } = await import('./security/url.js');
-      if (hostMatchesAny(url.hostname, this.config.blockedHosts)) {
-        throw seraError('UNSUPPORTED_SOURCE', { detail: 'host is on the deny list' });
-      }
+    if (hostMatchesAny(url.hostname, this.config.blockedHosts)) {
+      throw seraError('UNSUPPORTED_SOURCE', { detail: 'host is on the deny list' });
     }
 
     const provider = this.registry.detect(url);
@@ -579,11 +576,6 @@ export class MediaResolver {
       canonical,
       options.allowDegraded ? { ...context, allowDegraded: true } : context,
     );
-  }
-
-  /** What the health endpoint reports about where extraction can run. */
-  extractionBackends(): ReturnType<ExtractionRouter['describe']> {
-    return this.router.describe();
   }
 
   private providerContext(signal?: AbortSignal): ProviderContext {

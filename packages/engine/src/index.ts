@@ -127,13 +127,7 @@ export {
   type ExtractionBackend,
   type ExtractionOutcome,
 } from './extract/router.js';
-export {
-  classifyFailure,
-  isEgressProblem,
-  isTransient,
-  requiresOriginatingNode,
-  type FailureClass,
-} from './extract/failure.js';
+export { classifyFailure, isEgressProblem, type FailureClass } from './extract/failure.js';
 export {
   ExtractionNodeRegistry,
   remoteBackend,

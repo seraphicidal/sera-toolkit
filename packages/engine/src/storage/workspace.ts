@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 import type { Logger } from '../logging.js';
@@ -178,10 +177,6 @@ export class Workspace {
     readonly outputDir: string,
   ) {}
 
-  scratchPath(name: string): string {
-    return join(this.scratchDir, assertSafeFilename(name));
-  }
-
   outputPath(name: string): string {
     return join(this.outputDir, assertSafeFilename(name));
   }
@@ -194,24 +189,6 @@ export class Workspace {
   async clearScratch(): Promise<void> {
     await rm(this.scratchDir, { recursive: true, force: true }).catch(() => undefined);
   }
-
-  async listOutputs(): Promise<{ name: string; sizeBytes: number }[]> {
-    const entries = await readdir(this.outputDir, { withFileTypes: true }).catch(() => []);
-    const files: { name: string; sizeBytes: number }[] = [];
-    for (const entry of entries) {
-      if (!entry.isFile()) continue;
-      const size = await stat(join(this.outputDir, entry.name))
-        .then((s) => s.size)
-        .catch(() => 0);
-      files.push({ name: entry.name, sizeBytes: size });
-    }
-    return files.sort((a, b) => a.name.localeCompare(b.name));
-  }
-}
-
-/** A short, stable, filesystem-safe token derived from arbitrary text. */
-export function shortHash(input: string, length = 8): string {
-  return createHash('sha256').update(input).digest('hex').slice(0, length);
 }
 
 /** Content types for the containers SERA produces. */

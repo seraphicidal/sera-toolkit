@@ -77,20 +77,6 @@ export const errorCodeSchema = z.enum([
   'INTERNAL',
 ]);
 
-export const jobStateSchema = z.enum([
-  'queued',
-  'resolving',
-  'downloading',
-  'merging',
-  'converting',
-  'packaging',
-  'finalizing',
-  'ready',
-  'failed',
-  'cancelled',
-  'expired',
-]);
-
 export const packagingModeSchema = z.enum(['auto', 'zip', 'individual']);
 
 export const jobErrorSchema = z.object({

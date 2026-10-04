@@ -422,7 +422,7 @@ page stop guessing:
 Runtime validation for everything that crosses the network; only the server imports it.
 
 - Enum schemas mirroring the unions: `mediaKindSchema`, `mediaInfoTypeSchema`,
-  `containerFormatSchema`, `errorCodeSchema`, `jobStateSchema`, `packagingModeSchema`, plus
+  `containerFormatSchema`, `errorCodeSchema`, `packagingModeSchema`, plus
   `jobErrorSchema` and `downloadOptionSchema`.
 - **Constants**: `MAX_URL_LENGTH` 2048; `MAX_FILENAME_LENGTH` 200; `MAX_TOKEN_LENGTH` 4096
   (a token embedding one URL); `MAX_INFO_TOKEN_LENGTH` 40,000 (a resolution token can embed
@@ -492,7 +492,7 @@ is listed in [§22.1](#221-environment-variables).
    - `extractionNodes {token, enabled, claimHoldMs}` — `enabled` when a token is set.
    - `proxyFor(providerId)` — the extraction proxy if one is set and the provider is on
      `SERA_EXTRACTION_PROXY_PROVIDERS` (an empty list means all providers).
-   - `apiUrl`, `publicUrl` — trailing slashes stripped.
+   - `apiUrl` — trailing slashes stripped.
    - `instagram.configured`, and `youtube {playerClients, potProviderUrl}`.
    - `embeddedWorker` — always true for the memory driver.
    - Tool paths from `locateTool`.
@@ -768,8 +768,6 @@ maxStdoutBytes = 64 MiB, signal?, env?})` behaves as follows:
 - It resolves `{code, stdout, stderrTail}` and throws only on abort (`CANCELLED`), timeout
   (`TIMEOUT`), stdout overflow (`TOO_LARGE`) or a spawn failure (`INTERNAL`); callers
   interpret the exit code.
-
-`looksLikeFlag(value)` exists for callers that place a `--` before positional arguments.
 
 ### `util/tokens.ts` — signed, self-contained ids
 
@@ -1267,9 +1265,7 @@ attempt worth making, where, and how".
   - `isEgressProblem` — another network could fix it: `DATACENTER_BLOCKED`, `BOT_DETECTION`,
     `PO_TOKEN_REQUIRED`, `CDN_DOWNLOAD_FAILURE`.
   - `isDefinitive` — no route will help: private, age-restricted, deleted, geo-blocked,
-    unsupported URL, cancelled. `worthAnotherStrategy` is its inverse.
-  - `requiresOriginatingNode` — `STREAM_403`.
-  - `isTransient` — rate-limited, source error, upstream timeout.
+    unsupported URL, cancelled.
 
 ### 10.6 `extract/strategy.ts` — the provider ladder
 
@@ -1408,7 +1404,6 @@ renames the node's upload into the job workspace.
   then codec (H.264 > AV1 > VP9, because H.264 remuxes into MP4 untouched), then bitrate.
 - `audioBitrateChoices(sourceAbr)` — from 320/192/128, only rates ≤ max(source × 1.1, 128),
   so a 320 kbps option is never offered for a 64 kbps source.
-- `infoDuration` — the entry's duration.
 
 ### 11.2 `normalize/plans.ts` — building the option list
 
@@ -1542,7 +1537,6 @@ request at all:
     "Analyze the URL again".
   - It validates the shape of an imported token.
   - It **re-checks the CDN hosts**, so a token cannot outlive a tightened allowlist.
-- `extractionBackends()` returns `router.describe()`.
 
 ### 11.4 `jobs/runner.ts` — `JobRunner`, the download pipeline
 
@@ -1715,9 +1709,8 @@ deflated. Progress is reported once per entry.
     and abandoned `remote-*` upload directories age out the same way. `startReaper(interval)`
     runs it on a timer.
   - `usage()` reports the workspace count and bytes, for `/health`.
-- **`Workspace`** — `scratchPath` and `outputPath` (both validate the name), `writeManifest`,
-  `clearScratch`, `listOutputs`.
-- **Helpers**: `shortHash`; `MIME_TYPES` / `mimeTypeFor(filename)` (from the extension, else
+- **`Workspace`** — `outputPath` (validates the name), `writeManifest` and `clearScratch`.
+- **Helpers**: `MIME_TYPES` / `mimeTypeFor(filename)` (from the extension, else
   `application/octet-stream`). The download route takes its content type from this, never
   from upstream.
 
@@ -1754,7 +1747,7 @@ stats_mode=diff, paletteuse bayer`) with `-loop 0`; defaults 15 fps and 480 px w
   video format). Progress is parsed from `out_time_us` / `out_time_ms` (both microseconds),
   capped at 99 until done. A non-zero exit is `CONVERSION_FAILED` with the stderr tail as
   detail.
-- `ffmpegVersion`, and `siblingPath`.
+- `ffmpegVersion`.
 
 ---
 
@@ -2557,8 +2550,9 @@ ffprobe. The counts below are tests collected by `vitest list`.
 
 | File                                | Tests | Covers                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | ----------------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `config.test.ts`                    | 3     | Per-provider resolve ceilings: their defaults and the shared fallback, 0 meaning the shared one, and negative, fractional or a shared 0 refused.                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `convert/bounds.test.ts`            | 2     | FFmpeg stops at the output ceiling; writes everything when under it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `extract/failure.test.ts`           | 16    | Each class distinction (network-fixable, stream vs page, login vs misconfiguration, gone/private/geo, bad link vs unsupported media, ours vs theirs, unknown → extractor bug); routing predicates; every contract error code mapped deliberately; live streams; queue-full vs source refusal.                                                                                                                                                                                                                                                                                         |
+| `extract/failure.test.ts`           | 14    | Each class distinction (network-fixable, stream vs page, login vs misconfiguration, gone/private/geo, bad link vs unsupported media, ours vs theirs, unknown → extractor bug); routing predicates; every contract error code mapped deliberately; live streams; queue-full vs source refusal.                                                                                                                                                                                                                                                                                         |
 | `extract/html.test.ts`              | 14    | OpenGraph video and its dimensions, relative URLs, video/audio/source elements, schema.org VideoObject, malformed JSON-LD, ranking, kinds by extension, GIFs, data:/blob: and non-HTTP refusal, deduplication, empty pages, author fallback.                                                                                                                                                                                                                                                                                                                                          |
 | `extract/proxy.test.ts`             | 8     | `proxyFor` scoping; `scrubCredentials` across schemes and repeated occurrences.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `extract/remote-http.test.ts`       | 9     | A worker reaching nodes through the API: node listing, router backend, unhealthy or absent → no fallback, unreachable control plane → no nodes, resolve and job dispatch, progress, the node's own failure preserved, token required.                                                                                                                                                                                                                                                                                                                                                 |
@@ -2617,7 +2611,6 @@ Read by the engine's `loadConfig` unless marked otherwise. Durations are in seco
 | `NODE_ENV`                                                                                    | `development`                       | `production` requires `SERA_SECRET` and forbids private addresses.                                                                     |
 | `LOG_LEVEL`                                                                                   | `info`                              | trace, debug, info, warn, error, fatal or silent.                                                                                      |
 | `SERA_HOST` / `SERA_PORT`                                                                     | `0.0.0.0` / `4000`                  | API bind address.                                                                                                                      |
-| `SERA_PUBLIC_URL`                                                                             | empty                               | Parsed but not used by any code path.                                                                                                  |
 | `SERA_CORS_ORIGINS`                                                                           | empty                               | CSV; empty disables CORS (the web proxy makes it unnecessary).                                                                         |
 | `SERA_SECRET`                                                                                 | empty                               | HMAC key source; required in production.                                                                                               |
 | `SERA_DATA_DIR`                                                                               | `<cwd>/.data/workspaces`            | Images set `/data`.                                                                                                                    |
@@ -2629,7 +2622,7 @@ Read by the engine's `loadConfig` unless marked otherwise. Durations are in seco
 | `SERA_MAX_ITEMS_PER_JOB`                                                                      | 50                                  | 1–200.                                                                                                                                 |
 | `SERA_JOB_TIMEOUT_SECONDS`                                                                    | 1800                                |                                                                                                                                        |
 | `SERA_RESOLVE_TIMEOUT_SECONDS`                                                                | 45                                  | The shared probe ceiling.                                                                                                              |
-| `SERA_RESOLVE_TIMEOUT_{YOUTUBE,INSTAGRAM,TWITTER,REDDIT}_SECONDS`                             | 60 / 30 / 25 / 25                   | Per-provider probe ceilings.                                                                                                           |
+| `SERA_RESOLVE_TIMEOUT_{YOUTUBE,INSTAGRAM,TWITTER,REDDIT}_SECONDS`                             | 60 / 30 / 25 / 25                   | Per-provider probe ceilings; 0 means the shared one.                                                                                   |
 | `SERA_REDDIT_CLIENT_ID` / `_SECRET`                                                           | empty                               | Enables the OAuth rung.                                                                                                                |
 | `SERA_YOUTUBE_PLAYER_CLIENTS`                                                                 | empty                               | Overrides yt-dlp's player-client choice.                                                                                               |
 | `SERA_YOUTUBE_POT_PROVIDER_URL`                                                               | empty                               | PO-token provider address.                                                                                                             |
@@ -2718,22 +2711,9 @@ more specific sentence; the table shows the defaults.
 Nothing below is covered by a failing test; these are places where the code, its comments or
 its docs disagree, or where something looks worth a second look.
 
-1. **Per-provider resolve timeouts cannot be set to 0.** The config comment says 0 means "use
-   the shared value", but those variables use the positive-integer parser, so 0 is a
-   `ConfigError`.
-2. **`SERA_PUBLIC_URL` is parsed and never used.**
-3. **`--proxy` is passed twice to `yt-dlp` downloads** — `baseArgs` adds it, and `download`
-   adds it again. Harmless, but redundant.
-4. **`MediaResolver.resolve` dynamically imports `hostMatchesAny`**, which the same file
-   already imports statically.
-5. **Exported but unused outside their own file**: `CompletedStep`, `getServiceInfo`,
-   `displayUrl`, `formatRelativeDate` (web); `shortHash`, `siblingPath`, `looksLikeFlag`,
-   `worthAnotherStrategy`, `infoDuration`, `Workspace.listOutputs`, `Workspace.scratchPath`,
-   `MediaResolver.extractionBackends` (engine). `requiresOriginatingNode` and `isTransient`
-   are exported and tested but not used by runtime code.
-6. **The Reddit embed's video item carries a `metadata` field** that `ResolvedItem` doesn't
-   declare (it is cast), so the manifest URL recorded there is never read.
-7. **Documentation drift**:
+1. **Exported but unused outside their own file** (web): `CompletedStep`, `getServiceInfo`,
+   `displayUrl`, `formatRelativeDate`.
+2. **Documentation drift**:
    - the README's "449 tests" (the suite now collects 521, plus 9 Redis tests);
    - `tsconfig.json` refers to `tsconfig.web.json`;
    - `docker-compose.yml`'s header mentions a "standalone profile at the bottom" that is
@@ -2742,5 +2722,5 @@ its docs disagree, or where something looks worth a second look.
      transport, while the bookmarklet now uses the v2 same-tab fragment;
    - `EXTRACTION-NODE.md` suggests `SERA_NODE_ID=home`, while the program's default is
      `residential`.
-8. **`scripts/check-providers.mjs` calls `engine.jobs.create` without a client key.** It
+3. **`scripts/check-providers.mjs` calls `engine.jobs.create` without a client key.** It
    works with the memory backend, but it isn't the signature's intent.

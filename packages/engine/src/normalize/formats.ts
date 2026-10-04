@@ -1,4 +1,4 @@
-import type { YtdlpFormat, YtdlpInfo } from '../extract/ytdlp-types.js';
+import type { YtdlpFormat } from '../extract/ytdlp-types.js';
 import { num, str } from '../extract/ytdlp-types.js';
 
 /**
@@ -224,9 +224,4 @@ export function audioBitrateChoices(sourceAbr: number | undefined): number[] {
   const candidates = [320, 192, 128];
   const usable = candidates.filter((rate) => source === 0 || rate <= Math.max(source * 1.1, 128));
   return usable.length ? usable : [Math.round(Math.max(source, 64))];
-}
-
-/** Reads the primary duration from an info object, in seconds. */
-export function infoDuration(info: YtdlpInfo): number | undefined {
-  return num(info.duration);
 }
