@@ -62,3 +62,25 @@ export function urlFromFragment(hash: string): string | undefined {
   const value = new URLSearchParams(fragment).get(FRAGMENT_KEY);
   return value ? firstHttpUrl(value) : undefined;
 }
+
+/**
+ * Whether the site is running as the installed app.
+ *
+ * The share target only exists once SERA is installed, so the hint about sharing is for
+ * everyone else. `display-mode: standalone` is what an installed app reports; iOS Safari
+ * says so through `navigator.standalone` instead.
+ */
+export function isInstalledApp(win: {
+  readonly matchMedia?: (query: string) => { readonly matches: boolean };
+  /** iOS's `standalone` is not in the DOM types, so it is read off whatever is there. */
+  readonly navigator?: object;
+}): boolean {
+  try {
+    return (
+      win.matchMedia?.('(display-mode: standalone)').matches === true ||
+      (win.navigator as { standalone?: unknown } | undefined)?.standalone === true
+    );
+  } catch {
+    return false;
+  }
+}
