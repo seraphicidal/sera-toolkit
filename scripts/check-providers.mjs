@@ -26,145 +26,14 @@ import { classifyFailure } from '../packages/engine/dist/extract/failure.js';
 import { loadConfig, SeraEngine, SeraError } from '../packages/engine/dist/index.js';
 
 /**
- * The links under test.
+ * The links under test, in provider-cases.json, which the server's daily canary shares: the
+ * cases with a `canary` field are the ones it downloads from (deploy/ORACLE.md, "The canary").
  *
  * `expect` is either the media that should come back or the failure class that should.
  * Every URL here is public and was serving at the time it was added; a case that starts
  * reporting DELETED_CONTENT needs a new link, not a code change.
  */
-const CASES = [
-  {
-    id: 'youtube',
-    url: 'https://www.youtube.com/watch?v=aqz-KE-bpKQ',
-    expect: { kinds: ['video'] },
-    download: [{ kind: 'video' }, { kind: 'audio' }, { kind: 'image' }],
-  },
-  {
-    id: 'youtube-shorts',
-    url: 'https://youtube.com/shorts/Xz3UMZvhgeY',
-    expect: { kinds: ['video'] },
-    download: [{ kind: 'video' }],
-  },
-  {
-    id: 'tiktok',
-    url: 'https://www.tiktok.com/@tiktok/video/7681695065927912735',
-    expect: { kinds: ['video'] },
-    download: [{ kind: 'video' }],
-  },
-  {
-    id: 'vimeo',
-    url: 'https://vimeo.com/22439234',
-    expect: { kinds: ['video'] },
-    download: [{ kind: 'video' }],
-  },
-  {
-    id: 'dailymotion',
-    url: 'https://www.dailymotion.com/video/xb53wii',
-    expect: { kinds: ['video'] },
-    download: [{ kind: 'video' }],
-  },
-  {
-    id: 'twitch-vod',
-    url: 'https://www.twitch.tv/videos/2865128806',
-    expect: { kinds: ['video'] },
-  },
-  {
-    id: 'twitch-channel',
-    url: 'https://www.twitch.tv/somestreamer',
-    expect: { failure: 'UNSUPPORTED_MEDIA' },
-  },
-  {
-    id: 'soundcloud',
-    url: 'https://soundcloud.com/forss/city-ports',
-    expect: { kinds: ['audio'] },
-    download: [{ kind: 'audio' }],
-  },
-  {
-    id: 'bandcamp',
-    url: 'https://boomkat.bandcamp.com/track/home-to-you',
-    expect: { kinds: ['audio'] },
-    download: [{ kind: 'audio' }],
-  },
-  {
-    id: 'x-photo',
-    url: 'https://x.com/NASA/status/2095585125627003244',
-    expect: { kinds: ['image'] },
-    download: [{ kind: 'image' }],
-  },
-  {
-    id: 'x-video',
-    url: 'https://x.com/NASA/status/2095890073031966734',
-    expect: { kinds: ['video'] },
-    download: [{ kind: 'video' }, { kind: 'audio' }],
-  },
-  {
-    id: 'x-multi-photo',
-    url: 'https://x.com/Space_Station/status/2096228102473195546',
-    expect: { minItems: 2, kinds: ['image'] },
-  },
-  { id: 'x-no-media', url: 'https://x.com/jack/status/20', expect: { failure: 'DELETED_CONTENT' } },
-  {
-    id: 'bluesky-photos',
-    url: 'https://bsky.app/profile/bsky.app/post/3lifogne32c25',
-    expect: { minItems: 3, kinds: ['image'] },
-    download: [{ kind: 'image' }],
-  },
-  {
-    id: 'bluesky-video',
-    url: 'https://bsky.app/profile/bsky.app/post/3mk4lzkrnk22d',
-    expect: { kinds: ['video'] },
-    download: [{ kind: 'video' }],
-  },
-  {
-    id: 'mastodon',
-    url: 'https://mastodon.world/@toms_travels/117229304292401389',
-    expect: { minItems: 4, kinds: ['image'] },
-    download: [{ kind: 'image' }],
-  },
-  {
-    id: 'instagram-reel',
-    url: 'https://www.instagram.com/nasajohnson/reel/DcMXl1IPNtB/',
-    expect: { kinds: ['video'] },
-    download: [{ kind: 'video' }, { kind: 'audio' }],
-  },
-  {
-    id: 'instagram-photo',
-    url: 'https://www.instagram.com/p/DcOX3hWFiey/',
-    // With a session this is the post; without one it is the cover image Instagram
-    // publishes for embeds, which is a real public representation and not nothing.
-    expect: { kinds: ['image'], orFailure: 'LOGIN_REQUIRED' },
-    download: [{ kind: 'image' }],
-  },
-  {
-    id: 'reddit-image',
-    url: 'https://www.reddit.com/r/aww/comments/1w9mm3q/x/',
-    expect: { kinds: ['image'] },
-    download: [{ kind: 'image' }],
-  },
-  {
-    id: 'reddit-video',
-    url: 'https://www.reddit.com/r/aww/comments/1w9of32/x/',
-    expect: { kinds: ['video'] },
-    download: [{ kind: 'video' }, { kind: 'audio' }],
-  },
-  {
-    id: 'direct-image',
-    url: 'https://upload.wikimedia.org/wikipedia/commons/4/47/PNG_transparency_demonstration_1.png',
-    expect: { kinds: ['image'] },
-    download: [{ kind: 'image' }],
-  },
-  {
-    id: 'direct-gif',
-    url: 'https://upload.wikimedia.org/wikipedia/commons/2/2c/Rotating_earth_%28large%29.gif',
-    expect: { kinds: ['gif'] },
-    download: [{ kind: 'gif' }],
-  },
-  {
-    id: 'generic-page',
-    url: 'https://commons.wikimedia.org/wiki/File:Rotating_earth_(large).gif',
-    expect: { minItems: 1 },
-  },
-];
+const CASES = JSON.parse(await readFile(new URL('./provider-cases.json', import.meta.url), 'utf8'));
 
 const CLIENT_KEY = 'check-providers';
 
