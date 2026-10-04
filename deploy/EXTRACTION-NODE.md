@@ -74,7 +74,8 @@ npm run serve:node
 ```
 
 More than one machine can be a node at once. Give each its own `SERA_NODE_ID` — `home`,
-`laptop` — and whichever is up takes the work; nodes sharing an ID are counted as one.
+`laptop` — and whichever is up takes the work; nodes sharing an ID are counted as one. An
+Android phone can be one too: [EXTRACTION-NODE-ANDROID.md](EXTRACTION-NODE-ANDROID.md).
 
 `SERA_NODE_PROVIDERS` is a comma-separated allow-list. Leaving it empty means the node
 will take work for any provider, which is rarely what you want — naming `youtube` keeps
