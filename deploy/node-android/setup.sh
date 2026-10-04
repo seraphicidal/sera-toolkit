@@ -28,8 +28,11 @@ if [ -z "${PREFIX:-}" ] || [ ! -d "$PREFIX" ]; then
   exit 1
 fi
 
-log "Installing packages"
-pkg update -y
+log "Upgrading Termux and installing packages"
+# A full upgrade, not just `pkg update`: Termux does not support partial upgrades. Installing
+# or configuring one package against older system libraries leaves it unable to link — seen
+# as ffmpeg's libplacebo failing to find a libc++ symbol on a phone 73 packages behind.
+pkg upgrade -y
 # termux-api is the command-line side of the Termux:API app, used only for the optional
 # Wi-Fi and charging conditions.
 pkg install -y nodejs-lts python ffmpeg git termux-api
