@@ -1982,6 +1982,9 @@ The dev and start servers run on port **3200**. The app imports only
     - 2-year HSTS.
   - A later rule overrides **only** `/import`'s COOP to `unsafe-none`, which the v1 popup
     handshake needs to keep `window.opener`.
+  - `experimental.isrFlushToDisk: false`: a revalidated page is written over its prerendered
+    copy in `.next/server/app`, which is read-only in the container, so every revalidation
+    of `/about` logged `EROFS`. It stays in memory instead.
   - `reactStrictMode`; `poweredByHeader: false`; `output: 'standalone'` with
     `outputFileTracingRoot` at the repository root (via `fileURLToPath`, which is correct on
     Windows).
@@ -2243,8 +2246,8 @@ are installed.
 
 ### `docker-compose.yml` — the four-service stack
 
-- **web** — the published port `${SERA_WEB_PORT:-3000}:3000`, read-only root filesystem, a
-  `/tmp` tmpfs, and `no-new-privileges`.
+- **web** — the published port `${SERA_WEB_PORT:-3000}:3000`, read-only root filesystem,
+  tmpfs for `/tmp` and `.next/cache`, and `no-new-privileges`.
 - **api** — the Redis driver, embedded worker off, trusted proxy, the `media:/data` volume,
   and `SERA_SECRET` required (`${SERA_SECRET:?…}`).
 - **worker** — the same image running `node apps/worker/dist/index.js`, sharing the volume,
@@ -2275,8 +2278,8 @@ the same limits and hardening.
   - Console access logs record method, path and status only.
 - **`docker-compose.oracle.yml`** — the production stack behind Caddy:
   - **caddy** on 80/443/443-udp, with persistent `caddy_data` and `caddy_config`.
-  - **web** — not published, read-only, with a tmpfs for `.next/cache` (the About page's ISR
-    writes there).
+  - **web** — not published, read-only, with a tmpfs for `.next/cache` (Next's fetch cache;
+    the revalidated About page itself is kept in memory, see `next.config.ts`).
   - **api** — the Redis driver, 2 GB / 3 h / 25 items, rate limits 20 / 8 / 2, and the
     optional Reddit, PO-token, node-token and Instagram settings.
     **`SERA_NETWORK_CLASS=datacenter`** by default.
