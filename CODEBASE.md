@@ -2249,7 +2249,8 @@ are installed.
   and `SERA_SECRET` required (`${SERA_SECRET:?…}`).
 - **worker** — the same image running `node apps/worker/dist/index.js`, sharing the volume,
   with CPU and memory limits (defaults 2 CPUs / 2 GB). Scale it with `--scale worker=N`.
-- **redis** — 7.4-alpine, no persistence, 256 MB, **`allkeys-lru`** (see §23).
+- **redis** — 7.4-alpine, no persistence, 256 MB, **`noeviction`** (a queue is not a cache;
+  see the Oracle file below).
 
 Images default to `ghcr.io/seraphicidal/sera-{api,web}:latest`, so `docker compose pull`
 deploys without building. `media` is a named volume, so `down -v` really deletes the media.
@@ -2353,7 +2354,8 @@ Concurrency is cancel-in-progress per ref; permissions are `contents: read` and
    tests run), `build`.
 4. Invariant checks:
    - the API URL baked into `web.Dockerfile` equals the one in `docker-compose.oracle.yml`;
-   - the Oracle Redis uses `noeviction`;
+   - every tracked compose file's Redis uses `noeviction` (a `--maxmemory` without an explicit
+     policy fails too);
    - **every documented `SERA_*` setting exists in the config schema** — it scans
      `.env.example`, the README, `deploy/` and `docker/`, with an explicit list of names read
      only by the node, Compose, Caddy or provisioning;
@@ -2568,25 +2570,22 @@ its docs disagree, or where something looks worth a second look.
    the loose files. It only affects multi-selection jobs routed to a node (in practice,
    YouTube playlists). Uploading only the non-archive files, or running the node with
    `packaging: 'individual'`, would avoid it.
-2. **The default Compose Redis uses `allkeys-lru`.** `docker-compose.oracle.yml` explains why a
-   queue needs `noeviction`, and CI enforces it — but only for that file. `docker-compose.yml`
-   still says `allkeys-lru`.
-3. **Per-provider resolve timeouts cannot be set to 0.** The config comment says 0 means "use
+2. **Per-provider resolve timeouts cannot be set to 0.** The config comment says 0 means "use
    the shared value", but those variables use the positive-integer parser, so 0 is a
    `ConfigError`.
-4. **`SERA_PUBLIC_URL` is parsed and never used.**
-5. **`--proxy` is passed twice to `yt-dlp` downloads** — `baseArgs` adds it, and `download`
+3. **`SERA_PUBLIC_URL` is parsed and never used.**
+4. **`--proxy` is passed twice to `yt-dlp` downloads** — `baseArgs` adds it, and `download`
    adds it again. Harmless, but redundant.
-6. **`MediaResolver.resolve` dynamically imports `hostMatchesAny`**, which the same file
+5. **`MediaResolver.resolve` dynamically imports `hostMatchesAny`**, which the same file
    already imports statically.
-7. **Exported but unused outside their own file**: `CompletedStep`, `getServiceInfo`,
+6. **Exported but unused outside their own file**: `CompletedStep`, `getServiceInfo`,
    `displayUrl`, `formatRelativeDate` (web); `shortHash`, `siblingPath`, `looksLikeFlag`,
    `worthAnotherStrategy`, `infoDuration`, `Workspace.listOutputs`, `Workspace.scratchPath`,
    `MediaResolver.extractionBackends` (engine). `requiresOriginatingNode` and `isTransient`
    are exported and tested but not used by runtime code.
-8. **The Reddit embed's video item carries a `metadata` field** that `ResolvedItem` doesn't
+7. **The Reddit embed's video item carries a `metadata` field** that `ResolvedItem` doesn't
    declare (it is cast), so the manifest URL recorded there is never read.
-9. **Documentation drift**:
+8. **Documentation drift**:
    - the README's "449 tests" (the suite now collects 521, plus 9 Redis tests);
    - `tsconfig.json` refers to `tsconfig.web.json`;
    - `docker-compose.yml`'s header mentions a "standalone profile at the bottom" that is
@@ -2595,5 +2594,5 @@ its docs disagree, or where something looks worth a second look.
      transport, while the bookmarklet now uses the v2 same-tab fragment;
    - `EXTRACTION-NODE.md` suggests `SERA_NODE_ID=home`, while the program's default is
      `residential`.
-10. **`scripts/check-providers.mjs` calls `engine.jobs.create` without a client key.** It
-    works with the memory backend, but it isn't the signature's intent.
+9. **`scripts/check-providers.mjs` calls `engine.jobs.create` without a client key.** It
+   works with the memory backend, but it isn't the signature's intent.
