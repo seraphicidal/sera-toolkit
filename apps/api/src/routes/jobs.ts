@@ -29,7 +29,9 @@ export function registerJobRoutes(app: FastifyInstance, engine: SeraEngine): voi
       const body = createJobRequestSchema.parse(request.body);
 
       try {
-        const job = await engine.jobs.create(body, request.clientKey);
+        const job = await engine.jobs.create(body, request.clientKey, {
+          uncounted: request.canary,
+        });
         abuse.recordSuccess();
         return await reply.status(202).header('cache-control', 'no-store').send(job);
       } catch (error) {
@@ -92,7 +94,7 @@ export function registerJobRoutes(app: FastifyInstance, engine: SeraEngine): voi
     const id = assertJobId(request.params.id);
     const manifest = await engine.workspaces.readManifest(id);
     if (!manifest) throw seraError('NOT_FOUND', { message: 'That download has expired.' });
-    return sendFile(engine, reply, id, manifest.primary);
+    return sendFile(engine, reply, id, manifest.primary, !request.canary);
   });
 
   /** One file from a multi-item job, so a carousel can be saved piece by piece. */
@@ -107,7 +109,7 @@ export function registerJobRoutes(app: FastifyInstance, engine: SeraEngine): voi
       // The manifest is the allowlist: a name that is not in it is not served, whatever
       // it resolves to on disk.
       if (!manifest.files.some((file) => file.name === name)) throw seraError('NOT_FOUND');
-      return sendFile(engine, reply, id, name);
+      return sendFile(engine, reply, id, name, !request.canary);
     },
   );
 }
@@ -117,9 +119,23 @@ async function sendFile(
   reply: FastifyReply,
   jobId: string,
   filename: string,
+  counted: boolean,
 ): Promise<FastifyReply> {
   const path = await engine.workspaces.resolveFile(jobId, filename);
   const info = await stat(path);
+
+  // Bytes delivered, counted once the whole file has gone out, against the job's source.
+  if (counted) {
+    reply.raw.once('finish', () => {
+      void engine.jobs.get(jobId).then((job) =>
+        engine.usage.record({
+          source: job?.provider ?? 'other',
+          kind: 'bytes',
+          bytes: info.size,
+        }),
+      );
+    });
+  }
 
   return (
     reply

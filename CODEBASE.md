@@ -574,8 +574,8 @@ message and hint for its code. The full table is in [§22.3](#223-error-codes).
 Everything a process needs, assembled in one place. `SeraEngine.create(options)` accepts
 optional `config`, `env`, `logger`, `backend`, `dispatcher` (an undici dispatcher, for
 tests), `probe` (a replacement for yt-dlp's metadata dump, so the whole pipeline is testable
-without it) and `importHosts` (the visitor-import CDN allowlist — deliberately not settable
-from the environment). It then:
+without it), `importHosts` (the visitor-import CDN allowlist — deliberately not settable
+from the environment) and `usage` (a `UsageCounter`). It then:
 
 1. Loads config and builds a logger (pretty outside production, named `sera`).
 2. Creates the data directory.
@@ -586,11 +586,14 @@ from the environment). It then:
    and otherwise the local registry.
 5. Builds the `MediaResolver`, wiring in remote backends only when nodes are enabled.
 6. Builds the `WorkspaceManager`, the job backend (memory, or Redis loaded lazily so a
-   memory deployment never loads the Redis client) and the `JobService`.
+   memory deployment never loads the Redis client), the usage counter (`RedisUsageCounter` on
+   its own connection with the Redis driver, `MemoryUsageCounter` otherwise) and the
+   `JobService`.
 7. Starts the workspace reaper and runs one sweep at boot.
 
 The instance exposes `config`, `logger`, `registry`, `extractionNodes`, `resolver`,
-`workspaces`, `backend`, `jobs` and `abuse` (one `AbuseGuard` shared by every entry point).
+`workspaces`, `backend`, `jobs`, `usage` and `abuse` (one `AbuseGuard` shared by every entry
+point).
 Its methods:
 
 - `startWorker(concurrency?)` — starts consuming jobs in this process.
@@ -608,7 +611,21 @@ Its methods:
   The overall status is `ok` when nothing failed, `error` when everything failed, and
   `degraded` otherwise.
 
-- `close()` — stops the reaper, the worker and the backend.
+- `close()` — stops the reaper, the worker, the backend and the usage counter.
+
+### `usage/counts.ts` — usage counts
+
+Per source and UTC day: resolves and downloads, each as successes and failures by error code,
+and bytes delivered — and nothing about the visitor. `usageField(event)` is the only way an
+event becomes storage: `<source>:resolve|download:ok`, `<source>:resolve|download:fail:<CODE>`
+or `<source>:bytes`, where a source or code that is not a plain token (`[A-Za-z0-9_-]{1,64}`)
+becomes `other` or `INTERNAL`, so a URL or message cannot end up in a field.
+`RedisUsageCounter` increments the day's hash `sera:usage:YYYY-MM-DD` and sets it to expire
+in 90 days (`USAGE_RETENTION_DAYS`) in one transaction; a write that fails is logged and
+dropped, never thrown. `MemoryUsageCounter` does the same in a map, pruning past 90 days.
+`read(days)` answers the last `days` days newest first (`usageDates`), `parseUsageDay` turns a
+hash back into `{date, sources: {id: {resolves, downloads, bytes}}}`, and `totalUsage` adds
+days up per source.
 
 ---
 
@@ -1698,7 +1715,8 @@ This is the only place client input becomes a `JobSpec`.
      would keep the whole timeline), and `embed` needs a video option in a container from
      `SUBTITLE_EMBED_CONTAINERS`. Whether the item offers the language is checked by the run.
   4. Builds the spec, carrying the imported entries **only** from the signed token.
-  5. Submits a `queued` record and logs `job queued`.
+  5. Submits a `queued` record and logs `job queued`. `create(request, clientKey,
+{uncounted})` marks the record `uncounted` for the canary.
 - **`get(id)`**, and **`cancel(id)`**: if the job is not terminal, it aborts the in-process
   controller, patches the job to `cancelled`, and destroys the workspace.
 - **`events(id, signal)`** — an async generator that yields the current state first (so a
@@ -1714,6 +1732,8 @@ This is the only place client input becomes a `JobSpec`.
     result.
   - On failure it patches `cancelled` or `failed` with the error, destroys the workspace, and
     logs `job finished` with the error code and failure class.
+  - It counts a `ready` job as a download and a `failed` one as a failure by its code, under
+    the record's provider; a cancelled or `uncounted` job is not counted.
 - `eventTypeFor(job)` maps `ready` → `done`; `failed`/`cancelled`/`expired` → `error`;
   `queued` → `state`; everything else → `progress`.
 
@@ -1889,7 +1909,23 @@ It also sets `request.canary` when `x-sera-canary` matches `SERA_CANARY_TOKEN`
 (`isCanaryToken`, a constant-time comparison; nothing is a canary when no token is
 configured). Canary requests are on the rate limiter's `allowList`, and `abuseGuardFor` —
 which the media and job routes use instead of `engine.abuse` directly — gives them a guard
-that never asserts, records or cools down.
+that never asserts, records or cools down. Canary requests are not counted in usage either.
+`matchesToken` is the constant-time comparison itself, shared with the admin routes.
+
+### `src/routes/admin.ts` — the operator's endpoints
+
+Mounted only when `SERA_ADMIN_TOKEN` is set. **`GET /api/admin/usage?days=N`** (1–90,
+default 7; 30 requests a minute) requires `Authorization: Bearer <token>` — anything else is
+401 with the same "Not found." body as an unknown route — and answers `{days, totals}`:
+`engine.usage.read(days)` and `totalUsage` of it, `no-store`.
+
+### `src/stats.ts` and `src/stats-cli.ts` — `sera stats`
+
+`formatUsage(days, totals)` prints a table per source over the period (resolves, of which
+failed, downloads, of which failed, bytes delivered, and failure codes most frequent first,
+then an `all` row), then one row per day. `stats-cli.js` (`--days=`, `--json`, `--api=`)
+fetches the admin endpoint on loopback with `SERA_ADMIN_TOKEN` from its environment;
+`deploy/stats.sh` runs it in the API container.
 
 ### `src/canary.ts` and `src/canary-cli.ts` — the canary
 
@@ -1935,9 +1971,12 @@ event — fires as soon as a POST body is read, which would cancel every request
   2. Parses the body and resolves with a client-disconnect signal and the request id.
   3. On success, `recordSuccess`. On failure, `recordFailure` — unless the client simply
      left.
+  4. Counts the resolve (not for the canary): a success under `info.provider`, a failure by
+     its error code under `resolver.sourceOf(url)` (the provider that claims the link, or
+     `other`). A client that left is not counted.
 - **`POST /api/media/import`** — the same rate limit, with its own `bodyLimit` of 512 KiB.
   It parses with `importRequestSchema` and calls `importSubmitted`. Refusals count toward the
-  cooldown (off-CDN media is probing).
+  cooldown (off-CDN media is probing). Counted as an `instagram` resolve either way.
 - **`GET /api/thumb/:token`** — verifies the signed token and fetches the image through the
   guarded client (10 s timeout, 4 MiB cap). Only real image types are passed through (jpeg,
   png, webp, gif, avif, bmp), so a signed token cannot become an HTML delivery vector. The
@@ -1963,7 +2002,9 @@ Job ids must match `^[a-f0-9]{16,64}$`, otherwise `NOT_FOUND`.
   not listed is not served, whatever exists on disk.
 - **`sendFile`** — resolves through `workspaces.resolveFile`, and sets the content type from
   the extension, the length, an attachment `content-disposition`, `private, no-store`,
-  `nosniff` and a sandbox CSP, then streams the file.
+  `nosniff` and a sandbox CSP, then streams the file. Once the response has finished
+  (`finish`, so an abandoned download is not counted) it counts the file's size as bytes
+  delivered under the job's provider — unless the request is the canary's.
 
 ### `src/routes/extraction-node.ts` — the node protocol
 
@@ -2020,6 +2061,7 @@ passed to the class as `NodeOptions`):
 | `SERA_API_URL`               | — (required)  | The deployment to dial.                                                                              |
 | `SERA_EXTRACTION_NODE_TOKEN` | — (required)  | The same secret the API has.                                                                         |
 | `SERA_CANARY_TOKEN`          | empty         | The canary's secret (`x-sera-canary`): exempt from rate limits and abuse strikes. Empty disables it. |
+| `SERA_ADMIN_TOKEN`           | empty         | Bearer token for `GET /api/admin/usage`. Empty leaves the endpoint unmounted.                        |
 | `SERA_NODE_ID`               | `residential` | Distinct per machine; nodes that share an id share one capacity slot.                                |
 | `SERA_NODE_PROVIDERS`        | empty = all   | Comma-separated allow-list, normally `youtube`.                                                      |
 | `SERA_NODE_NETWORK_CLASS`    | `residential` | `datacenter` for a second cloud node.                                                                |
@@ -2499,7 +2541,9 @@ the same limits and hardening.
     limit.
   - **potoken** — an opt-in profile running `brainicism/bgutil-ytdlp-pot-provider`.
   - **redis** — with **`noeviction`**. A queue is not a cache; LRU would silently drop live
-    jobs.
+    jobs. Snapshotted hourly (`--save '3600 1'`) to the `redis_data` volume, because it also
+    holds 90 days of usage counts.
+  - **api** also takes `SERA_ADMIN_TOKEN`, which mounts the admin endpoint.
 - **`provision.sh`** — the idempotent root script for a fresh Ubuntu or Oracle Linux host:
   1. Installs Docker (`get.docker.com` on apt; the CentOS repo on dnf, since Oracle Linux
      reports itself as `ol`).
@@ -2511,7 +2555,7 @@ the same limits and hardening.
      CPUs from `nproc`.
   5. Writes the optional Caddy email file.
   6. Installs a `/usr/local/bin/sera` wrapper around `docker compose` with the right project
-     directory, env file and compose file.
+     directory, env file and compose file; `sera stats` runs `deploy/stats.sh` instead.
   7. Pulls, starts, waits for the API to report healthy, installs the timers
      (`install-timers.sh`), and prints next steps (including the Oracle security-list rules).
 - **`auto-update.sh`** — run by `sera-update.timer` every 15 minutes (paused by
@@ -2542,6 +2586,9 @@ the same limits and hardening.
   `/var/lib/sera/canary.json`: each source gets `consecutiveFailures` (0 after a success, else
   the previous count plus one), and sources an `--only` run did not check keep their entry.
   `sera-canary.service` bounds a whole run at an hour.
+- **`stats.sh`** — `sudo sera stats`: refuses without `SERA_ADMIN_TOKEN` in `.env`, then
+  runs `stats-cli.js` in the API container with its arguments (`--days=`, `--json`). Run with
+  `bash` by the wrapper, so it needs no executable bit.
 - **`install-timers.sh`** and **`systemd/`** — copies every unit in `systemd/` into
   `/etc/systemd/system` (rewriting `/opt/sera` for another `SERA_DIR`), marks the three scripts
   they run executable, and enables the timers. `sera-update.service` is a oneshot with a 20-minute ceiling; `sera-update.timer`
@@ -2686,6 +2733,7 @@ ffprobe. The counts below are tests collected by `vitest list`.
 | `audio-tags.test.ts`           | 9     | Read back with ffprobe: the cover cropped square from a 4:3 picture; title (with `=`, `;`, `#`), artist and album and a 600×600 cover in MP3, M4A and Opus with the audio copied; tags without a cover; the FLAC picture block's layout. Through the real `JobRunner`: an audio job tagged from the item's music metadata with its thumbnail as the cover; still tagged when the thumbnail 404s; the fallback thumbnail used when the first is missing.                                                                                        |
 | `subtitles.test.ts`            | 11    | `subtitleTracks`: manual tracks named and live chat left out; only the original-language automatic track, labelled, never its translations; a manual track preferred in the same language; the entry's own language when nothing is marked `-orig`. yt-dlp's subtitle arguments; the node's check of a task's subtitles (a leading `-`, a comma, an unknown format, `only` with `embed`). Refused by the API: more than one item, with a trim, an embed into audio. A track the item does not offer fails the job in words.                    |
 | `trim.test.ts`                 | 10    | Through the pipeline, measured with ffprobe: a video cut from 0:01 to 0:02 is 1 s and re-encoded (the fixture's only keyframe is at 0), a cut from the start stays an H.264 copy and is 2 s, an MP3 cut from 0:01 is 1 s; names gain `-trim-…`; refused: more than one item, an image, times past the end or out of order. Units: `copyIsAccurate`, the fixture keyframe found at 0, yt-dlp's section arguments, the node's own check of a task's range.                                                                                       |
+| `usage-counts.test.ts`         | 8     | Through the routes: a visitor's resolve, download and its exact bytes counted under `direct`; a failed link counted by its error code, with no link, address or file name anywhere in the counts; the canary not counted at all. The admin endpoint: missing, wrong and non-bearer tokens refused alike; 7 days by default, newest first, more than 90 refused; absent without a token. `formatUsage`'s rows and the empty case.                                                                                                               |
 | `canary.test.ts`               | 8     | A working source downloaded through the API; a broken one reported by its error code while the run carries on; a stuck one stopped at its timeout; never rate-limited or cooled down with the token, while a visitor is; the exact token required; the case list (labels, YouTube present, nothing needing sign-in); the smallest option of a kind.                                                                                                                                                                                            |
 | `pipeline.test.ts`             | 23    | Direct links (options, proxied thumbnail, redirects, non-media refused, missing → unavailable); the generic page reader (declared media, robots.txt honoured, nothing invented); video download with both streams intact, naming from metadata, filename override; audio to a real MP3 and a lossless WAV, and refusing audio from a silent video; untouched images; GIF original and GIF→MP4; ZIP packaging, per-file serving, individual and forced-ZIP modes; SSE ending in `done`; monotonic progress.                                     |
 | `api-security.test.ts`         | 22    | Scheme, credential and length refusal and malformed bodies; forged option tokens, options from another resolution, empty and oversized selections, forged thumbnail tokens; bad job ids and path traversal in file names; files served as non-executable attachments; no stack traces; ENOTFOUND as a typo; hardening headers; no echo of the source URL; clean 404s; health and readiness; `/api/info`; long thumbnail tokens accepted, forged ones refused.                                                                                  |
@@ -2701,10 +2749,11 @@ ffprobe. The counts below are tests collected by `vitest list`.
 | `../../contracts/src/trim.test.ts`      | 12    | Timecodes read and written (m:ss, mm:ss, h:mm:ss; anything else refused); `checkTrim` for a start, an end or both, an end at the reported length, times outside the media, out of order or too short, a trim that keeps everything, an unknown length; `trimSuffix`; the job schema accepting a trim and refusing a malformed or backwards one in words.                                                                                                                                                                                                                              |
 | `config.test.ts`                        | 3     | Per-provider resolve ceilings: their defaults and the shared fallback, 0 meaning the shared one, and negative, fractional or a shared 0 refused.                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `convert/bounds.test.ts`                | 2     | FFmpeg stops at the output ceiling; writes everything when under it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `usage/counts.test.ts`                  | 9     | The field an event increments, by outcome and code; a URL as a source or an address in a code reduced to `other`/`INTERNAL`; no field for no bytes; a day's hash read back, stray fields ignored; UTC days newest first, capped at 90; memory counts per day and totalled, a day forgotten after 90; Redis: one hash per day with a 90-day TTL; a broken Redis loses the count without throwing.                                                                                                                                                                                      |
 | `extract/failure.test.ts`               | 14    | Each class distinction (network-fixable, stream vs page, login vs misconfiguration, gone/private/geo, bad link vs unsupported media, ours vs theirs, unknown → extractor bug); routing predicates; every contract error code mapped deliberately; live streams; queue-full vs source refusal.                                                                                                                                                                                                                                                                                         |
 | `extract/html.test.ts`                  | 14    | OpenGraph video and its dimensions, relative URLs, video/audio/source elements, schema.org VideoObject, malformed JSON-LD, ranking, kinds by extension, GIFs, data:/blob: and non-HTTP refusal, deduplication, empty pages, author fallback.                                                                                                                                                                                                                                                                                                                                          |
 | `extract/proxy.test.ts`                 | 8     | `proxyFor` scoping; `scrubCredentials` across schemes and repeated occurrences.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `extract/remote-http.test.ts`           | 9     | A worker reaching nodes through the API: node listing, router backend, unhealthy or absent → no fallback, unreachable control plane → no nodes, resolve and job dispatch, progress, the node's own failure preserved, token required.                                                                                                                                                                                                                                                                                                                                                 |
+| `extract/remote-http.test.ts`           | 9     | A worker reaching nodes through the API (each test awaits the status refresh, not a fixed delay): node listing, router backend, unhealthy or absent → no fallback, unreachable control plane → no nodes, resolve and job dispatch, progress, the node's own failure preserved, token required.                                                                                                                                                                                                                                                                                        |
 | `extract/remote.test.ts`                | 22    | The registry: waiting and queued claims, provider filtering, the hold expiring as a heartbeat, staleness, failure pass-through, task timeout, cancellation seen by the node, progress forwarding, stray results ignored, matching the right waiting node, network-class pinning, per-node capacity; a lapsed lease (another node completes it under a new id, the silent node's slot freed, its late progress/uploads/results ignored, its partial uploads dropped, a reporting node keeps its task, cancellation after a requeue); `remoteBackend` health and one backend per class. |
 | `extract/router.test.ts`                | 16    | Primary-only success, fallback on network problems, none for everywhere-same answers, skipping unhealthy or unwilling backends, first failure reported, late-connecting nodes, `describe`; the capability matrix — no residential fallback, unknown providers local-only, node-first for measured datacentre refusals, no reordering for `unknown`, the datacentre still tried with no node, coming home when a node drops, the `remote` flag, no return for address-independent failures.                                                                                            |
 | `extract/strategy.test.ts`              | 11    | The ladder: stop at the first answer, continue when another rung could answer, stop on definitive failures, skip non-answering rungs, run narrow rungs, never repeat, degraded only on request, unavailable credentials skipped, a clean error when nothing can run, first failure plus the recorded ladder, a later definitive answer preferred.                                                                                                                                                                                                                                     |
@@ -2817,6 +2866,7 @@ Read by the engine's `loadConfig` unless marked otherwise. Durations are in seco
 | `GET /api/jobs/:id/download`    | API                 | The primary file or ZIP.                                |
 | `GET /api/jobs/:id/files/:name` | API                 | One file of a multi-file job.                           |
 | `GET /api/info`                 | API                 | Providers and limits.                                   |
+| `GET /api/admin/usage`          | API                 | Usage counts; bearer `SERA_ADMIN_TOKEN`, else 401/404.  |
 | `GET /health`, `GET /ready`     | API (+ web rewrite) | Liveness and readiness.                                 |
 | `/internal/extraction/*`        | API (token)         | The node protocol (§12).                                |
 | `/`, `/about`, `/import`        | Web                 | Pages.                                                  |

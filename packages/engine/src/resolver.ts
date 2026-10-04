@@ -226,6 +226,21 @@ export class MediaResolver {
   private readonly router: ExtractionRouter;
 
   /**
+   * The source a link belongs to, for counting a resolve that failed before it named one:
+   * a provider id, or `other` for a link no provider claims or that is not a link at all.
+   */
+  sourceOf(input: string): string {
+    try {
+      const { url } = parseUserUrl(input, {
+        allowPrivateAddresses: this.config.allowPrivateAddresses,
+      });
+      return this.registry.detect(url)?.id ?? 'other';
+    } catch {
+      return 'other';
+    }
+  }
+
+  /**
    * Resolves user input into the client model.
    *
    * `requestId` is the API's own id for the request, carried only so a log line can be

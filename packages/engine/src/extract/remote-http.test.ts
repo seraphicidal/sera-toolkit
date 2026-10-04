@@ -110,10 +110,13 @@ afterAll(async () => {
 
 const clientFor = () => new RemoteOverHttp(base, TOKEN, silentLogger(), 0, 10);
 
-/** The status read is a background refresh, so the first look is empty by design. */
+/**
+ * The status read is a background refresh, so the first look is empty by design. The test
+ * waits for that refresh itself rather than a fixed delay, which a loaded CI runner outlasted.
+ */
 async function withStatus(client: RemoteOverHttp): Promise<RemoteOverHttp> {
   client.status();
-  await new Promise((done) => setTimeout(done, 60));
+  await (client as unknown as { refresh(): Promise<void> }).refresh();
   return client;
 }
 
