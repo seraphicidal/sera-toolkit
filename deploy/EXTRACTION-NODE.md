@@ -112,6 +112,11 @@ resume. [ORACLE.md](ORACLE.md#automatic-updates) covers pausing the rest of the 
 A trimmed download is cut on the node too: the task says which part to keep, and only that
 part crosses the node's upload.
 
+Subtitles are fetched on the node as well, from the same network as the video: embedded in
+it, or as an `.srt`/`.vtt` file uploaded beside it or on its own. A node older than this
+ignores the subtitles in a task, so restart it on the current code (`git pull`, then
+`run-node.cmd`) after the server is updated.
+
 ## What it will and will not be asked to do
 
 The router sends work to a node only when the server's own attempt failed in a way another
