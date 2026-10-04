@@ -9,9 +9,13 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# A newer push supersedes a pull request's run, but never a run on main: a cancelled
+# publish left the API image of one commit beside the web image of another, and the server
+# deployed the pair (a page without the feature its API had just gained). Runs on main queue
+# instead; a queued one is still replaced by a newer push, which builds from a later commit.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:
   contents: read
@@ -364,7 +368,9 @@ jobs:
           docker rm -f sera-web-ci sera-api-web-ci sera-redis-web-ci >/dev/null
           docker network rm sera-web-ci >/dev/null
 
-      # Published for both architectures once the amd64 build has proved itself.
+      # Published for both architectures once the amd64 build has proved itself — under the
+      # commit's tag only. `latest`, which the server pulls, moves for both images in the
+      # step after, so it can never name the API of one commit and the web of another.
       - name: Publish API image
         if: env.PUSH == 'true'
         uses: docker/build-push-action@v6
@@ -373,9 +379,7 @@ jobs:
           file: docker/api.Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ${{ env.IMAGE_API }}:latest
-            ${{ env.IMAGE_API }}:${{ github.sha }}
+          tags: ${{ env.IMAGE_API }}:${{ github.sha }}
           cache-from: type=gha,scope=api
           cache-to: type=gha,mode=max,scope=api
 
@@ -387,11 +391,17 @@ jobs:
           file: docker/web.Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ${{ env.IMAGE_WEB }}:latest
-            ${{ env.IMAGE_WEB }}:${{ github.sha }}
+          tags: ${{ env.IMAGE_WEB }}:${{ github.sha }}
           cache-from: type=gha,scope=web
           cache-to: type=gha,mode=max,scope=web
+
+      # A manifest copy in the registry: seconds for both, with nothing rebuilt.
+      - name: Move latest to this commit, for both images together
+        if: env.PUSH == 'true'
+        run: |
+          for image in "$IMAGE_API" "$IMAGE_WEB"; do
+            docker buildx imagetools create --tag "$image:latest" "$image:$GITHUB_SHA"
+          done
 
       - name: Confirm both architectures were published
         if: env.PUSH == 'true'
