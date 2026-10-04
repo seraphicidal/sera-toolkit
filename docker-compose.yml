@@ -30,6 +30,8 @@ services:
     read_only: true
     tmpfs:
       - /tmp
+      # Next's fetch cache. A revalidated page is kept in memory (next.config.ts).
+      - /app/apps/web/.next/cache
     security_opt:
       - no-new-privileges:true
 
