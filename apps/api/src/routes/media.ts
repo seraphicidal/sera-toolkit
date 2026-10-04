@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { importRequestSchema, resolveRequestSchema } from '@sera/contracts';
 import type { SeraEngine } from '@sera/engine';
 import { header, safeFetch, seraError, SeraError } from '@sera/engine';
+import { abuseGuardFor } from '../plugins/client.js';
 import { clientAbortSignal } from '../plugins/disconnect.js';
 
 /** Thumbnails are small; anything larger is not a preview image. */
@@ -44,7 +45,8 @@ export function registerMediaRoutes(app: FastifyInstance, engine: SeraEngine): v
     async (request, reply) => {
       // Clients that keep failing are cooled down before any extractor work is spent
       // on them. Checked ahead of parsing so a flood of malformed bodies costs nothing.
-      engine.abuse.assertAllowed(request.clientKey);
+      const abuse = abuseGuardFor(engine, request);
+      abuse.assertAllowed();
 
       const body = resolveRequestSchema.parse(request.body);
       // A visitor who navigates away should not leave a probe running.
@@ -52,16 +54,13 @@ export function registerMediaRoutes(app: FastifyInstance, engine: SeraEngine): v
 
       try {
         const info = await engine.resolver.resolve(body.url, signal, request.id);
-        engine.abuse.recordSuccess(request.clientKey);
+        abuse.recordSuccess();
         return await reply.header('cache-control', 'no-store').send(info);
       } catch (error) {
         // A client giving up mid-probe is not abuse, and neither is a private or
         // deleted post; only the codes that suggest probing count.
         if (!signal.aborted) {
-          engine.abuse.recordFailure(
-            request.clientKey,
-            error instanceof SeraError ? error.code : undefined,
-          );
+          abuse.recordFailure(error instanceof SeraError ? error.code : undefined);
         }
         throw error;
       }
@@ -88,20 +87,18 @@ export function registerMediaRoutes(app: FastifyInstance, engine: SeraEngine): v
       },
     },
     async (request, reply) => {
-      engine.abuse.assertAllowed(request.clientKey);
+      const abuse = abuseGuardFor(engine, request);
+      abuse.assertAllowed();
       const body = importRequestSchema.parse(request.body);
 
       try {
         const info = engine.resolver.importSubmitted(body, request.id);
-        engine.abuse.recordSuccess(request.clientKey);
+        abuse.recordSuccess();
         return await reply.header('cache-control', 'no-store').send(info);
       } catch (error) {
         // Media named off Instagram's hosts counts: nothing Instagram serves produces that,
         // so it is someone finding out what this endpoint will fetch.
-        engine.abuse.recordFailure(
-          request.clientKey,
-          error instanceof SeraError ? error.code : undefined,
-        );
+        abuse.recordFailure(error instanceof SeraError ? error.code : undefined);
         throw error;
       }
     },

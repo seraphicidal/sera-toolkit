@@ -89,6 +89,9 @@ services:
       # Lets an extraction node on another network claim work. Empty leaves the
       # endpoints unmounted entirely. See deploy/EXTRACTION-NODE.md.
       SERA_EXTRACTION_NODE_TOKEN: ${SERA_EXTRACTION_NODE_TOKEN:-}
+      # The daily canary's secret (deploy/canary.sh): exempts its requests from rate limits
+      # and abuse strikes, and keeps them out of usage counts. Empty disables it.
+      SERA_CANARY_TOKEN: ${SERA_CANARY_TOKEN:-}
       # An Instagram session for photo posts. Read the warning in deploy/ORACLE.md
       # before setting this on a deployment other people can reach.
       SERA_INSTAGRAM_SESSION_ID: ${SERA_INSTAGRAM_SESSION_ID:-}

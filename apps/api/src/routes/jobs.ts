@@ -4,6 +4,7 @@ import type { FastifyInstance, FastifyReply } from 'fastify';
 import { createJobRequestSchema } from '@sera/contracts';
 import type { SeraEngine } from '@sera/engine';
 import { contentDispositionValue, mimeTypeFor, seraError, SeraError } from '@sera/engine';
+import { abuseGuardFor } from '../plugins/client.js';
 import { clientAbortSignal } from '../plugins/disconnect.js';
 
 /** Job ids are hex; rejecting anything else keeps malformed input away from the store. */
@@ -23,20 +24,18 @@ export function registerJobRoutes(app: FastifyInstance, engine: SeraEngine): voi
       },
     },
     async (request, reply) => {
-      engine.abuse.assertAllowed(request.clientKey);
+      const abuse = abuseGuardFor(engine, request);
+      abuse.assertAllowed();
       const body = createJobRequestSchema.parse(request.body);
 
       try {
         const job = await engine.jobs.create(body, request.clientKey);
-        engine.abuse.recordSuccess(request.clientKey);
+        abuse.recordSuccess();
         return await reply.status(202).header('cache-control', 'no-store').send(job);
       } catch (error) {
         // Forged or expired handles are exactly the pattern worth cooling down; a
         // legitimately failed job is not.
-        engine.abuse.recordFailure(
-          request.clientKey,
-          error instanceof SeraError ? error.code : undefined,
-        );
+        abuse.recordFailure(error instanceof SeraError ? error.code : undefined);
         throw error;
       }
     },

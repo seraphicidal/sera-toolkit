@@ -12,6 +12,9 @@
 #   checks        every other /health check is ok (yt-dlp, ffmpeg, storage, queue)
 #   auto-update   the server's own auto-update (deploy/auto-update.sh) last succeeded
 #   ytdlp-update  GitHub's daily yt-dlp update workflow last succeeded
+#   canary-<id>   one per source: the daily canary (deploy/canary.sh) could download from it.
+#                 It counts as down only after two failed canary runs in a row, so one
+#                 flaky night does not page anyone.
 #
 # The topic comes from SERA_ALERT_NTFY_TOPIC in /opt/sera/.env. Without one this does
 # nothing. Subscribe to the same topic in the ntfy app. It is the only secret here: anyone
@@ -24,6 +27,7 @@ set -euo pipefail
 
 DIR="${SERA_DIR:-/opt/sera}"
 STATE_DIR=/var/lib/sera/alerts
+CANARY=/var/lib/sera/canary.json
 REPO="${SERA_ALERT_REPO:-seraphicidal/sera-toolkit}"
 mkdir -p "$STATE_DIR"
 
@@ -58,11 +62,11 @@ label() {
   esac
 }
 
-# observe <name> <up|down> <what is wrong>
+# observe <name> <up|down> <what is wrong> [<what recovered>]
 # Records an observation; notifies when a state has held for two checks and differs from
 # the last state notified. Unknown (first run) counts as up, so a fresh install is quiet.
 observe() {
-  local name=$1 seen=$2 detail=$3
+  local name=$1 seen=$2 detail=$3 recovered=${4:-}
   local file="$STATE_DIR/$name"
   local notified=up pending='' count=0
   # shellcheck disable=SC1090
@@ -78,7 +82,11 @@ observe() {
     if [ "$seen" = down ]; then
       notify "SERA: $detail" "$detail on $domain." high rotating_light
     else
-      notify "SERA: recovered" "$(label "$name") is back to normal on $domain." default white_check_mark
+      if [ -n "$recovered" ]; then
+        notify "SERA: $recovered recovered" "$recovered recovered on $domain." default white_check_mark
+      else
+        notify "SERA: recovered" "$(label "$name") is back to normal on $domain." default white_check_mark
+      fi
     fi
     notified=$seen pending='' count=0
   fi
@@ -124,3 +132,14 @@ case "$conclusion" in
   unknown) echo "[alert] ytdlp-update: GitHub did not answer; unchanged" ;;
   *) observe ytdlp-update up '' ;;
 esac
+
+# 6. The canary: a real download per source, once a day. Down after two failed runs in a row.
+if [ -f "$CANARY" ]; then
+  while IFS=$'	' read -r source source_label failures code; do
+    if [ "$failures" -ge 2 ]; then
+      observe "canary-$source" down "$source_label downloads failing: $code" "$source_label downloads"
+    else
+      observe "canary-$source" up '' "$source_label downloads"
+    fi
+  done < <(jq -r '.[] | [.source, .label, (.consecutiveFailures // 0), (.code // "")] | @tsv' "$CANARY")
+fi

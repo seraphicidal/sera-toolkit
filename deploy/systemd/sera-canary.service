@@ -1,0 +1,12 @@
+# Installed by deploy/install-timers.sh. Started by sera-canary.timer, or on demand with
+# `sudo systemctl start sera-canary.service`.
+[Unit]
+Description=SERA: download one small file per source through the API, to prove they work
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/sera/deploy/canary.sh
+# Each source has its own 3-minute ceiling inside the run; this bounds the whole run.
+TimeoutStartSec=1h
