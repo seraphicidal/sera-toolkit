@@ -2622,7 +2622,7 @@ the same limits and hardening.
   runs the node in a 15-second restart loop), `refresh-ytdlp.cmd once|daily` (`tools:fetch
 --only=ytdlp --pin-from=main` unless `ytdlp-updates.paused` exists; `ping` as the sleep
   because a console-less task cannot run `timeout.exe`), `kill-orphans.ps1` (the node and the
-  daily refresher), and `install-task.ps1` (the S4U scheduled task: boot, logon and a
+  daily refresher, matched by command line with either slash — the launcher's is a backslash), and `install-task.ps1` (the S4U scheduled task: boot, logon and a
   5-minute watchdog). `.gitattributes` keeps `*.cmd` CRLF, since `cmd.exe` can miss a
   `goto` label in an LF-only file.
 - **`ORACLE.md`** — the step-by-step Oracle Always Free guide: the account and trial caveats,
