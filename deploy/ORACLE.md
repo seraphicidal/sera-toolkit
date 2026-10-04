@@ -246,6 +246,8 @@ reach, three things are true and worth saying plainly:
   account until you log the session out.
 
 It is off by default, and on a public deployment leaving it off is the reasonable choice.
+An extraction node can hold the session instead, so it never reaches this server: see
+[EXTRACTION-NODE.md](EXTRACTION-NODE.md#instagram-photo-posts-and-carousels).
 With no session the capability model reports Instagram images and carousels as unavailable
 and the app says so, rather than offering a button that fails.
 
