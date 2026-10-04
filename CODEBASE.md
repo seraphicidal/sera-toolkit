@@ -2392,7 +2392,7 @@ the same limits and hardening.
      (`install-timers.sh`), and prints next steps (including the Oracle security-list rules).
 - **`auto-update.sh`** — run by `sera-update.timer` every 15 minutes (paused by
   `/opt/sera/.auto-update-paused`). Fast-forwards the checkout to `origin/main` when it has no
-  local edits, tags the running images `:sera-rollback`, runs `sera pull`, and stops if neither
+  local edits (file modes ignored: a `chmod` is not an edit), tags the running images `:sera-rollback`, runs `sera pull`, and stops if neither
   the checkout nor any image changed. Otherwise `sera up -d`, then waits up to 180 s for
   health, asked on the host through Caddy (`--resolve` to 127.0.0.1): `/health` with every
   check `ok` except `extraction-nodes`, `/ready`, and `/`. Unhealthy → restores the checkout
@@ -2410,8 +2410,8 @@ the same limits and hardening.
   `https://ntfy.sh/<topic>`, with a click-through to `/health`. A first run is quiet.
   `--test` sends a test notification.
 - **`install-timers.sh`** and **`systemd/`** — copies every unit in `systemd/` into
-  `/etc/systemd/system` (rewriting `/opt/sera` for another `SERA_DIR`) and enables the
-  timers. `sera-update.service` is a oneshot with a 20-minute ceiling; `sera-update.timer`
+  `/etc/systemd/system` (rewriting `/opt/sera` for another `SERA_DIR`), marks the two scripts
+  they run executable, and enables the timers. `sera-update.service` is a oneshot with a 20-minute ceiling; `sera-update.timer`
   fires 10 minutes after boot and every 15 minutes after (±1 minute). `sera-alert.timer` fires
   3 minutes after boot and every 5 minutes.
 - **`node-android/`** — an extraction node in Termux (guide: `EXTRACTION-NODE-ANDROID.md`).

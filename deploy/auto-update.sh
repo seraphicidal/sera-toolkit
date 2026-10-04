@@ -79,7 +79,8 @@ image_ids() {
 old_rev=$(git rev-parse HEAD)
 git fetch -q origin main
 if [ "$(git rev-parse origin/main)" != "$old_rev" ]; then
-  if git diff --quiet && git diff --cached --quiet; then
+  # File modes are not edits: a chmod (as provisioning does) must not freeze the checkout.
+  if git -c core.fileMode=false diff --quiet && git -c core.fileMode=false diff --cached --quiet; then
     git merge -q --ff-only origin/main
     log "checkout ${old_rev:0:7} → $(git rev-parse --short HEAD)"
   else

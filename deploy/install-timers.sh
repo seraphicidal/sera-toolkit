@@ -15,7 +15,9 @@ for unit in *.service *.timer; do
   sed "s#/opt/sera#$DIR#g" "$unit" >"/etc/systemd/system/$unit"
   case "$unit" in *.timer) timers+=("$unit") ;; esac
 done
-chmod 755 "$DIR"/deploy/*.sh
+# Only the scripts the units run; marking anything else executable would show up as a
+# local edit to the checkout, which auto-update.sh then refuses to move forward.
+chmod 755 "$DIR/deploy/auto-update.sh" "$DIR/deploy/alert-check.sh"
 
 systemctl daemon-reload
 systemctl enable --now "${timers[@]}"
