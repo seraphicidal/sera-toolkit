@@ -63,6 +63,8 @@ WORKDIR /app
 # The standalone output is rooted at the workspace, so the server lands under apps/web.
 COPY --from=build --chown=node:node /app/apps/web/.next/standalone ./
 COPY --from=build --chown=node:node /app/apps/web/.next/static ./apps/web/.next/static
+# public/ (the favicon and the app icons) is not part of the standalone output either.
+COPY --from=build --chown=node:node /app/apps/web/public ./apps/web/public
 
 USER node
 EXPOSE 3000

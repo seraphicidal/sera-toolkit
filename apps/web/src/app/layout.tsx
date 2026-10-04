@@ -14,6 +14,12 @@ export const metadata: Metadata = {
   description:
     'Paste a link and get the media. A universal downloader and converter for publicly accessible video, audio, images and GIFs.',
   applicationName: 'SERA.toolkit',
+  // The manifest (app/manifest.ts) is linked by Next itself.
+  icons: {
+    icon: [{ url: '/icon.svg', type: 'image/svg+xml' }],
+    apple: '/icons/apple-touch-icon.png',
+  },
+  appleWebApp: { capable: true, title: 'SERA', statusBarStyle: 'default' },
   robots: { index: true, follow: true },
   // No analytics, no third-party fonts, no external anything.
   other: { referrer: 'no-referrer' },

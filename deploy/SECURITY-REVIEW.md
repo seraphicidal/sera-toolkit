@@ -399,3 +399,27 @@ link. Two consequences, both handled on the client so a recipient is never harme
   reads the body as text and parses it itself so a redirect or a non-JSON login page is reported as
   "sign in on the website" rather than thrown into a generic catch. A test asserts no `alert` in the
   built source contains a URL, CDN host, cookie or the serialized payload.
+
+# Addendum — Share to SERA and recent downloads
+
+**A shared link starts an analysis without a tap.** That is the point of the share target, and
+it is also true of any link to `/share?url=…` or `/#url=…` that someone is sent. What such a link
+can do is what typing the URL and pressing Analyze does: one resolve request, under the visitor's
+own rate limit. It cannot start a download (that still takes a tap on Download, as with the
+fragment transport above), and one failed resolve does not reach the abuse cooldown, which needs
+several. The link is checked in the browser first: only an http(s) URL is accepted
+(`firstHttpUrl`), so `javascript:`, `data:` and the like never reach the form.
+
+**What reaches the server.** The share sheet's `GET /share?…` necessarily carries the shared text
+to the web server once; the page then moves the link into the fragment (`location.replace` to
+`/#url=…`), which is never sent, and clears it as soon as it is read. So the link appears in at
+most one request line, besides the `POST /api/media/info` body that follows, as it would anyway.
+
+**Recent downloads stay in the browser.** They live in `localStorage` and are never sent.
+Because a stored value becomes an `href`, entries are validated on every read: an entry whose
+download path is not a same-origin `/api/` path, or whose source link is not http(s), is dropped
+(tested). Storage that is blocked or full reads as an empty list.
+
+**The installable app changes no header.** The manifest, the icons and `/share` are same-origin
+and served under the site-wide CSP; there is no service worker. A test asserts there is no new
+header rule and nothing relaxed.

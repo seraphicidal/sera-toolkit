@@ -338,6 +338,10 @@ jobs:
           # and a route that renders server-side against it.
           curl -fsS http://127.0.0.1:3000/ | grep -q 'SERA' || { echo 'home page did not render'; exit 1; }
           curl -fsS http://127.0.0.1:3000/health | grep -q '"status":"ok"' || { echo 'rewrite to the API did not work'; exit 1; }
+          # The installable app: its manifest and icons, which live outside the standalone
+          # output and have to be copied into the image.
+          curl -fsS http://127.0.0.1:3000/manifest.webmanifest | grep -q '"share_target"' || { echo 'manifest missing'; exit 1; }
+          curl -fsS -o /dev/null http://127.0.0.1:3000/icons/icon-512.png || { echo 'icons missing from the image'; exit 1; }
           curl -fsS http://127.0.0.1:3000/about >/dev/null
 
           # ISR revalidation writes to the cache; a read-only mount would surface here.
