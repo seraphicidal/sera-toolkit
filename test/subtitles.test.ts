@@ -111,6 +111,12 @@ describe('the tracks offered', () => {
     ).toEqual([{ lang: 'de', label: 'German (auto-generated)', auto: true }]);
   });
 
+  it('names an undetermined language as such, not as "root"', () => {
+    expect(subtitleTracks({ subtitles: { und: [{ ext: 'vtt' }] } })).toEqual([
+      { lang: 'und', label: 'Unknown language', auto: false },
+    ]);
+  });
+
   it('offers nothing when there is nothing', () => {
     expect(subtitleTracks({})).toEqual([]);
     expect(languageName('zz-not-a-language')).toBeTypeOf('string');

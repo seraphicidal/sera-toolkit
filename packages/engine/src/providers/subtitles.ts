@@ -43,8 +43,12 @@ const names = new Intl.DisplayNames(['en'], { type: 'language', fallback: 'code'
 
 /** "German (Germany)" for `de-DE`, the code itself for anything unrecognised. */
 export function languageName(lang: string): string {
+  const code = lang.replace(/-orig$/, '');
+  // `und` is "undetermined", which Intl names "root", after its locale data; YouTube uses it
+  // for a track whose uploader set no language.
+  if (baseLanguage(code) === 'und') return 'Unknown language';
   try {
-    return names.of(lang.replace(/-orig$/, '')) ?? lang;
+    return names.of(code) ?? lang;
   } catch {
     return lang;
   }
