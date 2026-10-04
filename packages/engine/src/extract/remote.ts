@@ -388,6 +388,24 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
     task: Omit<RemoteTask, 'id' | 'createdAt'>,
     options: { onProgress?: (progress: RemoteProgress) => void; signal?: AbortSignal } = {},
   ): Promise<readonly RemoteFile[]> {
+    // Nodes are connected, but none can do what this job asks: say so now, rather than
+    // after the task timeout spent waiting for a node that is not coming.
+    const required = requiredFeatures(task);
+    const nodes = this.live(task.networkClass).filter(
+      (node) => !node.providers.length || node.providers.includes(task.providerId),
+    );
+    if (
+      required.length &&
+      nodes.length &&
+      !nodes.some((node) => required.every((feature) => node.features.includes(feature)))
+    ) {
+      return Promise.reject(
+        seraError('PROVIDER_UNAVAILABLE', {
+          message: `${required.includes('trim') ? 'Trimming' : 'Subtitles'} cannot be done for this source right now. The full download still works.`,
+          detail: `remote: no connected node declares ${required.join(', ')}`,
+        }),
+      );
+    }
     return this.enqueue({ ...task, kind: 'job' }, options).then((outcome) => {
       if (!outcome.files?.length) {
         throw seraError('MEDIA_UNAVAILABLE', { detail: 'remote: node produced no files' });

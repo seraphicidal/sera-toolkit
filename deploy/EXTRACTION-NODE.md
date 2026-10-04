@@ -119,7 +119,8 @@ A node says which of these it understands each time it asks for work, and a trim
 subtitled job only goes to a node that said so: one running older code would ignore the
 request and send back the whole, plain video. Such a node still takes everything else, so
 nothing breaks while it is out of date — but update it (`git pull`, build, restart; on a
-phone, run `setup.sh` again) so it can take those jobs too.
+phone, run `setup.sh` again) so it can take those jobs too. While no connected node can, a visitor asking for a trim or subtitles from that
+source is told so at once, and the full download still works.
 
 ## What it will and will not be asked to do
 
