@@ -113,9 +113,13 @@ A trimmed download is cut on the node too: the task says which part to keep, and
 part crosses the node's upload.
 
 Subtitles are fetched on the node as well, from the same network as the video: embedded in
-it, or as an `.srt`/`.vtt` file uploaded beside it or on its own. A node older than this
-ignores the subtitles in a task, so restart it on the current code (`git pull`, then
-`run-node.cmd`) after the server is updated.
+it, or as an `.srt`/`.vtt` file uploaded beside it or on its own.
+
+A node says which of these it understands each time it asks for work, and a trimmed or
+subtitled job only goes to a node that said so: one running older code would ignore the
+request and send back the whole, plain video. Such a node still takes everything else, so
+nothing breaks while it is out of date — but update it (`git pull`, build, restart; on a
+phone, run `setup.sh` again) so it can take those jobs too.
 
 ## What it will and will not be asked to do
 
