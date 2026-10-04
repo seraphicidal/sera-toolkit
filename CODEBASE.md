@@ -1777,7 +1777,8 @@ It returns the app without starting it, so tests can drive it with `inject()`.
   - `bodyLimit` 64 KiB (bodies are a URL and a handful of ids);
   - `routerOptions.maxParamLength` 4096 — signed thumbnail tokens are far longer than the
     default 100;
-  - Fastify's own request logging disabled;
+  - Fastify's own request logging disabled, through a `LogController` (the top-level
+    `disableRequestLogging` option is deprecated);
   - `requestTimeout: 0`, so long downloads aren't cut off;
   - `keepAliveTimeout` 72 s.
 - **Plugins, in order**: the error handler; client keys; CORS (the configured origins, else
@@ -1958,7 +1959,7 @@ It also reads the ordinary engine settings (tool paths, `SERA_DATA_DIR`, and so 
 
 `main()` builds the config, logger (`sera-node`, pretty in development), registry, resolver
 (with no remote backends of its own), workspaces and runner, handles SIGTERM/SIGINT, and
-runs.
+runs. A failed start is printed and exits 1, as in the API and the worker.
 
 ---
 
@@ -2588,6 +2589,7 @@ ffprobe. The counts below are tests collected by `vitest list`.
 
 | File                                               | Tests | Covers                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | -------------------------------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apps/api/src/server.test.ts`                      | 1     | At trace level, a request's path and query never reach the log and Fastify's own request lines are absent; the route-only `request` line is written.                                                                                                                                                                                                                                                                      |
 | `apps/api/src/routes/extraction-node.test.ts`      | 10    | Token required everywhere and a bland 401; 204 when idle; a resolve end to end; cancellation propagated to the node; upload → completed job; name sanitization; an oversized upload stopped mid-stream; uploads in a reapable directory; node failures passed through.                                                                                                                                                    |
 | `apps/api/src/routes/extraction-node.live.test.ts` | 5     | The **built** extractor as a child process: it dials in and becomes a backend, shows in `/health`, is refused without the token over a real socket, refuses a URL that isn't the named provider even from the control plane, and answers a routed task over the wire.                                                                                                                                                     |
 | `apps/web/src/lib/bookmarklet.test.ts`             | 14    | A self-contained `javascript:` URL that loads and evaluates nothing, opens no popup and posts no message, uses the fragment, makes one request to Instagram only, targets its own origin, trims slides, caps text, refuses long URLs, diagnosable alerts that never contain a URL/cookie/body, correct shortcode decoding, post-only activation.                                                                          |
