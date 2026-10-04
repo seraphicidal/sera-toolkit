@@ -414,6 +414,37 @@ it). Pick links that will stay up — an official account's own post, not a vira
 leave out anything that needs a sign-in. The list ships in the API image, so a change
 reaches the server with the next release.
 
+### Usage counts
+
+The API counts, per source and per UTC day: links resolved and downloads made, each split into
+successes and failures by error code, and the bytes of finished files sent. That is all — no
+address, no link, no user agent, no client key — so the counts say which sources are used and
+whether they work, never who used them. Each day is a Redis hash (`sera:usage:YYYY-MM-DD`)
+that expires 90 days after its last write; Redis snapshots hourly to the `redis_data` volume,
+so the counts survive a restart. The canary is never counted. The /about page says the same.
+
+**Set it up once:**
+
+```bash
+echo "SERA_ADMIN_TOKEN=$(openssl rand -hex 32)" | sudo tee -a /opt/sera/.env >/dev/null
+sudo sera up -d          # the API reads the token at start
+```
+
+**Read them:**
+
+```bash
+sudo sera stats                  # the last 7 days: per source, then per day
+sudo sera stats --days=30        # up to 90
+sudo sera stats --json           # the raw answer
+```
+
+`sera stats` asks the API's admin endpoint from inside its container. The same endpoint answers
+from anywhere with the token: `GET /api/admin/usage?days=7` with
+`Authorization: Bearer <SERA_ADMIN_TOKEN>`. Without the token set, the endpoint does not exist.
+On a server provisioned before `sera stats` existed, the `sera` command predates it: re-run
+the "Installing the sera command" step of `deploy/provision.sh`, or call
+`sudo bash /opt/sera/deploy/stats.sh` directly.
+
 ### Troubleshooting
 
 | Symptom                              | Cause                                                                                                                             |
