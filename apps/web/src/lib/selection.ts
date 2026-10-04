@@ -47,13 +47,11 @@ export function optionForItem(
   preferredLabel?: string,
 ): DownloadOption | undefined {
   if (preferredKind) {
-    const sameKind = optionsOfKind(item, preferredKind);
-    if (sameKind.length) {
-      const matched = preferredLabel
-        ? sameKind.find((option) => option.label === preferredLabel)
-        : undefined;
-      return matched ?? sameKind.find((option) => option.recommended) ?? sameKind[0];
-    }
+    const matched = preferredLabel
+      ? optionsOfKind(item, preferredKind).find((option) => option.label === preferredLabel)
+      : undefined;
+    const chosen = matched ?? defaultOption(item, preferredKind);
+    if (chosen) return chosen;
   }
   const anyRecommended = item.options.find((option) => option.recommended);
   return anyRecommended ?? item.options[0];
