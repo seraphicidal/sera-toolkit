@@ -221,6 +221,127 @@ describe('matching a task to a node', () => {
   });
 });
 
+describe('a node that goes silent on a task it claimed', () => {
+  /** A lease short enough to lapse in a test, and nodes that stay live throughout. */
+  const leased = () => new ExtractionNodeRegistry(silentLogger(), 5000, 5000, 150);
+
+  it('loses the task to another node, which completes it', async () => {
+    const nodes = leased();
+    const dispatched = nodes.dispatch({ kind: 'resolve', url: media.url, providerId: 'youtube' });
+
+    // Claimed, and then nothing: the connection died with the answer in it.
+    const lost = await nodes.claim('laptop', ['youtube'], 1, 200);
+    expect(lost).toBeDefined();
+
+    // Another node is waiting; the lapsed lease puts the task in front of it.
+    const retaken = await nodes.claim('phone', ['youtube'], 1, 1000);
+    expect(retaken?.url).toBe(lost!.url);
+    expect(retaken?.id).not.toBe(lost!.id);
+
+    expect(nodes.completeResolve(retaken!.id, media)).toBe(true);
+    await expect(dispatched).resolves.toMatchObject({ title: 'A video' });
+  });
+
+  it("frees the silent node's capacity instead of holding it for the task timeout", async () => {
+    const nodes = leased();
+    nodes
+      .dispatch({ kind: 'resolve', url: media.url, providerId: 'youtube' })
+      .catch(() => undefined);
+    await nodes.claim('laptop', ['youtube'], 1, 200);
+    expect(nodes.status().find((node) => node.id === 'laptop')?.inFlight).toBe(1);
+
+    await wait(250);
+    // Back in the queue, and the node it was lost on is free to take it — or anything.
+    expect(nodes.status().find((node) => node.id === 'laptop')?.inFlight).toBe(0);
+    expect(await nodes.claim('laptop', ['youtube'], 1, 200)).toBeDefined();
+  });
+
+  it('ignores everything the silent node sends once the task has moved on', async () => {
+    const nodes = leased();
+    const progress: number[] = [];
+    const dispatched = nodes.dispatchJob(
+      { kind: 'job', url: media.url, providerId: 'youtube', planKeys: ['a', 'b'] },
+      { onProgress: (update) => progress.push(update.percent) },
+    );
+
+    const lost = await nodes.claim('laptop', ['youtube'], 1, 200);
+    const retaken = await nodes.claim('phone', ['youtube'], 1, 1000);
+    expect(retaken).toBeDefined();
+
+    // The original node wakes up and carries on as though nothing happened. It is told
+    // the task is cancelled, which stops it; nothing it sends is accepted.
+    nodes.reportProgress(lost!.id, { percent: 90, step: 'late' });
+    expect(nodes.isCancelled(lost!.id)).toBe(true);
+    expect(
+      nodes.acceptFile(lost!.id, { name: 'stale.mp4', mimeType: 'video/mp4', path: '/x' }),
+    ).toBe(false);
+    expect(nodes.fail(lost!.id, seraError('NETWORK_ERROR'))).toBe(false);
+    expect(nodes.completeJob(lost!.id)).toBe(false);
+
+    // The node that holds it now is unaffected and settles it alone.
+    expect(nodes.isCancelled(retaken!.id)).toBe(false);
+    nodes.reportProgress(retaken!.id, { percent: 50, step: 'Downloading' });
+    nodes.acceptFile(retaken!.id, { name: 'one.mp4', mimeType: 'video/mp4', path: '/one' });
+    nodes.acceptFile(retaken!.id, { name: 'two.mp4', mimeType: 'video/mp4', path: '/two' });
+    expect(nodes.completeJob(retaken!.id)).toBe(true);
+
+    const files = await dispatched;
+    expect(files.map((file) => file.name)).toEqual(['one.mp4', 'two.mp4']);
+    expect(progress).toEqual([50]);
+  });
+
+  it('drops files the silent node uploaded before it went quiet', async () => {
+    const nodes = leased();
+    const dispatched = nodes.dispatchJob({
+      kind: 'job',
+      url: media.url,
+      providerId: 'youtube',
+      planKeys: ['a', 'b'],
+    });
+
+    const lost = await nodes.claim('laptop', ['youtube'], 1, 200);
+    nodes.acceptFile(lost!.id, { name: 'half.mp4', mimeType: 'video/mp4', path: '/half' });
+
+    const retaken = await nodes.claim('phone', ['youtube'], 1, 1000);
+    nodes.acceptFile(retaken!.id, { name: 'whole.mp4', mimeType: 'video/mp4', path: '/whole' });
+    nodes.completeJob(retaken!.id);
+
+    expect((await dispatched).map((file) => file.name)).toEqual(['whole.mp4']);
+  });
+
+  it('keeps the task with a node that keeps reporting', async () => {
+    const nodes = leased();
+    const dispatched = nodes.dispatch({ kind: 'resolve', url: media.url, providerId: 'youtube' });
+    const task = await nodes.claim('laptop', ['youtube'], 1, 200);
+
+    // Three leases' worth of time, reported on throughout, the way the node's heartbeat does.
+    for (let i = 0; i < 9; i += 1) {
+      await wait(50);
+      nodes.reportProgress(task!.id, { percent: 0, step: 'Working' });
+    }
+    expect(await nodes.claim('phone', ['youtube'], 1, 100)).toBeUndefined();
+
+    expect(nodes.completeResolve(task!.id, media)).toBe(true);
+    await expect(dispatched).resolves.toMatchObject({ title: 'A video' });
+  });
+
+  it('still lets the caller cancel a task that has been offered again', async () => {
+    const nodes = leased();
+    const controller = new AbortController();
+    const dispatched = nodes.dispatch(
+      { kind: 'resolve', url: media.url, providerId: 'youtube' },
+      { signal: controller.signal },
+    );
+    await nodes.claim('laptop', ['youtube'], 1, 200);
+    await wait(250);
+
+    controller.abort();
+    await expect(dispatched).rejects.toMatchObject({ code: 'CANCELLED' });
+    // Removed from the queue as well, so no node is handed work nobody wants.
+    expect(await nodes.claim('phone', ['youtube'], 1, 100)).toBeUndefined();
+  });
+});
+
 describe('remoteBackend', () => {
   it('is unhealthy until a node has actually connected', () => {
     const nodes = registry();

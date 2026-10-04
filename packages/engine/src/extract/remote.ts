@@ -54,7 +54,12 @@ interface NodeRecord {
 }
 
 interface Pending {
-  readonly task: RemoteTask;
+  /**
+   * The task as it is currently offered. Replaced, under a new id, when a lease lapses:
+   * the id is what a node reports against, so the old one going dead is what makes a late
+   * report from a node that went silent land nowhere.
+   */
+  task: RemoteTask;
   readonly settle: (outcome: {
     media?: ResolvedMedia;
     files?: readonly RemoteFile[];
@@ -68,6 +73,9 @@ interface Pending {
   claimedAt?: number;
   /** Which node took it, so concurrency is counted per node rather than in total. */
   claimedBy?: string;
+  /** Until when the claiming node holds it without being heard from again. */
+  leaseUntil?: number;
+  leaseTimer?: NodeJS.Timeout;
 }
 
 /** What a completed `job` task produces: files already written to shared storage. */
@@ -131,6 +139,22 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
     private readonly staleAfterMs = 90_000,
     /** How long a task may wait for a node before the caller gives up on it. */
     private readonly taskTimeoutMs = 15 * 60_000,
+    /**
+     * How long a node may hold a task it claimed without being heard from about it.
+     *
+     * A claim is answered over a long-poll, and a connection that dies at that moment
+     * takes the task with it: the node never sees it, and the task used to sit claimed
+     * until the fifteen-minute timeout, holding that node's only slot. Silence for this
+     * long puts it back in the queue for any live node.
+     *
+     * 45 seconds. A working node reports on a task within a second of taking it and every
+     * second after (its heartbeat), and each of those reports is given 30 seconds before
+     * the node abandons the request — so one heartbeat lost to a slow or dropped request,
+     * and the next one landing, both fit inside it. It is also comfortably under the 90
+     * seconds after which a node stops being offered work at all, so a task stuck on a dead
+     * node moves before that node is written off, rather than minutes later.
+     */
+    private readonly leaseMs = 45_000,
   ) {}
 
   /* ----------------------------------------------------------- node side */
@@ -225,7 +249,10 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
   }
 
   reportProgress(taskId: string, progress: RemoteProgress): void {
-    this.pending.get(taskId)?.onProgress?.(progress);
+    const pending = this.pending.get(taskId);
+    if (!pending) return;
+    this.renew(pending);
+    pending.onProgress?.(progress);
   }
 
   completeResolve(taskId: string, media: ResolvedMedia): boolean {
@@ -239,6 +266,7 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
   acceptFile(taskId: string, file: RemoteFile): boolean {
     const pending = this.pending.get(taskId);
     if (!pending) return false;
+    this.renew(pending);
     pending.files.push(file);
     return true;
   }
@@ -336,7 +364,7 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
     task: Omit<RemoteTask, 'id' | 'createdAt'>,
     options: { onProgress?: (progress: RemoteProgress) => void; signal?: AbortSignal } = {},
   ): Promise<{ media?: ResolvedMedia; files?: readonly RemoteFile[] }> {
-    const full: RemoteTask = { ...task, id: randomUUID().replace(/-/g, ''), createdAt: Date.now() };
+    const full: RemoteTask = { ...task, id: newTaskId(), createdAt: Date.now() };
 
     return new Promise<{ media?: ResolvedMedia; files?: readonly RemoteFile[] }>(
       (resolve, reject) => {
@@ -345,10 +373,12 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
           files?: readonly RemoteFile[];
           error?: SeraError;
         }): void => {
-          const pending = this.pending.get(full.id);
-          if (!pending) return;
+          // By the task's current id: a lapsed lease will have given it a new one.
+          const id = pending.task.id;
+          if (this.pending.get(id) !== pending) return;
           clearTimeout(pending.timer);
-          this.pending.delete(full.id);
+          clearTimeout(pending.leaseTimer);
+          this.pending.delete(id);
           if (outcome.error) {
             reject(outcome.error);
             return;
@@ -381,7 +411,7 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
         options.signal?.addEventListener('abort', () => {
           pending.cancelled = true;
           // Remove it if no node has taken it yet; a node that has will see the flag.
-          const queued = this.queue.indexOf(full);
+          const queued = this.queue.indexOf(pending.task);
           if (queued !== -1) this.queue.splice(queued, 1);
           finish({ error: seraError('CANCELLED') });
         });
@@ -418,8 +448,77 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
     if (pending) {
       pending.claimedAt = Date.now();
       pending.claimedBy = nodeId;
+      this.renew(pending);
     }
   }
+
+  /** The claiming node has been heard from about this task; it keeps it a while longer. */
+  private renew(pending: Pending): void {
+    if (pending.claimedBy === undefined) return;
+    pending.leaseUntil = Date.now() + this.leaseMs;
+    // One timer per task, re-armed for what is left when it fires early, rather than
+    // cleared and set again on every heartbeat.
+    if (!pending.leaseTimer) this.armLease(pending, this.leaseMs);
+  }
+
+  private armLease(pending: Pending, delayMs: number): void {
+    pending.leaseTimer = setTimeout(() => {
+      pending.leaseTimer = undefined;
+      if (this.pending.get(pending.task.id) !== pending || pending.claimedBy === undefined) return;
+      const left = (pending.leaseUntil ?? 0) - Date.now();
+      if (left > 0) {
+        this.armLease(pending, left);
+        return;
+      }
+      this.requeue(pending);
+    }, delayMs);
+    pending.leaseTimer.unref();
+  }
+
+  /**
+   * Takes a task back from a node that went quiet and offers it again.
+   *
+   * It goes back under a new id. Everything a node sends is addressed by task id, so the
+   * old id simply stops existing: a late progress report is told the task is cancelled,
+   * which stops that node working on it; a late upload is refused and deleted; a late
+   * result or failure is not accepted. None of it can reach the visitor's job, which only
+   * the node holding the new id can now settle. Files the silent node did upload are
+   * dropped from the task — the next node produces a whole set — and their upload
+   * directory is left to the workspace reaper.
+   */
+  private requeue(pending: Pending): void {
+    const previous = pending.task;
+    const silentNode = pending.claimedBy;
+    this.pending.delete(previous.id);
+
+    pending.task = { ...previous, id: newTaskId() };
+    pending.files.length = 0;
+    delete pending.claimedAt;
+    delete pending.claimedBy;
+    delete pending.leaseUntil;
+    this.pending.set(pending.task.id, pending);
+
+    this.logger.warn(
+      {
+        task: previous.id,
+        requeuedAs: pending.task.id,
+        node: silentNode,
+        kind: previous.kind,
+        provider: previous.providerId,
+        leaseSeconds: Math.round(this.leaseMs / 1000),
+      },
+      'extraction node went silent on a task; offering it again',
+    );
+
+    // To the front: it has waited longer than anything queued behind it.
+    this.queue.unshift(pending.task);
+    this.wakeOne();
+  }
+}
+
+/** Task ids double as the node's capability for a task, so they are random and unguessable. */
+function newTaskId(): string {
+  return randomUUID().replace(/-/g, '');
 }
 
 /**
