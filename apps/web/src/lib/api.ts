@@ -5,7 +5,6 @@ import type {
   Job,
   JobError,
   MediaInfo,
-  ServiceInfo,
 } from '@sera/contracts/types';
 
 /**
@@ -103,8 +102,4 @@ export function getJob(id: string, signal?: AbortSignal): Promise<Job> {
 
 export async function cancelJob(id: string): Promise<void> {
   await fetch(`/api/jobs/${id}`, { method: 'DELETE' }).catch(() => undefined);
-}
-
-export function getServiceInfo(signal?: AbortSignal): Promise<ServiceInfo> {
-  return call<ServiceInfo>('/api/info', { ...(signal ? { signal } : {}) });
 }

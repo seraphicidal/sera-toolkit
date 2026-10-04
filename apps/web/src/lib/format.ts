@@ -45,13 +45,6 @@ export function formatSpeed(bytesPerSecond: number | undefined): string {
   return `${formatBytes(bytesPerSecond)}/s`;
 }
 
-export function formatRelativeDate(iso: string | undefined): string {
-  if (!iso) return '';
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return '';
-  return date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
-}
-
 export const KIND_LABELS: Record<Exclude<MediaKind, 'unknown'>, string> = {
   video: 'Video',
   audio: 'Audio',
@@ -67,21 +60,6 @@ export function pluralize(count: number, singular: string, plural = `${singular}
 /** States in which the job is still doing something. */
 export function isRunning(state: JobState): boolean {
   return !['ready', 'failed', 'cancelled', 'expired'].includes(state);
-}
-
-/**
- * A trimmed URL for display: the host plus enough path to recognise the link.
- * Never used for navigation, only as a label.
- */
-export function displayUrl(raw: string, maxLength = 52): string {
-  let text = raw;
-  try {
-    const url = new URL(raw);
-    text = `${url.hostname.replace(/^www\./, '')}${url.pathname}${url.search}`;
-  } catch {
-    // Not a URL; show whatever was pasted.
-  }
-  return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
 }
 
 /** Joins class names, skipping anything falsy. */
