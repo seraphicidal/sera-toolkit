@@ -520,7 +520,10 @@ export class JobRunner {
     const fetchPlan = plan.fetch;
     let sawPostprocessor: string | undefined;
 
-    const download = (sections?: { start: number; end?: number; forceKeyframes: boolean }) =>
+    const download = (
+      sections?: { start: number; end?: number; forceKeyframes: boolean },
+      downloadSignal = signal,
+    ) =>
       ytdlpDownload({
         binary: config.ytdlpPath,
         ffmpegPath: config.ffmpegPath,
@@ -552,7 +555,7 @@ export class JobRunner {
           ? { subtitles: { lang: args.embedSubtitles.lang, auto: args.embedSubtitles.auto } }
           : {}),
         ...(sections ? { sections } : {}),
-        ...(signal ? { signal } : {}),
+        ...(downloadSignal ? { signal: downloadSignal } : {}),
         onProgress: (progress) => {
           if (progress.postprocessor && progress.postprocessor !== sawPostprocessor) {
             sawPostprocessor = progress.postprocessor;
@@ -588,12 +591,21 @@ export class JobRunner {
     // audio stream's fragment. A cut from the very start is accurate as a copy; any other is
     // re-encoded around the cut.
     const range = args.trim;
+    // yt-dlp hands a section to FFmpeg as one long request, and YouTube throttles that to a
+    // trickle: measured, a 1080p section wrote nothing in 75 s where the full download ran
+    // at 4 MB/s. A section that stops growing is abandoned for the full file.
+    const stalled = new AbortController();
+    const stopWatching = watchGrowth(scratch, SECTION_STALL_MS, () => stalled.abort());
     try {
-      await download({
-        start: range.start,
-        ...(range.end !== undefined ? { end: range.end } : {}),
-        forceKeyframes: range.start > 0,
-      });
+      await download(
+        {
+          start: range.start,
+          ...(range.end !== undefined ? { end: range.end } : {}),
+          forceKeyframes: range.start > 0,
+        },
+        signal ? AbortSignal.any([signal, stalled.signal]) : stalled.signal,
+      );
+      stopWatching();
       const cut = await findSingleFile(scratch);
       const probed = await probe(cut, {
         ffmpegPath: config.ffmpegPath,
@@ -607,10 +619,17 @@ export class JobRunner {
         'section download came back wrong; cutting the full file instead',
       );
     } catch (error) {
+      stopWatching();
       if (signal?.aborted) throw error;
       this.deps.logger.warn(
-        { jobId: workspace.jobId, provider: args.resolved.provider, err: error },
-        'section download failed; cutting the full file instead',
+        {
+          jobId: workspace.jobId,
+          provider: args.resolved.provider,
+          ...(stalled.signal.aborted ? { stalledMs: SECTION_STALL_MS } : { err: error }),
+        },
+        stalled.signal.aborted
+          ? 'section download stalled; cutting the full file instead'
+          : 'section download failed; cutting the full file instead',
       );
     }
 
@@ -1120,6 +1139,52 @@ function subtitleName(name: string, lang: string): string {
   // for the language itself.
   const safe = lang.replace(/-orig$/, '').replace(/[^A-Za-z0-9_-]/g, '');
   return `${name.slice(0, dot)}.${safe}${name.slice(dot)}`;
+}
+
+/** How long a section download may write nothing before the full file is fetched instead. */
+export const SECTION_STALL_MS = 20_000;
+
+/**
+ * Calls `onStall` once if the files under `directory` stop growing for `stallMs`, checking
+ * every second (a quarter of `stallMs` when that is shorter). Returns a function that stops
+ * watching.
+ */
+export function watchGrowth(directory: string, stallMs: number, onStall: () => void): () => void {
+  let size = -1;
+  let since = Date.now();
+  let checking = false;
+  const timer = setInterval(
+    () => {
+      if (checking) return;
+      checking = true;
+      void directorySize(directory)
+        .then((current) => {
+          if (current !== size) {
+            size = current;
+            since = Date.now();
+          } else if (Date.now() - since >= stallMs) {
+            clearInterval(timer);
+            onStall();
+          }
+        })
+        .finally(() => (checking = false));
+    },
+    Math.min(1000, Math.max(10, stallMs / 4)),
+  );
+  timer.unref();
+  return () => clearInterval(timer);
+}
+
+async function directorySize(directory: string): Promise<number> {
+  let total = 0;
+  for (const entry of await readdir(directory, { withFileTypes: true }).catch(() => [])) {
+    if (!entry.isFile()) continue;
+    total += await stat(join(directory, entry.name)).then(
+      (info) => info.size,
+      () => 0,
+    );
+  }
+  return total;
 }
 
 /**

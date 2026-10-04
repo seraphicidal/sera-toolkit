@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -8,7 +8,7 @@ import { loadConfig, SeraEngine } from '@sera/engine';
 import { buildServer } from '../apps/api/src/server.js';
 import { copyIsAccurate, keyframeAtOrBefore } from '../packages/engine/src/convert/trim.js';
 import { sectionArgs } from '../packages/engine/src/extract/ytdlp.js';
-import { sectionIsUsable } from '../packages/engine/src/jobs/runner.js';
+import { sectionIsUsable, watchGrowth } from '../packages/engine/src/jobs/runner.js';
 import { taskTrim } from '../apps/extractor/src/node.js';
 import {
   ensureFixtures,
@@ -249,6 +249,23 @@ describe('the pieces', () => {
     expect(sectionIsUsable({ ...video, durationSeconds: 20 }, { start: 5 })).toBe(true);
     // A long cut may be a tenth off: keyframes and fragment edges.
     expect(sectionIsUsable({ ...video, durationSeconds: 595 }, { start: 0, end: 600 })).toBe(true);
+  });
+
+  it('gives up on a section that stops growing, and only then', async () => {
+    const watched = join(dataDir, 'growth');
+    await mkdir(watched, { recursive: true });
+    let stalls = 0;
+    const stop = watchGrowth(watched, 300, () => (stalls += 1));
+    // Growing every 100 ms: never a stall, however long it takes.
+    for (let i = 0; i < 8; i += 1) {
+      await appendFile(join(watched, 'media.part'), 'x'.repeat(1024));
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    expect(stalls).toBe(0);
+    // Then nothing for longer than the limit: one stall, reported once.
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(stalls).toBe(1);
+    stop();
   });
 
   it('lets a node take only a sane range onto its command line', () => {
