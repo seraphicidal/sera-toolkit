@@ -197,7 +197,7 @@ sera-toolkit/
 │  ├─ api/src/              index, server, plugins/{client,disconnect,errors},
 │  │                        routes/{meta,media,jobs,extraction-node}
 │  ├─ worker/src/index.ts
-│  ├─ extractor/src/index.ts
+│  ├─ extractor/src/{index,node}.ts
 │  ├─ web/                  next.config.ts, src/{app,components,lib,styles}
 │  └─ extension/README.md
 ├─ scripts/                 dev, clean, fetch-tools, serve-public, smoke-live,
@@ -1895,10 +1895,13 @@ jobs, then closes.
 
 ## 14. `apps/extractor` — the extraction node
 
-`src/index.ts` is a program for a machine on a connection the platforms don't refuse. It
-**listens on nothing**: it dials out, asks for work, does it, and reports back.
+A program for a machine on a connection the platforms don't refuse. It **listens on
+nothing**: it dials out, asks for work, does it, and reports back. `src/node.ts` holds the
+`ExtractionNode` class; `src/index.ts` reads the environment, assembles the engine pieces and
+runs it, which is what lets the end-to-end suite drive the real class in-process.
 
-**Environment** (read directly from `process.env`, not the engine schema):
+**Environment** (read by `index.ts` directly from `process.env`, not the engine schema, and
+passed to the class as `NodeOptions`):
 
 | Variable                     | Default       | Meaning                                                               |
 | ---------------------------- | ------------- | --------------------------------------------------------------------- |
@@ -1912,7 +1915,7 @@ It also reads the ordinary engine settings (tool paths, `SERA_DATA_DIR`, and so 
 `loadConfig`. On this laptop these live in the git-ignored `.env.node.local`, loaded by
 `npm run serve:node`.
 
-**The `Node` class**:
+**The `ExtractionNode` class**:
 
 - **`run()`** loops forever. It claims work and handles it. A failure to reach the API backs
   off from 5 s, doubling to 60 s ("A deployment that is restarting, a laptop that slept, a
@@ -1937,7 +1940,10 @@ It also reads the ordinary engine settings (tool paths, `SERA_DATA_DIR`, and so 
 - **`runJob`**:
   1. Resolves locally, and maps each plan key to a selection (item i, or 0 when there are
      fewer items).
-  2. Runs the full `JobRunner` with `packaging: 'auto'` and the filename.
+  2. Runs the full `JobRunner` with `packaging: 'individual'` and the filename. Never a ZIP:
+     packaging is the server's job, and it packages whatever the node uploads. A node that
+     zipped as well shipped its archive plus every loose file, which the server then zipped
+     again.
   3. Reads the manifest and uploads every listed file **in order** — `POST
 …/file?name=&mime=`, streaming the body with `duplex: 'half'`.
   4. Posts `complete`.
@@ -2403,6 +2409,7 @@ ffprobe. The counts below are tests collected by `vitest list`.
 | `pipeline.test.ts`             | 23    | Direct links (options, proxied thumbnail, redirects, non-media refused, missing → unavailable); the generic page reader (declared media, robots.txt honoured, nothing invented); video download with both streams intact, naming from metadata, filename override; audio to a real MP3 and a lossless WAV, and refusing audio from a silent video; untouched images; GIF original and GIF→MP4; ZIP packaging, per-file serving, individual and forced-ZIP modes; SSE ending in `done`; monotonic progress. |
 | `api-security.test.ts`         | 22    | Scheme, credential and length refusal and malformed bodies; forged option tokens, options from another resolution, empty and oversized selections, forged thumbnail tokens; bad job ids and path traversal in file names; files served as non-executable attachments; no stack traces; ENOTFOUND as a typo; hardening headers; no echo of the source URL; clean 404s; health and readiness; `/api/info`; long thumbnail tokens accepted, forged ones refused.                                              |
 | `visitor-import.test.ts`       | 9     | A browser-sent post becomes a download of every slide from the CDN; off-allowlist media refused with a cooldown; oversized bodies refused before parsing; slide ceiling; no cross-import option spending; no media edited into a signed token; no redirects off the approved hosts; a CDN 403 reported as expired; a queued job with expired links refused without fetching.                                                                                                                               |
+| `extraction-node-job.test.ts`  | 1     | A two-video playlist through the real `ExtractionNode` and runner over a real socket, with only the node's resolution fixed: the server's result is one flat ZIP of the two files, with no archive among the files or inside the ZIP.                                                                                                                                                                                                                                                                      |
 | `import-token-privacy.test.ts` | 2     | An oversized or malformed `infoId` (which could carry CDN URLs) is never echoed into the response or the log.                                                                                                                                                                                                                                                                                                                                                                                              |
 
 ### Engine unit and integration tests (`packages/engine/src/`)
@@ -2566,29 +2573,22 @@ more specific sentence; the table shows the defaults.
 Nothing below is covered by a failing test; these are places where the code, its comments or
 its docs disagree, or where something looks worth a second look.
 
-1. **A node running a multi-file job may double-package it.** The node runs `JobRunner.run`
-   with `packaging: 'auto'`, so two or more selections produce a ZIP, and the node's manifest
-   lists the ZIP **and** each file. The node uploads every manifest entry, and the server's
-   runner then packages everything it received again — a ZIP containing the node's ZIP plus
-   the loose files. It only affects multi-selection jobs routed to a node (in practice,
-   YouTube playlists). Uploading only the non-archive files, or running the node with
-   `packaging: 'individual'`, would avoid it.
-2. **Per-provider resolve timeouts cannot be set to 0.** The config comment says 0 means "use
+1. **Per-provider resolve timeouts cannot be set to 0.** The config comment says 0 means "use
    the shared value", but those variables use the positive-integer parser, so 0 is a
    `ConfigError`.
-3. **`SERA_PUBLIC_URL` is parsed and never used.**
-4. **`--proxy` is passed twice to `yt-dlp` downloads** — `baseArgs` adds it, and `download`
+2. **`SERA_PUBLIC_URL` is parsed and never used.**
+3. **`--proxy` is passed twice to `yt-dlp` downloads** — `baseArgs` adds it, and `download`
    adds it again. Harmless, but redundant.
-5. **`MediaResolver.resolve` dynamically imports `hostMatchesAny`**, which the same file
+4. **`MediaResolver.resolve` dynamically imports `hostMatchesAny`**, which the same file
    already imports statically.
-6. **Exported but unused outside their own file**: `CompletedStep`, `getServiceInfo`,
+5. **Exported but unused outside their own file**: `CompletedStep`, `getServiceInfo`,
    `displayUrl`, `formatRelativeDate` (web); `shortHash`, `siblingPath`, `looksLikeFlag`,
    `worthAnotherStrategy`, `infoDuration`, `Workspace.listOutputs`, `Workspace.scratchPath`,
    `MediaResolver.extractionBackends` (engine). `requiresOriginatingNode` and `isTransient`
    are exported and tested but not used by runtime code.
-7. **The Reddit embed's video item carries a `metadata` field** that `ResolvedItem` doesn't
+6. **The Reddit embed's video item carries a `metadata` field** that `ResolvedItem` doesn't
    declare (it is cast), so the manifest URL recorded there is never read.
-8. **Documentation drift**:
+7. **Documentation drift**:
    - the README's "449 tests" (the suite now collects 521, plus 9 Redis tests);
    - `tsconfig.json` refers to `tsconfig.web.json`;
    - `docker-compose.yml`'s header mentions a "standalone profile at the bottom" that is
@@ -2597,5 +2597,5 @@ its docs disagree, or where something looks worth a second look.
      transport, while the bookmarklet now uses the v2 same-tab fragment;
    - `EXTRACTION-NODE.md` suggests `SERA_NODE_ID=home`, while the program's default is
      `residential`.
-9. **`scripts/check-providers.mjs` calls `engine.jobs.create` without a client key.** It
+8. **`scripts/check-providers.mjs` calls `engine.jobs.create` without a client key.** It
    works with the memory backend, but it isn't the signature's intent.
