@@ -62,6 +62,18 @@ const failedSchema = z.object({
 });
 
 /**
+ * The largest resolution a node may send back.
+ *
+ * The server's 64 KB body limit is sized for what a visitor sends — a link and some ids —
+ * and a resolution is far bigger: about 4 KB per YouTube video with every format, so a
+ * 17-video playlist measured 74 KB and was refused. The node, believing it had answered,
+ * stopped reporting, and the task went round the lease loop until the visitor gave up.
+ * This route is behind the node token, so the larger limit is not open to the public:
+ * 4 MiB covers the 200-item ceiling on SERA_MAX_ITEMS_PER_JOB several times over.
+ */
+const RESOLVED_BODY_LIMIT = 4 * 1024 * 1024;
+
+/**
  * Stops a stream the moment it passes a size, rather than after.
  *
  * Checking the file once it is written means the disk has already been spent — and on a
@@ -198,7 +210,7 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
     /** A finished resolution, in the same shape the local providers produce. */
     app.post<{ Params: { taskId: string } }>(
       '/internal/extraction/:taskId/resolved',
-      { config: { rateLimit: false } },
+      { config: { rateLimit: false }, bodyLimit: RESOLVED_BODY_LIMIT },
       async (request, reply) => {
         if (!authenticate(request, reply)) return reply;
 
