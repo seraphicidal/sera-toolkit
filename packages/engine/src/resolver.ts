@@ -701,6 +701,7 @@ export class MediaResolver {
       ...(item.container ? { container: item.container } : {}),
       ...(item.filesizeBytes !== undefined ? { filesizeBytes: item.filesizeBytes } : {}),
       ...(item.isLive ? { isLive: true } : {}),
+      ...(item.subtitles?.length ? { subtitles: item.subtitles } : {}),
       options,
     };
   }

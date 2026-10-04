@@ -212,12 +212,30 @@ export const trimRequestSchema = z
     if (!checked.ok) context.addIssue({ code: 'custom', message: checked.message });
   });
 
+/** A language code as yt-dlp reports it: letters, digits, `-` and `_`, never leading with `-`. */
+export const subtitleRequestSchema = z
+  .object({
+    lang: z
+      .string()
+      .regex(
+        /^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/,
+        'That subtitle language is not one the source offers.',
+      ),
+    auto: z.boolean().optional(),
+    format: z.enum(['srt', 'vtt', 'embed']),
+    only: z.boolean().optional(),
+  })
+  .refine((subtitles) => !(subtitles.only && subtitles.format === 'embed'), {
+    message: 'Subtitles can only be embedded in a video that is downloaded with them.',
+  });
+
 export const createJobRequestSchema = z.object({
   infoId: z.string().min(1).max(MAX_INFO_TOKEN_LENGTH),
   optionIds: z.array(z.string().min(1).max(512)).min(1).max(MAX_OPTIONS_PER_JOB),
   packaging: packagingModeSchema.optional(),
   filename: z.string().max(MAX_FILENAME_LENGTH).optional(),
   trim: trimRequestSchema.optional(),
+  subtitles: subtitleRequestSchema.optional(),
 });
 
 /* -------------------------------------------------------------------------- */

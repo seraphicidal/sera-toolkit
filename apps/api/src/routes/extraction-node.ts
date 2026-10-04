@@ -48,6 +48,14 @@ const dispatchSchema = z.object({
   networkClass: z.enum(['datacenter', 'residential', 'unknown']).optional(),
   // A trimmed job's range, already checked against the media by the job service.
   trim: z.object({ start: z.number().min(0), end: z.number().positive().optional() }).optional(),
+  subtitles: z
+    .object({
+      lang: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/),
+      auto: z.boolean(),
+      format: z.enum(['srt', 'vtt', 'embed']),
+      only: z.boolean(),
+    })
+    .optional(),
 });
 
 const progressSchema = z.object({

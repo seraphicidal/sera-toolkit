@@ -74,6 +74,7 @@ function playlist(): ResolvedMedia {
     index,
     kind: 'video' as const,
     title: `Part ${String(index + 1)}`,
+    subtitles: [{ lang: 'en', label: 'English', auto: false }],
     plans: [
       {
         kind: 'video' as const,
@@ -272,6 +273,30 @@ describe('a trimmed job on an extraction node', () => {
     const media = await probeFile(path);
     expect(media.durationSeconds).toBeGreaterThan(0.9);
     expect(media.durationSeconds).toBeLessThan(1.15);
+  });
+});
+
+describe('subtitles on an extraction node', () => {
+  it("are offered from the node's resolution and reach the node with the job", async () => {
+    await waitForNode();
+    const resolved = await app.inject({
+      method: 'POST',
+      url: '/api/media/info',
+      payload: { url: `${PLAYLIST}subs` },
+    });
+    expect(resolved.statusCode, resolved.body).toBe(200);
+    const info = resolved.json<MediaInfo>();
+    expect(info.items[0]!.subtitles).toEqual([{ lang: 'en', label: 'English', auto: false }]);
+
+    // The fixture is a direct file, which yt-dlp cannot embed into: the node refuses, and it
+    // can only refuse if the subtitles crossed the dispatch with the job.
+    const job = await runJob({
+      infoId: info.id,
+      optionIds: [info.items[0]!.options[0]!.id],
+      subtitles: { lang: 'en', format: 'embed' },
+    });
+    expect(job.state).toBe('failed');
+    expect(job.error?.message).toMatch(/cannot be embedded/);
   });
 });
 
