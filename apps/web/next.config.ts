@@ -37,7 +37,16 @@ const nextConfig: NextConfig = {
   // written back over its prerendered copy in .next/server/app, not under .next/cache, so
   // the tmpfs there does not cover it and every revalidation logged EROFS. In memory it
   // is: the cache is one small page, and a restart simply prerenders it again.
-  experimental: { isrFlushToDisk: false },
+  experimental: {
+    isrFlushToDisk: false,
+    // How long the /api rewrite waits on a silent connection to the API. Next's default is
+    // 30 seconds, and a resolve can legitimately take longer: a YouTube playlist read by an
+    // extraction node took 17 s on a laptop and over 30 on a phone, and every one of those
+    // reached the visitor as a bare 500 while the API was still working. 180 s covers a
+    // node's 60 s probe ceiling plus one 45 s lease hand-over to another node. It is an
+    // idle timeout, so streamed downloads and progress events were never affected.
+    proxyTimeout: 180_000,
+  },
   // fileURLToPath, not URL.pathname: on Windows the latter yields `/C:/…`, which is not
   // a path any filesystem call will accept.
   outputFileTracingRoot: fileURLToPath(new URL('../../', import.meta.url)),
