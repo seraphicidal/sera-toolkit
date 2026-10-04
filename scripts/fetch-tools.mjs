@@ -7,10 +7,19 @@
  * download is checked against the publisher's own checksum file before it is written
  * into place; a mismatch aborts rather than warns.
  *
+ * yt-dlp is re-fetched whenever the pinned version differs from the one installed, which
+ * `.tools/yt-dlp.version` records, so running this after a pin moves is the whole upgrade.
+ *
  * Usage:
- *   node scripts/fetch-tools.mjs            # fetch anything missing
+ *   node scripts/fetch-tools.mjs            # fetch anything missing or out of date
  *   node scripts/fetch-tools.mjs --force    # re-fetch even if present
  *   node scripts/fetch-tools.mjs --only=ytdlp
+ *   node scripts/fetch-tools.mjs --only=ytdlp --pin-from=main
+ *
+ * `--pin-from=<branch>` takes the yt-dlp version from that branch's manifest on GitHub
+ * instead of this checkout's. An extraction node uses it to follow what the deployment
+ * runs without pulling the checkout it runs from; the binary is still checked against
+ * yt-dlp's own published checksums, exactly as for a local pin.
  */
 
 import { createHash } from 'node:crypto';
@@ -24,7 +33,6 @@ import {
   readdirSync,
   renameSync,
   rmSync,
-  statSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -34,10 +42,13 @@ import { fileURLToPath } from 'node:url';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const TOOLS_DIR = join(ROOT, '.tools');
 const MANIFEST = JSON.parse(readFileSync(join(ROOT, 'scripts', 'tools.manifest.json'), 'utf8'));
+/** Where `--pin-from` reads a branch's manifest. */
+const MANIFEST_REPO = process.env.SERA_MANIFEST_REPO ?? 'seraphicidal/sera-toolkit';
 
 const args = process.argv.slice(2);
 const FORCE = args.includes('--force');
 const ONLY = args.find((a) => a.startsWith('--only='))?.slice('--only='.length);
+const PIN_FROM = args.find((a) => a.startsWith('--pin-from='))?.slice('--pin-from='.length);
 
 const EXE = process.platform === 'win32' ? '.exe' : '';
 const PLATFORM_KEY = `${process.platform}-${process.arch}`;
@@ -46,9 +57,15 @@ function log(...parts) {
   console.log('[tools]', ...parts);
 }
 
+/** A refusal worth reporting as one line, not a stack trace. */
+class ToolsError extends Error {}
+
+/**
+ * Stops the fetch. Thrown rather than `process.exit`, which on Windows can abort inside
+ * libuv while a request is still being torn down, losing the message.
+ */
 function fail(message) {
-  console.error(`[tools] ${message}`);
-  process.exit(1);
+  throw new ToolsError(message);
 }
 
 async function fetchBuffer(url, label) {
@@ -134,19 +151,45 @@ function installBinary(sourcePath, targetName) {
   const staging = `${target}.download`;
   renameSync(sourcePath, staging);
   if (process.platform !== 'win32') chmodSync(staging, 0o755);
-  if (existsSync(target)) rmSync(target, { force: true });
+  if (existsSync(target)) {
+    // Moved aside rather than deleted: Windows will not delete an executable that is
+    // running, but it will rename one, so a node mid-download keeps its copy and the next
+    // spawn gets the new one. The previous leftover goes first, if nothing still holds it.
+    const previous = `${target}.old`;
+    rmSync(previous, { force: true, maxRetries: 2 });
+    if (existsSync(previous)) rmSync(target, { force: true });
+    else renameSync(target, previous);
+  }
   renameSync(staging, target);
   return target;
 }
 
+/** The yt-dlp version pinned on a branch on GitHub, for `--pin-from`. */
+async function pinnedOn(branch) {
+  const url = `https://raw.githubusercontent.com/${MANIFEST_REPO}/${encodeURIComponent(branch)}/scripts/tools.manifest.json`;
+  const manifest = JSON.parse((await fetchBuffer(url, `manifest on ${branch}`)).toString('utf8'));
+  const version = manifest?.ytdlp?.version;
+  // The version becomes part of a download URL; accept only the shape yt-dlp tags have.
+  if (typeof version !== 'string' || !/^\d{4}\.\d{2}\.\d{2}(\.\d+)?$/.test(version)) {
+    fail(`manifest on ${branch} does not pin a yt-dlp version`);
+  }
+  return version;
+}
+
 async function fetchYtdlp() {
-  const spec = MANIFEST.ytdlp;
+  const spec = { ...MANIFEST.ytdlp };
+  if (PIN_FROM) {
+    spec.version = await pinnedOn(PIN_FROM);
+    log(`yt-dlp pinned on ${PIN_FROM}: ${spec.version}`);
+  }
   const asset = spec.assets[PLATFORM_KEY];
   if (!asset) fail(`no yt-dlp asset for ${PLATFORM_KEY}`);
 
   const target = join(TOOLS_DIR, `yt-dlp${EXE}`);
-  if (existsSync(target) && !FORCE) {
-    log(`yt-dlp already present (${(statSync(target).size / 1048576).toFixed(1)} MB) — skipping`);
+  const versionFile = join(TOOLS_DIR, 'yt-dlp.version');
+  const installed = existsSync(versionFile) ? readFileSync(versionFile, 'utf8').trim() : undefined;
+  if (existsSync(target) && !FORCE && installed === spec.version) {
+    log(`yt-dlp ${installed} already present — skipping`);
     return;
   }
 
@@ -166,7 +209,12 @@ async function fetchYtdlp() {
   const staging = join(TOOLS_DIR, `yt-dlp${EXE}.download`);
   writeFileSync(staging, binary);
   installBinary(staging, `yt-dlp${EXE}`);
-  log(`installed .tools/yt-dlp${EXE}`);
+  writeFileSync(
+    versionFile,
+    `${spec.version}
+`,
+  );
+  log(`installed .tools/yt-dlp${EXE} ${spec.version}${installed ? ` (was ${installed})` : ''}`);
 }
 
 async function fetchFfmpeg() {
@@ -238,4 +286,7 @@ async function main() {
   log('done. The API auto-detects .tools/ — no configuration needed.');
 }
 
-main().catch((error) => fail(error?.stack ?? String(error)));
+main().catch((error) => {
+  console.error(`[tools] ${error instanceof ToolsError ? error.message : (error?.stack ?? error)}`);
+  process.exitCode = 1;
+});

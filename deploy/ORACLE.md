@@ -276,20 +276,61 @@ deployment's compose file, project directory and `.env`. It works from any direc
 sudo sera ps                 # what is running
 sudo sera logs -f worker     # follow a download
 sudo sera logs caddy         # certificate problems live here
-sudo sera pull && sudo sera up -d   # update to the latest images
+sudo sera pull && sudo sera up -d   # update to the latest images, by hand
 ```
 
 Everything is `restart: unless-stopped` and Docker starts at boot, so the stack survives
 reboots and crashes without intervention.
 
+### Automatic updates
+
+yt-dlp is what keeps most sources working, and sites change faster than anyone remembers
+to redeploy. So updates happen on their own, in three places, and every one of them keeps
+the pin and the checksum check:
+
+1. **GitHub** — the _Update yt-dlp_ workflow (`.github/workflows/update-ytdlp.yml`) runs
+   daily. When yt-dlp has a new release it opens a pull request moving both pins, runs the
+   full CI on it and a live smoke test against Dailymotion, SoundCloud and Bandcamp, then
+   merges it and publishes the images.
+2. **This server** — `sera-update.timer` runs `deploy/auto-update.sh` every 15 minutes. If
+   `main` or any image changed, it fast-forwards `/opt/sera` (only when nobody has edited
+   it), runs `sera pull` and `sera up -d`, and waits up to three minutes for the site to be
+   healthy: `/health` with every check ok apart from the extraction nodes, `/ready`, and the
+   home page. If it isn't, it puts back the previous checkout and images, and does not try
+   that release again. Its last result is in `/var/lib/sera/auto-update.status`.
+3. **Extraction nodes** — each refreshes its own yt-dlp to the version pinned on `main` at
+   startup and once a day (`npm run tools:fetch -- --only=ytdlp --pin-from=main`; see
+   [EXTRACTION-NODE.md](EXTRACTION-NODE.md)).
+
+```bash
+journalctl -u sera-update.service -n 50      # what the last runs did
+cat /var/lib/sera/auto-update.status         # ok / failed / paused, with the time
+sudo systemctl start sera-update.service     # check now rather than within 15 minutes
+```
+
+**Pausing.** Each part pauses on its own:
+
+| Part         | Pause                                                                    | Resume                                  |
+| ------------ | ------------------------------------------------------------------------ | --------------------------------------- |
+| GitHub       | `gh variable set YTDLP_AUTO_UPDATE --body off` (or disable the workflow) | `gh variable delete YTDLP_AUTO_UPDATE`  |
+| This server  | `sudo touch /opt/sera/.auto-update-paused`                               | `sudo rm /opt/sera/.auto-update-paused` |
+| Windows node | create `ytdlp-updates.paused` next to `run-node.cmd`                     | delete it                               |
+| Android node | `touch ~/.sera-node/ytdlp-updates.paused`                                | delete it                               |
+
+Pausing the server also holds back everything else merged to `main`, not only yt-dlp;
+`sudo systemctl disable --now sera-update.timer` turns the timer off entirely. The timers
+come from `deploy/systemd/` and are installed by `deploy/install-timers.sh`, which
+provisioning runs; run it again after a release changes them.
+
 ### Troubleshooting
 
-| Symptom                              | Cause                                                                                                   |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------- |
-| Site never answers, SSH works        | The **security list** ingress rules are missing. This is by far the most common.                        |
-| Browser certificate warning          | Caddy has not finished issuing. Give it a minute, then check `sudo sera logs caddy`.                    |
-| `no such host` for the sslip.io name | The IP in the hostname is wrong — check `/opt/sera/.env`.                                               |
-| Downloads fail immediately           | `sudo sera logs worker`. If the extractor is at fault, `npm run update-providers` upstream and re-pull. |
+| Symptom                              | Cause                                                                                                                             |
+| ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| Site never answers, SSH works        | The **security list** ingress rules are missing. This is by far the most common.                                                  |
+| Browser certificate warning          | Caddy has not finished issuing. Give it a minute, then check `sudo sera logs caddy`.                                              |
+| `no such host` for the sslip.io name | The IP in the hostname is wrong — check `/opt/sera/.env`.                                                                         |
+| Downloads fail immediately           | `sudo sera logs worker`. If the extractor is at fault, run the _Update yt-dlp_ workflow (or `npm run update-providers` upstream). |
+| A merged release never arrived       | `journalctl -u sera-update.service`: a release that failed its health check is rolled back and skipped.                           |
 
 ### Staying inside the free tier
 

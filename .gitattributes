@@ -1,6 +1,8 @@
 # Normalize to LF in the repository. The Dockerfiles and shell scripts in CI are read by
 # Linux tools, where a CRLF line ending is a syntax error rather than a formatting choice.
 * text=auto eol=lf
+# Except batch files: cmd.exe can miss a `goto` label in a file with LF-only line endings.
+*.cmd text eol=crlf
 
 # Binary assets, never munged.
 *.png binary
