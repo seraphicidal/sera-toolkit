@@ -113,3 +113,10 @@ describe('the installable app under the site-wide policy', () => {
     ]);
   });
 });
+
+describe('the /api rewrite', () => {
+  it('waits long enough for a slow resolve, rather than answering 500 after 30 s', () => {
+    // A playlist read by an extraction node can take more than Next's 30 s default.
+    expect(nextConfig.experimental?.proxyTimeout).toBeGreaterThanOrEqual(120_000);
+  });
+});
