@@ -5,6 +5,7 @@ import {
   initialHealth,
   isHealthReport,
   nextHealth,
+  showsLight,
   summarizeHealth,
   type HealthObservation,
   type HealthState,
@@ -64,6 +65,20 @@ describe('nextHealth', () => {
 
   it('recovers on the first report after an outage', () => {
     expect(run(up(report('ok')), down, down, up(report('ok'))).light).toBe('green');
+  });
+});
+
+describe('showsLight', () => {
+  it('draws no dot before the first answer, nor after one failed request', () => {
+    expect(showsLight(initialHealth)).toBe(false);
+    expect(showsLight(run(down))).toBe(false);
+  });
+
+  it('draws it once there is something to say', () => {
+    expect(showsLight(run(up(report('ok'))))).toBe(true);
+    expect(showsLight(run(up(report('degraded', ['queue']))))).toBe(true);
+    // Two failures and no answer at all is something to say: the server is not reachable.
+    expect(showsLight(run(down, down))).toBe(true);
   });
 });
 

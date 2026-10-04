@@ -2121,7 +2121,9 @@ The dev and start servers run on port **3200**. The app imports only
   `referrer: no-referrer`, the SVG favicon and Apple touch icon, `appleWebApp`) and light/dark
   theme colours. It runs the inline `themeScript` in
   `<head>` so dark mode never flashes white, and adds a skip-to-content link. The header has
-  the wordmark, an About link and the theme toggle; `<main>`; the footer has the rights
+  the small wordmark linking home (`HeaderHomeLink`, which renders nothing on `/`, where the
+  large one sits just below; the controls keep right with `ml-auto`), the status dot, an About
+  link and the theme toggle; `<main>`; the footer has the rights
   reminder, "How this works" and `v{SERA_VERSION}`.
 - **`page.tsx`** (home) — static. The large wordmark, the tagline "One link in, whatever media
   is available out.", the `Downloader`, the `ShareHint`, and a pointer to `/import` for
@@ -2217,8 +2219,9 @@ analyzing → ready → submitting → running → done`.
     and analyzes at once;
   - Analyze / "Analyzing" with a spinner.
 - **`format-picker.tsx` — `FormatPicker`**:
-  - a kind radiogroup (Video, Audio, Image, GIF), shown only when there is more than one
-    kind;
+  - a kind radiogroup (Video, Audio, Image or Thumbnail, GIF — named by `kindLabel`), shown
+    only when there is more than one kind. With three or more kinds, the icons are dropped
+    below 400 px, where "Thumbnail" and an icon do not fit a third of a phone;
   - a quality `<select>`, shown only when there is more than one label;
   - a detail line describing exactly what will be produced (plus "converted after download");
   - a size line when there is only one choice.
@@ -2266,14 +2269,15 @@ analyzing → ready → submitting → running → done`.
   - `ThemeToggle` is a three-button radiogroup (Light, System, Dark); in System mode it
     follows the OS live.
   - `themeScript` is the inline pre-paint script.
-- **`health-indicator.tsx` — `HealthIndicator`**, the status dot in the header (between
-  the wordmark and About):
+- **`health-indicator.tsx` — `HealthIndicator`**, the status dot in the header (before
+  About):
   - asks `/health` (same-origin, through the rewrite; 10 s timeout, `no-store`) every 60 s,
     **only while the tab is visible**, and at once on returning to a tab whose last answer is
     over a minute old;
-  - feeds each answer, or its absence, to `nextHealth` (`lib/health.ts`), and shows grey
-    (checking), green, amber or red with the matching `--color-*` token (`--color-warning`
-    was added for amber);
+  - feeds each answer, or its absence, to `nextHealth` (`lib/health.ts`), and shows green,
+    amber or red with the matching `--color-*` token (`--color-warning` was added for amber).
+    Until the first answer (or a second failure) there is no dot — `showsLight` is false and
+    it is transparent, fading in — while the button and its "checking" label are there;
   - a button whose `aria-label` and `title` are the summary ("Service status: …") with
     `aria-expanded`/`aria-controls`, opening a region listing each line from
     `describeHealth` with a dot and a screen-reader "Working:"/"Not working:" prefix; it
@@ -2316,6 +2320,7 @@ analyzing → ready → submitting → running → done`.
   - `describeHealth` — the visitor's view: a Server line, then each check renamed for what
     it is for (`yt-dlp` → "Media extractor", `extraction-nodes` → "YouTube", …) without the
     operator detail; only the Server line while the server is down.
+  - `showsLight` — whether the dot is drawn: not while the light is `unknown`.
   - `summarizeHealth` — the accessible name for each light.
 - **`trim.ts`** — `summarizeTrim(start, end, duration?, totalBytes?)`: `none` until a time is
   typed, `invalid` with `checkTrim`'s sentence, or `ok` with the request, the seconds kept and
@@ -2326,6 +2331,9 @@ only)`: nothing until a track is chosen, an impossible embed falls back to SRT, 
   is never sent with `embed`.
 - **`selection.ts`** — turns UI state into a job request:
   - `availableKinds` — in video, audio, image, gif order;
+  - `kindLabel(info, kind)` — `KIND_LABELS`, except that images are "Thumbnail" when no item in
+    the post is an image (a video's or a song's picture), from the items' own kinds rather than
+    a list of providers;
   - `optionsOfKind`, and `defaultOption` (recommended, else the first);
   - `optionForItem(item, kind, label)` — the exact label if the item has it, else that kind's
     `defaultOption`, else the item's own default. This is what lets one control drive a mixed
@@ -2747,8 +2755,8 @@ ffprobe. The counts below are tests collected by `vitest list`.
 | `apps/web/src/lib/trim.test.ts`                    | 6     | Nothing until a time is typed; the length kept and a size in proportion; a missing end running to the end; the server's own sentence for a bad time; what is unknown left out; the end placeholder.                                                                                                                                                                                                                                                                                |
 | `apps/web/src/lib/share.test.ts`                   | 14    | The url field first; YouTube's and TikTok's links inside their text; the title as a last resort; a non-web `url` skipped; sentence punctuation dropped and a link's own bracket kept; only http(s); the fragment round trip, and other fragments ignored. `isInstalledApp` on Android and iOS, in a browser tab, and where nothing can be asked.                                                                                                                                   |
 | `apps/web/src/lib/history.test.ts`                 | 9     | Newest first and one per job; the limit; clearing removes the key; storage that throws reads as empty and never throws; junk in the key; entries that would link off the site dropped; expiry, including an unreadable time; `timeAgo`.                                                                                                                                                                                                                                            |
-| `apps/web/src/lib/health.test.ts`                  | 13    | Green/amber/red from the report; unknown (not red) on a first failure; the last answer kept through one failure; red after two in a row, and only consecutive ones; recovery on the next report; proxy error bodies refused; visitor labels without operator detail; only the Server line while down; unknown checks kept; accessible names.                                                                                                                                       |
-| `apps/web/src/lib/selection.test.ts`               | 16    | `availableKinds`, `initialKind`, `defaultOption`, `optionForItem`, `qualityLabels`, `resolveSelection` (per-item preference, unselected items, unknown sizes, approximate flag, empty selection).                                                                                                                                                                                                                                                                                  |
+| `apps/web/src/lib/health.test.ts`                  | 15    | Green/amber/red from the report; unknown (not red) on a first failure; the last answer kept through one failure; red after two in a row, and only consecutive ones; recovery on the next report; proxy error bodies refused; visitor labels without operator detail; only the Server line while down; unknown checks kept; accessible names; no dot before the first answer or after a single failure, a dot once there is an answer or two failures.                              |
+| `apps/web/src/lib/selection.test.ts`               | 19    | `availableKinds`, `kindLabel` (a video's or song's picture is a Thumbnail; a photo post or a carousel with photos keeps Image; other kinds unchanged), `initialKind`, `defaultOption`, `optionForItem`, `qualityLabels`, `resolveSelection` (per-item preference, unselected items, unknown sizes, approximate flag, empty selection).                                                                                                                                             |
 
 ---
 

@@ -1,9 +1,9 @@
 import type { Metadata, Viewport } from 'next';
 import Link from 'next/link';
 import { SERA_VERSION } from '@sera/contracts/types';
+import { HeaderHomeLink } from '@/components/header-home-link';
 import { HealthIndicator } from '@/components/health-indicator';
 import { ThemeToggle, themeScript } from '@/components/theme-toggle';
-import { Wordmark } from '@/components/wordmark';
 import '@/styles/globals.css';
 
 export const metadata: Metadata = {
@@ -51,14 +51,9 @@ export default function RootLayout({ children }: { readonly children: React.Reac
 
         <div className="mx-auto flex min-h-dvh w-full max-w-[46rem] flex-col px-5 sm:px-6">
           <header className="relative flex items-center justify-between gap-4 py-5">
-            <Link
-              href="/"
-              className="rounded-md transition-opacity hover:opacity-70"
-              aria-label="SERA.toolkit home"
-            >
-              <Wordmark size="sm" />
-            </Link>
-            <div className="flex items-center gap-2 sm:gap-3">
+            <HeaderHomeLink />
+            {/* `ml-auto` keeps the controls on the right when there is no wordmark. */}
+            <div className="ml-auto flex items-center gap-2 sm:gap-3">
               <HealthIndicator />
               <Link
                 href="/about"
