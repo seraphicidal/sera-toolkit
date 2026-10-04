@@ -1,6 +1,6 @@
 import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
-import Fastify, { type FastifyBaseLogger, type FastifyInstance } from 'fastify';
+import Fastify, { LogController, type FastifyBaseLogger, type FastifyInstance } from 'fastify';
 import type { SeraEngine } from '@sera/engine';
 import { clientKeyPlugin } from './plugins/client.js';
 import { errorHandlerPlugin } from './plugins/errors.js';
@@ -34,10 +34,11 @@ export async function buildServer(engine: SeraEngine): Promise<FastifyInstance> 
     // thumbnail token carrying a long CDN URL is around 150 characters; the ceiling
     // below covers the largest a 2048-character source URL can produce.
     routerOptions: { maxParamLength: 4096 },
-    // Fastify 6 moves this under logController, which in 5.x requires the whole
-    // controller interface rather than this one field. Kept as-is until that upgrade;
-    // request logging is done in an onResponse hook so URLs stay out of the log.
-    disableRequestLogging: true,
+    // Fastify's own per-request lines are off: they carry the URL, and a source link in a
+    // path or query must stay out of the log; the onResponse hook below logs the route
+    // instead. The top-level `disableRequestLogging` that used to do this is deprecated
+    // in favour of a controller.
+    logController: new LogController({ disableRequestLogging: true }),
     // Long downloads must not be cut off by the server's own idle timer.
     requestTimeout: 0,
     keepAliveTimeout: 72_000,
