@@ -62,4 +62,8 @@ async function main(): Promise<void> {
   await node.run();
 }
 
-await main();
+// The same last word as the API and the worker, so a failed start reads alike in every log.
+main().catch((error: unknown) => {
+  console.error(error instanceof Error ? (error.stack ?? error.message) : error);
+  process.exit(1);
+});
