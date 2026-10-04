@@ -90,14 +90,15 @@ need it.
 
 ## Operating it
 
-| Behaviour       | What happens                                                                |
-| --------------- | --------------------------------------------------------------------------- |
-| Heartbeat       | The request for work is held open, so asking _is_ the heartbeat             |
-| Reconnect       | Exponential backoff to a minute; a restarted server is picked up on its own |
-| Cancellation    | The node asks on every progress report and stops when the visitor has gone  |
-| Concurrency     | One job at a time                                                           |
-| Cleanup         | Its copy is deleted once the upload completes, and on failure               |
-| Stale detection | A node silent for 90 seconds stops being offered work                       |
+| Behaviour       | What happens                                                                                                                                          |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Heartbeat       | The request for work is held open, so asking _is_ the heartbeat                                                                                       |
+| Reconnect       | Exponential backoff to a minute; a restarted server is picked up on its own                                                                           |
+| Cancellation    | The node asks on every progress report and stops when the visitor has gone                                                                            |
+| Concurrency     | One job at a time                                                                                                                                     |
+| Cleanup         | Its copy is deleted once the upload completes, and on failure                                                                                         |
+| Stale detection | A node silent for 90 seconds stops being offered work                                                                                                 |
+| Lost claims     | A task its node has not reported on for 45 seconds is offered to any live node again, under a new id; anything the silent node sends later is ignored |
 
 `/health` reports which backends exist and whether each is answering.
 
