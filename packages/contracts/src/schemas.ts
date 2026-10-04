@@ -7,6 +7,7 @@
  */
 
 import { z } from 'zod';
+import { checkTrim, TIMECODE_PATTERN } from './types.js';
 import type {
   ContainerFormat,
   CreateJobRequest,
@@ -195,11 +196,28 @@ export const importRequestSchema = z.object({
   node: z.preprocess(withoutNulls, importedPostNodeSchema),
 });
 
+const timecode = z
+  .string()
+  .max(9)
+  .regex(TIMECODE_PATTERN, 'Use m:ss or h:mm:ss for the trim times.');
+
+/**
+ * A trim, checked for shape and order here; against the media's real length in the job
+ * service, which has it from the signed option. Both use `checkTrim`.
+ */
+export const trimRequestSchema = z
+  .object({ start: timecode.optional(), end: timecode.optional() })
+  .superRefine((trim, context) => {
+    const checked = checkTrim(trim);
+    if (!checked.ok) context.addIssue({ code: 'custom', message: checked.message });
+  });
+
 export const createJobRequestSchema = z.object({
   infoId: z.string().min(1).max(MAX_INFO_TOKEN_LENGTH),
   optionIds: z.array(z.string().min(1).max(512)).min(1).max(MAX_OPTIONS_PER_JOB),
   packaging: packagingModeSchema.optional(),
   filename: z.string().max(MAX_FILENAME_LENGTH).optional(),
+  trim: trimRequestSchema.optional(),
 });
 
 /* -------------------------------------------------------------------------- */
