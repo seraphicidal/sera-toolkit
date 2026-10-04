@@ -618,6 +618,7 @@ export class MediaResolver {
           timeoutMs: this.config.resolveTimeoutSeconds * 1000,
           maxBytes: maxBytes ?? 2 * 1024 * 1024,
           ...(options?.headers ? { headers: options.headers } : {}),
+          ...(options?.keepCookies ? { keepCookies: true } : {}),
           ...(signal ? { signal } : {}),
         });
         if (response.status >= 400) {

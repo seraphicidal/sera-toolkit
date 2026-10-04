@@ -107,6 +107,9 @@ export class InstagramProvider extends YtdlpProvider {
     const endpoint = new URL(`https://www.instagram.com/api/v1/media/${mediaId}/info/`);
     const { body } = await context.fetchText(endpoint, 4 * 1024 * 1024, {
       headers: sessionHeaders(context.config.instagram.sessionId),
+      // Instagram's first answer is a 302 back to the same URL that sets the cookies it
+      // wants to see; without them it redirects until the hop budget runs out.
+      keepCookies: true,
     });
 
     const node = (JSON.parse(body) as { items?: readonly InstagramNode[] }).items?.[0];
