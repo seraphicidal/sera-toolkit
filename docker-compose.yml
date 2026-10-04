@@ -7,7 +7,7 @@
 #   cp .env.example .env   # then set SERA_SECRET
 #   docker compose up --build
 #
-# For a single-machine install without Redis, see the `standalone` profile at the bottom.
+# For a single-machine install without Redis, see docker-compose.standalone.yml.
 
 name: sera-toolkit
 

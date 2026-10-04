@@ -222,7 +222,7 @@ ffprobe, cloudflared), `.data/` (workspaces, fixtures, run copies, provider-matr
 ### `package.json`
 
 The npm-workspaces root (`"workspaces": ["packages/*", "apps/*"]`), `"type": "module"`,
-Node `>=22.12.0`, MIT. It only holds dev tooling (ESLint 9 with typescript-eslint,
+Node `>=22.12.0`, MIT. It only holds dev tooling (ESLint 10 with typescript-eslint,
 Prettier 3 with the Tailwind plugin, TypeScript 6.0, Vitest 5 with V8 coverage,
 `@types/node`) and the scripts:
 
@@ -253,14 +253,15 @@ Shared compiler options: `target`/`lib` ES2023, `module`/`moduleResolution` Node
 `verbatimModuleSyntax`, `isolatedModules`, full `strict` plus `noUncheckedIndexedAccess`,
 `noImplicitOverride`, `noImplicitReturns`, `noFallthroughCasesInSwitch`,
 `useUnknownInCatchVariables`; `exactOptionalPropertyTypes` is off. Emits declarations,
-declaration maps and source maps as `composite` + `incremental` projects.
+declaration maps and source maps as `composite` + `incremental` projects. `esModuleInterop`
+and `allowSyntheticDefaultImports` are not set: TypeScript 6 deprecates turning them off, so
+they are simply how it behaves.
 
 ### `tsconfig.json`
 
 A solution file with no sources of its own, referencing contracts, engine, api, worker and
 extractor. The web app is type-checked separately because Next needs `noEmit` and a DOM lib,
-which a composite project cannot have. (Its `$comment` calls that file `tsconfig.web.json`;
-the file is actually `apps/web/tsconfig.json`.)
+which a composite project cannot have; that is `apps/web/tsconfig.json`.
 
 ### `tsconfig.tests.json`
 
@@ -279,7 +280,8 @@ the workspace packages at their sources, so tests run without a build.
 
 ### `eslint.config.js`
 
-Flat config built with `typescript-eslint`:
+Flat config built with ESLint's own `defineConfig` and `globalIgnores` (typescript-eslint's
+`tseslint.config()` is deprecated in their favour), with `typescript-eslint`'s presets:
 
 - Ignores build output, coverage, `.tools`, `.data` and the generated `next-env.d.ts`.
 - `js.configs.recommended` + `recommendedTypeChecked` + `stylisticTypeChecked`, using the
@@ -351,7 +353,7 @@ commands; and responsible use. (Its "449 tests" comment predates the current sui
 
 `@sera/contracts` is imported by both the server and the browser. It exports two entry
 points: `.` (types **and** zod schemas, server-only) and `./types` (types only, so the browser
-bundle never pulls in the validator). Its only runtime dependency is `zod` 4.5.4.
+bundle never pulls in the validator). Its only runtime dependency is `zod` 4.6.5.
 
 ### `src/types.ts`
 
@@ -454,8 +456,8 @@ Runtime validation for everything that crosses the network; only the server impo
 ## 7. `packages/engine` — core modules
 
 `@sera/engine` is the whole media pipeline, shared by the API, the worker and the extraction
-node. Runtime dependencies: `@sera/contracts`, `bullmq` 6.3.4, `cheerio` 1.2.0, `ioredis`
-6.0.0, `pino` 10.3.1, `undici` 8.10.2, `yazl` 3.3.1 and `zod` 4.5.4.
+node. Runtime dependencies: `@sera/contracts`, `bullmq` 6.3.11, `cheerio` 1.2.0, `ioredis`
+6.0.0, `pino` 10.4.0, `undici` 8.11.2, `yazl` 3.3.1 and `zod` 4.6.5.
 
 ### `src/index.ts` — the public API
 
@@ -1965,7 +1967,7 @@ runs. A failed start is printed and exits 1, as in the API and the worker.
 
 ## 15. `apps/web` — the interface
 
-Next.js 16.3 (App Router), React 19.2 and Tailwind CSS 4.3 (through `@tailwindcss/postcss`).
+Next.js 16.3 (App Router), React 19.3 and Tailwind CSS 4.3 (through `@tailwindcss/postcss`).
 The dev and start servers run on port **3200**. The app imports only
 `@sera/contracts/types` — never the engine, never zod.
 
@@ -2282,7 +2284,7 @@ that must be kept in step with `apps/web/src/lib/bookmarklet.ts` by hand.
 | `serve-public.mjs`     | Runs a production-mode SERA on this machine. It keeps a stable `SERA_SECRET` in `.env.production.local`, sets a production environment (API on 127.0.0.1:4000, memory queue, 2 GB / 3 h / 25 items / 20 min limits, 15 min retention, trusted proxy), and copies Next's standalone build plus static assets and `public/` to `.data/run/web` (so a running server never locks `.next` on Windows). It supervises the API and web with crash backoff (more than 5 crashes a minute stops everything). Unless `--local`, it opens a **Cloudflare quick tunnel** with `.tools/cloudflared` and writes the public URL to `.data/public-url.txt`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `smoke-live.mjs`       | Resolves real URLs (default: a Creative Commons YouTube video) through the built engine and prints each option — metadata only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `update-providers.mjs` | Compares the yt-dlp pin in the manifest with `ARG YTDLP_VERSION` in `docker/api.Dockerfile` and GitHub's latest release; `--write` updates both pins together.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `check-providers.mjs`  | The live provider matrix: 23 cases (YouTube, Shorts, TikTok, Vimeo, Dailymotion, Twitch VOD and channel, SoundCloud, Bandcamp, X photo/video/multi-photo/no-media, Bluesky photos/video, Mastodon, Instagram reel/photo, Reddit image/video, direct image/GIF, a generic page). Each expects media kinds, a minimum item count, or a specific failure class. `--download` runs declared jobs through to bytes and sniffs their magic numbers. It passes through any credentials set in the environment.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `check-providers.mjs`  | The live provider matrix: 23 cases (YouTube, Shorts, TikTok, Vimeo, Dailymotion, Twitch VOD and channel, SoundCloud, Bandcamp, X photo/video/multi-photo/no-media, Bluesky photos/video, Mastodon, Instagram reel/photo, Reddit image/video, direct image/GIF, a generic page). Each expects media kinds, a minimum item count, or a specific failure class. `--download` runs declared jobs through to bytes, under one client key as a single visitor would, and sniffs their magic numbers. It passes through any credentials set in the environment.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `node-check.mjs`       | The node architecture end to end on one machine: an in-process API that calls itself a datacentre (or, with `--blocked`, simulates Oracle's bot challenge), a real node child process dialling in, a YouTube resolve and job, the file served over HTTP with its magic checked, and the node's directory left clean.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `check-split.mjs`      | The deployment's topology: the API with a real node dialled in, then a **separate** `RemoteOverHttp` client (as the worker uses) checks that a cold process sees the node, its providers and network class, and can have it resolve and run a whole job, with the file landing on the shared volume. The failure this checks for had reached production twice.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 
@@ -2466,8 +2468,8 @@ the same limits and hardening.
     texts that carry nothing sensitive.
 - **`VISITOR-IMPORT-CHECKS.md`** — two manual checks before merging: (a) from the Oracle host,
   the Instagram CDN serves a full-resolution image and a video, and a tampered `oe` is a 403;
-  (b) the handshake completes in Firefox and Safari. The second is written for the v1 popup
-  flow.
+  (b) the bookmarklet's same-tab hand-off to `/import#v=2&p=…` completes in Firefox, Safari
+  and on a phone, with the guardrail alerts and what each failure means.
 
 ---
 
@@ -2529,7 +2531,7 @@ ffprobe. The counts below are tests collected by `vitest list`.
 - **`fixtures.ts`** — generates, once, into `.data/fixtures`: a 3 s 640×360 H.264+AAC MP4; a
   silent 3 s H.264 video (what platforms call a GIF); a 2 s MP3; an 800×600 JPEG; and a small
   animated GIF — all from lavfi test sources. It also exports `probeFile` (an ffprobe summary),
-  `magic` (the first bytes), `toolsAvailable`, and the located tool paths.
+  `magic` (the first bytes), and the located tool paths.
 - **`media-server.ts` — `MediaServer`** — a real `node:http` server on 127.0.0.1 with routes
   that serve a file, a literal body, a status, a redirect, or a **lying `content-length`** (to
   exercise the mid-stream cap). It records requested paths so tests can assert what was, and
@@ -2711,14 +2713,7 @@ more specific sentence; the table shows the defaults.
 Nothing below is covered by a failing test; these are places where the code, its comments or
 its docs disagree, or where something looks worth a second look.
 
-1. **Documentation drift**:
-   - the README's "449 tests" (the suite now collects 521, plus 9 Redis tests);
-   - `tsconfig.json` refers to `tsconfig.web.json`;
-   - `docker-compose.yml`'s header mentions a "standalone profile at the bottom" that is
-     really a separate file;
-   - `VISITOR-IMPORT-CHECKS.md` and `PROVIDERS.md` describe the v1 popup/`postMessage`
-     transport, while the bookmarklet now uses the v2 same-tab fragment;
-   - `EXTRACTION-NODE.md` suggests `SERA_NODE_ID=home`, while the program's default is
-     `residential`.
-2. **`scripts/check-providers.mjs` calls `engine.jobs.create` without a client key.** It
-   works with the memory backend, but it isn't the signature's intent.
+1. **Some public Vimeo videos resolve but will not download** with yt-dlp 2026.08.19: of five
+   tried on 4 October 2026, one came back `DRM_PROTECTED` and two `NETWORK_ERROR`, while
+   vimeo.com pages themselves now need a login for yt-dlp (SERA's embed route still answers).
+   The provider matrix uses one that works end to end; the others were not investigated.

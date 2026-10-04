@@ -112,7 +112,10 @@ log "Fetching SERA.toolkit"
 if [ -d "$INSTALL_DIR/.git" ]; then
   git -C "$INSTALL_DIR" pull --ff-only
 else
-  command -v git >/dev/null 2>&1 || { [ "$PKG" = apt ] && apt-get install -y -qq git || dnf install -y -q git; }
+  # if/else, not `&& … ||`: with the shorthand a failed apt-get would fall through to dnf.
+  if ! command -v git >/dev/null 2>&1; then
+    if [ "$PKG" = apt ]; then apt-get install -y -qq git; else dnf install -y -q git; fi
+  fi
   git clone --depth 1 "$REPO" "$INSTALL_DIR"
 fi
 cd "$INSTALL_DIR"
@@ -162,8 +165,10 @@ else
   echo ".env already exists; leaving it alone"
 fi
 
-# shellcheck disable=SC1091
-set -a; . ./.env; set +a
+set -a
+# shellcheck disable=SC1091  # .env is written above; there is nothing to follow at lint time
+. ./.env
+set +a
 
 # Caddy's ACME contact address, as a file rather than a directive, because the directive
 # cannot be made conditional. Rewritten on every run so editing .env is enough to change
