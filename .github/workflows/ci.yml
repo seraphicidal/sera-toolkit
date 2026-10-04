@@ -96,6 +96,12 @@ jobs:
       # SERA_API_URL is baked into the web bundle at build time and read again at run
       # time by server components. If the Dockerfile default and the compose value ever
       # disagree, /api/* proxies to a host that does not exist and every request 500s.
+      # The deploy scripts run as root on the server — provisioning, the auto-update that
+      # can roll a release back, the alerts — and a shell mistake there fails silently or
+      # worse. shellcheck is on the runner image already.
+      - name: Lint the deploy scripts
+        run: shellcheck deploy/*.sh deploy/node-android/*.sh
+
       - name: Check the API URL is the same at build time and run time
         run: |
           baked=$(sed -n 's/^ARG SERA_API_URL=//p' docker/web.Dockerfile)

@@ -84,7 +84,8 @@ the full post still needs `SERA_INSTAGRAM_SESSION_ID`; read the warning in
 will serve a photo post to a client that is logged in, and a visitor is — in their own
 browser, not on the server. So SERA offers "visitor import": the visitor reads the post
 where their session already is (a bookmarklet, then an extension, on `instagram.com`) and
-sends SERA just the media descriptor over `postMessage` to `/import`. The server holds no
+sends SERA just the media descriptor, in the fragment of a same-tab navigation to
+`/import#v=2&p=…` (a fragment never reaches a server). The server holds no
 session, makes no request to Instagram, and trusts nothing in what arrives — it admits only
 media URLs on `cdninstagram.com` / `fbcdn.net`, signs what it admitted, and downloads that
 through the same guarded client as any direct link. This is what the `browserImport`

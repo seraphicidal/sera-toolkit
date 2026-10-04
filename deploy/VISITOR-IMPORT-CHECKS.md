@@ -3,8 +3,8 @@
 The automated suite covers the server's half with no network. Two things it cannot reach are
 worth doing by hand once: that Instagram's CDN actually serves a full-resolution URL to the
 Oracle datacentre (the whole premise — that these URLs are not IP-bound), and that the
-opener/postMessage handshake completes in browsers other than the Chromium the COOP finding was
-measured in. Neither blocks the code; both confirm the premise holds in the real world.
+bookmarklet's hand-off to `/import` completes in real browsers, phones included. Neither blocks
+the code; both confirm the premise holds in the real world.
 
 ## (a) The CDN serves Oracle a full-res carousel image and a video
 
@@ -44,34 +44,42 @@ curl -sS -o /dev/null -w 'tampered oe: HTTP %{http_code}\n' 'PASTE_IMAGE_URL_WIT
 Both hosts (`cdninstagram.com`, `fbcdn.net`) are the only two the import allowlist admits; if a
 URL you copied is on some other host, that is worth telling me.
 
-## (b) The handshake completes in Firefox and Safari
+## (b) The hand-off completes in Firefox, Safari and on a phone
 
-Do this against the real HTTPS deployment (or the tunnel), not plain-HTTP `localhost`, so COOP is
-evaluated exactly as in production. In each browser, **signed in to instagram.com:**
+The bookmarklet (transport v2) reads the post on instagram.com first, then navigates **the same
+tab** to `/import#v=2&p=<payload>`. There is no popup and no `postMessage`, so neither a pop-up
+blocker nor the cross-origin opener policy is involved; what is worth checking by hand is that
+each browser runs the bookmarklet and follows the navigation. Do this against the real HTTPS
+deployment (or the tunnel), not plain-HTTP `localhost`. In each browser, **signed in to
+instagram.com on the website** (the app's login does not count):
 
-1. Open SERA's `/import` page and drag **SERA: Import post** to the bookmarks bar.
+1. Open SERA's `/import` page and install **SERA: Import post** — drag it to the bookmarks bar
+   on a computer, or use **Copy code** and save it as a bookmark's address on a phone.
 2. Open a single photo post or carousel on instagram.com (`/p/…`).
-3. Click the bookmark.
+3. Run the bookmark.
 
-**Expected in both:** a popup opens to `/import`, briefly shows "Reading the post from your
-browser…", then shows the **media picker** for that post (thumbnails + Download), and a download
-completes. Then confirm the guardrails:
+**Expected everywhere:** the same tab moves to `/import`, briefly shows "Reading the post from
+your browser…", then shows the **media picker** for that post (thumbnails + Download), and a
+download completes. The fragment is gone from the address bar once the page has read it. Then
+confirm the guardrails:
 
-- On a **profile or the feed** (not a post), clicking the bookmark shows the alert
-  "Open a single Instagram post, reel or video first." and opens nothing.
-- **Signed out**, it shows "SERA could not read that post. Make sure you are signed in."
+- On a **profile or the feed** (not a post), the bookmark alerts "Open a single Instagram post,
+  reel or video first." and does nothing else.
+- **Signed out**, it alerts that you are not signed in to instagram.com in this browser.
+- Each alert names a reason (an HTTP status, Instagram's short message, a size in KB) and never a
+  URL, a cookie or a response body.
 
 **What failure looks like, and what it means:**
 
-- The popup stays on "Reading the post…" or shows the "Send an Instagram post to SERA"
-  explainer instead of the picker → the handshake didn't complete: the popup's `window.opener`
-  was null. That is the COOP failure the `unsafe-none` rule on `/import` exists to prevent — check
-  that response header on `/import` is `cross-origin-opener-policy: unsafe-none` (e.g.
-  `curl -sI https://YOUR_DEPLOYMENT/import | grep -i cross-origin-opener`).
-- No popup at all → the browser's popup blocker; allow pop-ups for instagram.com and retry.
-- Safari specifically: enable the Favorites/bookmarks bar (View → Show Favorites Bar) to drag the
-  link, and if a `javascript:` bookmarklet is refused from the bar, that is a Safari policy signal
-  worth noting — it is the case most likely to push us toward the extension sooner.
+- Nothing happens when the bookmark runs → the browser refused the `javascript:` bookmark. In
+  Safari, enable the Favorites bar (View → Show Favorites Bar) to drag the link; on iOS, edit a
+  saved bookmark's address and paste the copied code in. A browser that refuses `javascript:`
+  bookmarks outright is the case most likely to push us toward the extension sooner.
+- `/import` opens but shows the "Send an Instagram post to SERA" explainer instead of the picker →
+  the fragment did not arrive or was refused (too large, wrong version, or media off the
+  Instagram CDN). The page clears it either way; the browser console says which.
+- An alert that the post is too large to send → a post over 60 KB once encoded, far beyond the
+  measured worst case (about 36 KB for a 20-slide carousel); worth telling me which post.
 
-Report back the browser + version for each, and whether the picker appeared. That is the one
-result the automated tests can't stand in for.
+Report back the browser + version for each (including one phone), and whether the picker
+appeared. That is the one result the automated tests can't stand in for.
