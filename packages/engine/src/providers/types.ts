@@ -93,7 +93,11 @@ export interface ProviderContext {
      * Extra request headers. The only caller is a provider sending a credential the
      * operator configured for their own server, so these never reach a log line.
      */
-    options?: { readonly headers?: Readonly<Record<string, string>> },
+    options?: {
+      readonly headers?: Readonly<Record<string, string>>;
+      /** Carry cookies a redirect sets to the next hop on the same host (`safeFetch`). */
+      readonly keepCookies?: boolean;
+    },
   ) => Promise<{ body: string; url: string }>;
   /** Issues a HEAD request through the SSRF-guarded client. */
   readonly head: (

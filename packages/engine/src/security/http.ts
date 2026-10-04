@@ -116,6 +116,14 @@ export interface SafeFetchOptions {
    */
   readonly allowUrl?: (url: URL) => boolean;
   readonly headers?: Readonly<Record<string, string>>;
+  /**
+   * Carries cookies a redirect sets to the next hop, on the same host only.
+   *
+   * Instagram answers a signed-in API request with a 302 back to the same URL that sets
+   * `mid`, `ig_did` and the like, and expects them on the way back; followed without them
+   * it redirects again until the hop budget runs out.
+   */
+  readonly keepCookies?: boolean;
   readonly signal?: AbortSignal;
 }
 
@@ -162,6 +170,7 @@ export async function safeOpen(url: URL, options: SafeFetchOptions): Promise<Ope
   const signal = options.signal ? AbortSignal.any([timeout, options.signal]) : timeout;
 
   let current = url;
+  const jar = cookieJar(options.headers?.cookie);
   for (let hop = 0; hop <= maxRedirects; hop += 1) {
     if (current.protocol !== 'http:' && current.protocol !== 'https:') {
       throw seraError('BLOCKED_ADDRESS', { detail: `redirect to ${current.protocol}` });
@@ -180,7 +189,7 @@ export async function safeOpen(url: URL, options: SafeFetchOptions): Promise<Ope
     try {
       response = await request(current, {
         method: options.method ?? 'GET',
-        headers: { ...DEFAULT_HEADERS, ...options.headers },
+        headers: hopHeaders(options, url, current, jar),
         dispatcher: options.dispatcher,
         signal,
       });
@@ -210,6 +219,7 @@ export async function safeOpen(url: URL, options: SafeFetchOptions): Promise<Ope
         });
       }
       if (hop === maxRedirects) throw seraError('NETWORK_ERROR', { detail: 'too many redirects' });
+      if (options.keepCookies) keepSetCookies(jar, headers['set-cookie']);
       current = new URL(location, current);
       continue;
     }
@@ -224,6 +234,45 @@ export async function safeOpen(url: URL, options: SafeFetchOptions): Promise<Ope
 
   /* c8 ignore next -- the loop always returns or throws */
   throw seraError('NETWORK_ERROR', { detail: 'redirect loop' });
+}
+
+/** `a=1; b=2` as a map, so a later Set-Cookie can replace one value. */
+function cookieJar(cookie: string | undefined): Map<string, string> {
+  const jar = new Map<string, string>();
+  for (const pair of (cookie ?? '').split(';')) {
+    const index = pair.indexOf('=');
+    if (index > 0) jar.set(pair.slice(0, index).trim(), pair.slice(index + 1).trim());
+  }
+  return jar;
+}
+
+function keepSetCookies(jar: Map<string, string>, setCookie: string | string[] | undefined): void {
+  for (const line of Array.isArray(setCookie) ? setCookie : setCookie ? [setCookie] : []) {
+    const [pair = ''] = line.split(';');
+    const index = pair.indexOf('=');
+    if (index <= 0) continue;
+    const name = pair.slice(0, index).trim();
+    const value = pair.slice(index + 1).trim();
+    if (value && value !== '""') jar.set(name, value);
+  }
+}
+
+/**
+ * The headers for one hop. A cookie goes only to the host it was given for: a redirect
+ * elsewhere gets none, so a session cannot follow a redirect off its own site.
+ */
+function hopHeaders(
+  options: SafeFetchOptions,
+  first: URL,
+  current: URL,
+  jar: Map<string, string>,
+): Record<string, string> {
+  const { cookie: _given, ...rest } = options.headers ?? {};
+  const headers: Record<string, string> = { ...DEFAULT_HEADERS, ...rest };
+  if (jar.size && current.hostname === first.hostname) {
+    headers.cookie = [...jar].map(([name, value]) => `${name}=${value}`).join('; ');
+  }
+  return headers;
 }
 
 /** Fetches a URL and buffers the body, refusing anything over `maxBytes`. */
