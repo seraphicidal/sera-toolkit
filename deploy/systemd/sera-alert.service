@@ -1,0 +1,10 @@
+# Installed by deploy/install-timers.sh. Started by sera-alert.timer.
+[Unit]
+Description=SERA: notify through ntfy.sh when the deployment changes state
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/sera/deploy/alert-check.sh
+TimeoutStartSec=2min

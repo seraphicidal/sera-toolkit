@@ -1,0 +1,10 @@
+# Installed by deploy/install-timers.sh.
+[Unit]
+Description=SERA: check health for alerts every 5 minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target
