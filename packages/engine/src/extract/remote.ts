@@ -41,6 +41,22 @@ export interface RemoteTask {
   readonly createdAt: number;
 }
 
+/**
+ * What a job can ask of a node beyond downloading, each a field a node from before it was
+ * added would not know to read. Such a node would not refuse the task; it would ignore the
+ * field and deliver the wrong file — the whole video for a trim, no subtitles for an embed —
+ * so a node says which it understands, and a task needing one only goes to a node that does.
+ */
+export type NodeFeature = 'trim' | 'subtitles';
+
+/** The features a task cannot be done correctly without. */
+export function requiredFeatures(task: Pick<RemoteTask, 'trim' | 'subtitles'>): NodeFeature[] {
+  const required: NodeFeature[] = [];
+  if (task.trim) required.push('trim');
+  if (task.subtitles) required.push('subtitles');
+  return required;
+}
+
 export interface RemoteProgress {
   readonly percent: number;
   readonly step: string;
@@ -60,6 +76,8 @@ interface NodeRecord {
   providers: string[];
   capacity: number;
   networkClass: NetworkClass;
+  /** What the node said it understands; none for a node from before features existed. */
+  features: string[];
   seen: number;
 }
 
@@ -101,6 +119,7 @@ export interface NodeStatus {
   readonly providers: readonly string[];
   readonly networkClass: NetworkClass;
   readonly capacity: number;
+  readonly features?: readonly string[];
   readonly inFlight: number;
   readonly lastSeenMs: number;
   readonly healthy: boolean;
@@ -175,6 +194,7 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
     providers: readonly string[],
     capacity: number,
     networkClass: NetworkClass = 'residential',
+    features: readonly string[] = [],
   ): NodeRecord {
     const known = this.nodes.get(nodeId);
     const record: NodeRecord = {
@@ -182,12 +202,13 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
       providers: [...providers],
       capacity: Math.max(1, capacity),
       networkClass,
+      features: [...features],
       seen: Date.now(),
     };
     this.nodes.set(nodeId, record);
-    if (!known) {
+    if (known?.features.join() !== record.features.join()) {
       this.logger.info(
-        { node: nodeId, providers, capacity, networkClass },
+        { node: nodeId, providers, capacity, networkClass, features },
         'extraction node connected',
       );
     }
@@ -197,13 +218,16 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
   /**
    * Whether this node may take this task.
    *
-   * Three questions, and the first two used to be asked in only one of the two places a
+   * Four questions — the fourth, whether it understands everything the task asks for, came
+   * later: an outdated phone node took trimmed and subtitled jobs and ignored both. Three
+   * questions and the first two used to be asked in only one of the two places a
    * task can reach a node. A task queued while a node was already waiting went out with
    * neither check, so a node told to do YouTube alone could be handed Instagram.
    */
   private accepts(node: NodeRecord, task: RemoteTask): boolean {
     if (node.providers.length && !node.providers.includes(task.providerId)) return false;
     if (task.networkClass && task.networkClass !== node.networkClass) return false;
+    if (!requiredFeatures(task).every((feature) => node.features.includes(feature))) return false;
     return this.inFlightFor(node.id) < node.capacity;
   }
 
@@ -227,8 +251,9 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
     capacity: number,
     holdMs: number,
     networkClass: NetworkClass = 'residential',
+    features: readonly string[] = [],
   ): Promise<RemoteTask | undefined> {
-    const node = this.register(nodeId, providers, capacity, networkClass);
+    const node = this.register(nodeId, providers, capacity, networkClass, features);
 
     const ready = this.queue.findIndex((task) => this.accepts(node, task));
     if (ready !== -1) {
@@ -311,6 +336,7 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
       providers: node.providers,
       networkClass: node.networkClass,
       capacity: node.capacity,
+      features: node.features,
       inFlight: this.inFlightFor(node.id),
       lastSeenMs: now - node.seen,
       healthy: now - node.seen < this.staleAfterMs,

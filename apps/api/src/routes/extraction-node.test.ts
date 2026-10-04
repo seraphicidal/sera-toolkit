@@ -90,12 +90,13 @@ afterAll(async () => {
 
 const auth = { authorization: `Bearer ${TOKEN}` };
 
-function claim() {
+/** A claim from a current node, or, with `features: []`, from one that predates them. */
+function claim(features: readonly string[] = ['trim', 'subtitles']) {
   return app.inject({
     method: 'POST',
     url: '/internal/extraction/claim',
     headers: auth,
-    payload: { nodeId: 'test-node', providers: ['youtube'], capacity: 1 },
+    payload: { nodeId: 'test-node', providers: ['youtube'], capacity: 1, features },
   });
 }
 
@@ -375,6 +376,8 @@ describe('the dispatch route a standalone worker uses', () => {
     });
     expect(dispatched.statusCode, dispatched.body).toBeLessThan(300);
 
+    // A node that does not say it can trim would ignore the trim, so it is not offered one.
+    expect((await claim([])).statusCode).toBe(204);
     const claimed = await claim();
     expect(claimed.statusCode).toBe(200);
     expect(claimed.json<{ kind: string; trim?: unknown }>()).toMatchObject({

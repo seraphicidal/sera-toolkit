@@ -12,6 +12,7 @@ import {
   type EngineConfig,
   type JobSpec,
   type Logger,
+  type NodeFeature,
   type ResolvedMedia,
 } from '@sera/engine';
 
@@ -46,6 +47,9 @@ interface RemoteTask {
     readonly only: boolean;
   };
 }
+
+/** What this node understands beyond a plain download; sent with every claim. */
+export const NODE_FEATURES: readonly NodeFeature[] = ['trim', 'subtitles'];
 
 /** A task's subtitles, if it has well-formed ones: the language goes onto a command line. */
 export function taskSubtitles(task: Pick<RemoteTask, 'subtitles'>): RemoteTask['subtitles'] {
@@ -193,6 +197,7 @@ export class ExtractionNode {
         providers: this.providers,
         capacity: 1,
         networkClass: this.networkClass,
+        features: NODE_FEATURES,
       },
       CLAIM_TIMEOUT_MS,
     );
