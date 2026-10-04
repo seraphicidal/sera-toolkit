@@ -187,7 +187,6 @@ export async function download(request: DownloadRequest): Promise<void> {
     args.push('--audio-quality', request.audioQuality ?? '0');
   }
   if (request.maxFilesizeBytes) args.push('--max-filesize', String(request.maxFilesizeBytes));
-  if (request.proxy) args.push('--proxy', request.proxy);
 
   args.push('--', request.url);
 

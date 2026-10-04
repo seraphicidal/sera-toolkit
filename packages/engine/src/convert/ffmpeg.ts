@@ -1,4 +1,4 @@
-import { basename, dirname, join } from 'node:path';
+import { dirname } from 'node:path';
 import { seraError } from '../errors.js';
 import { run } from '../util/spawn.js';
 
@@ -335,9 +335,4 @@ export async function ffmpegVersion(ffmpegPath: string, timeoutMs = 10_000): Pro
   }
   const first = result.stdout.split('\n')[0] ?? '';
   return /ffmpeg version (\S+)/.exec(first)?.[1] ?? first.trim();
-}
-
-/** Places `name` alongside `reference`, used to build sibling output paths. */
-export function siblingPath(reference: string, name: string): string {
-  return join(dirname(reference), basename(name));
 }

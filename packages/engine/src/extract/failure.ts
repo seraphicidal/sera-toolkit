@@ -192,32 +192,3 @@ export function isDefinitive(failure: FailureClass): boolean {
     failure === 'CANCELLED'
   );
 }
-
-/**
- * Whether another way of asking the same source could still work.
- *
- * The inverse of `isDefinitive`, and the question a strategy ladder actually asks.
- * `UNSUPPORTED_MEDIA` is deliberately on this side of the line: it usually means "this
- * extractor only understands video and the post is photographs", which is precisely the
- * case another strategy exists for.
- */
-export function worthAnotherStrategy(failure: FailureClass): boolean {
-  return !isDefinitive(failure);
-}
-
-/**
- * Whether the work has to happen wherever the resolution happened.
- *
- * A media URL bound to the address that requested it cannot be handed to another
- * machine — measured on YouTube: the same signed URL answers 206 at home and 403 from a
- * server minutes later. This is the signal that a split resolve-here/download-there
- * attempt has been made and must not be retried the same way.
- */
-export function requiresOriginatingNode(failure: FailureClass): boolean {
-  return failure === 'STREAM_403';
-}
-
-/** Whether asking again, unchanged, could reasonably produce a different answer. */
-export function isTransient(failure: FailureClass): boolean {
-  return failure === 'RATE_LIMITED' || failure === 'SOURCE_ERROR' || failure === 'UPSTREAM_TIMEOUT';
-}

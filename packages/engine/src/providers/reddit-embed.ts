@@ -150,7 +150,6 @@ function imageItem(url: string, index: number): ResolvedItem {
  * stream. So both reasons point the same way.
  */
 function videoItem(base: string): ResolvedItem {
-  const manifest = `${base}/HLSPlaylist.m3u8`;
   return {
     sourceId: base.split('/').pop() ?? 'video',
     index: 0,
@@ -182,8 +181,7 @@ function videoItem(base: string): ResolvedItem {
         },
       },
     ]),
-    metadata: { manifest },
-  } as ResolvedItem;
+  };
 }
 
 /**
