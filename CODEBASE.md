@@ -894,7 +894,10 @@ and hooks:
     conversion if the provider treats silent video as GIF;
   - audio → the audio targets.
 
-  It then marks one recommended plan per kind.
+  It then marks one recommended plan per kind. The item also carries `tags` (`artist`,
+  `album`, `track`, where the site publishes them — YouTube Music, SoundCloud, Bandcamp) and
+  `thumbnailFallbackUrl`, yt-dlp's own verified `thumbnail`, when it differs from the picked
+  one: YouTube lists a `maxresdefault` for videos that never had one, and it answers 404.
 
 - `pickThumbnail` prefers yt-dlp's `preference`, then the width closest to 640 px.
   `parseTimestamp` reads `timestamp`, `release_timestamp` or `upload_date` (`YYYYMMDD`).
@@ -1614,6 +1617,13 @@ Otherwise it is `mediaFilename(author, item title or post title, extension, inde
 collections)`, deduplicated case-insensitively. A trimmed job's name gains `trimSuffix`
 before the extension.
 
+**Tagging** (`tagOne`, every audio output in MP3, M4A or Opus, after any conversion — so on
+a node too): title (the item's `track`, else its title, else the post's), artist (`tags.artist`,
+else the post's author) and album, and a cover. The cover is the first of the item's thumbnail,
+its fallback and the post's thumbnail that downloads (through the guarded client, ≤ 10 MB, 30 s)
+and crops; an imported post gets no cover, since its pictures are Instagram's. Best effort: a
+thumbnail that fails is logged and skipped, and a tagging failure keeps the untagged file.
+
 **Trimming** (`spec.trim`, one video or audio item): through yt-dlp, `fetchOne` passes
 `sections` — `--download-sections "*S-E"`, so only that part is fetched, plus
 `--force-keyframes-at-cuts` whenever the start is not 0, because a copy can only begin where
@@ -1777,6 +1787,16 @@ stats_mode=diff, paletteuse bayer`) with `-loop 0`; defaults 15 fps and 480 px w
   capped at 99 until done. A non-zero exit is `CONVERSION_FAILED` with the stderr tail as
   detail.
 - `ffmpegVersion`.
+
+`convert/tags.ts` — **`tagAudio({input, output, tags, coverPath?, scratchDir})`** remuxes an
+MP3, M4A or Opus (`TAGGABLE_AUDIO`) with its audio copied, never re-encoded. Tags go in as an
+FFMETADATA file (`=`, `;`, `#`, `\` and newlines escaped), not as arguments, because an Opus
+cover is a tag tens of kilobytes long and Windows will not pass a command line that size; the
+source's own tags are replaced, not merged. MP3 and M4A get the cover as an attached MJPEG stream
+(`-disposition:v attached_pic`, ID3v2.3 for MP3); Opus gets a `METADATA_BLOCK_PICTURE` comment
+holding `pictureBlock(jpeg, w, h)`, a FLAC picture block. `squareCover` crops the centre square
+and scales it to at most 1000 px, as a JPEG. Checked with Debian's FFmpeg 5.1, which production
+runs, as well as 8.1.
 
 `convert/trim.ts` — **`trimMedia({input, output, range})`** cuts a file to part of itself in
 the same container. A stream copy when it is accurate — no video stream, a start of 0, or the
@@ -2626,6 +2646,7 @@ ffprobe. The counts below are tests collected by `vitest list`.
 
 | File                           | Tests | Covers                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | ------------------------------ | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `audio-tags.test.ts`           | 9     | Read back with ffprobe: the cover cropped square from a 4:3 picture; title (with `=`, `;`, `#`), artist and album and a 600×600 cover in MP3, M4A and Opus with the audio copied; tags without a cover; the FLAC picture block's layout. Through the real `JobRunner`: an audio job tagged from the item's music metadata with its thumbnail as the cover; still tagged when the thumbnail 404s; the fallback thumbnail used when the first is missing.                                                    |
 | `trim.test.ts`                 | 10    | Through the pipeline, measured with ffprobe: a video cut from 0:01 to 0:02 is 1 s and re-encoded (the fixture's only keyframe is at 0), a cut from the start stays an H.264 copy and is 2 s, an MP3 cut from 0:01 is 1 s; names gain `-trim-…`; refused: more than one item, an image, times past the end or out of order. Units: `copyIsAccurate`, the fixture keyframe found at 0, yt-dlp's section arguments, the node's own check of a task's range.                                                   |
 | `canary.test.ts`               | 8     | A working source downloaded through the API; a broken one reported by its error code while the run carries on; a stuck one stopped at its timeout; never rate-limited or cooled down with the token, while a visitor is; the exact token required; the case list (labels, YouTube present, nothing needing sign-in); the smallest option of a kind.                                                                                                                                                        |
 | `pipeline.test.ts`             | 23    | Direct links (options, proxied thumbnail, redirects, non-media refused, missing → unavailable); the generic page reader (declared media, robots.txt honoured, nothing invented); video download with both streams intact, naming from metadata, filename override; audio to a real MP3 and a lossless WAV, and refusing audio from a silent video; untouched images; GIF original and GIF→MP4; ZIP packaging, per-file serving, individual and forced-ZIP modes; SSE ending in `done`; monotonic progress. |

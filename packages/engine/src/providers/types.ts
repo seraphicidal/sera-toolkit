@@ -146,6 +146,14 @@ export interface ResolvedItem {
   readonly title?: string;
   /** Absolute thumbnail URL. Proxied before it reaches the browser. */
   readonly thumbnailUrl?: string;
+  /**
+   * A second thumbnail to try when the first will not download: the one yt-dlp itself
+   * verified. The first is chosen by size, and YouTube lists a `maxresdefault` for videos
+   * that never had one, which answers 404.
+   */
+  readonly thumbnailFallbackUrl?: string;
+  /** Music metadata the source published, for tagging audio files. */
+  readonly tags?: { readonly artist?: string; readonly album?: string; readonly track?: string };
   readonly width?: number;
   readonly height?: number;
   readonly duration?: number;

@@ -82,6 +82,10 @@ export interface YtdlpInfo {
   readonly formats?: readonly YtdlpFormat[];
   readonly entries?: readonly (YtdlpInfo | null)[];
   readonly is_live?: boolean | null;
+  /** Music metadata, where the site publishes it (YouTube Music, SoundCloud, Bandcamp). */
+  readonly artist?: string | null;
+  readonly album?: string | null;
+  readonly track?: string | null;
   readonly was_live?: boolean | null;
   readonly live_status?: string | null;
   readonly ext?: string | null;

@@ -243,9 +243,15 @@ export abstract class YtdlpProvider implements MediaProvider {
     const height = num(entry.height) ?? plans.find((p) => p.height)?.height;
     const container = (str(entry.ext) ?? plans[0]?.container) as ContainerFormat | undefined;
     const thumbnailUrl = pickThumbnail(entry);
+    const thumbnailFallbackUrl = str(entry.thumbnail);
     const title = str(entry.title);
     const filesize = num(entry.filesize) ?? num(entry.filesize_approx);
     const sourceId = str(entry.id);
+    const tags = {
+      ...(str(entry.artist) ? { artist: str(entry.artist)! } : {}),
+      ...(str(entry.album) ? { album: str(entry.album)! } : {}),
+      ...(str(entry.track) ? { track: str(entry.track)! } : {}),
+    };
 
     return {
       ...(sourceId ? { sourceId } : {}),
@@ -253,6 +259,10 @@ export abstract class YtdlpProvider implements MediaProvider {
       kind,
       ...(title ? { title } : {}),
       ...(thumbnailUrl ? { thumbnailUrl } : {}),
+      ...(thumbnailFallbackUrl && thumbnailFallbackUrl !== thumbnailUrl
+        ? { thumbnailFallbackUrl }
+        : {}),
+      ...(Object.keys(tags).length ? { tags } : {}),
       ...(width ? { width } : {}),
       ...(height ? { height } : {}),
       ...(duration !== undefined ? { duration } : {}),
