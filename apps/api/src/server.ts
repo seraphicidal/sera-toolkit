@@ -4,6 +4,7 @@ import Fastify, { LogController, type FastifyBaseLogger, type FastifyInstance } 
 import type { SeraEngine } from '@sera/engine';
 import { clientKeyPlugin } from './plugins/client.js';
 import { errorHandlerPlugin } from './plugins/errors.js';
+import { registerAdminRoutes } from './routes/admin.js';
 import { registerExtractionNodeRoutes } from './routes/extraction-node.js';
 import { registerJobRoutes } from './routes/jobs.js';
 import { registerMediaRoutes } from './routes/media.js';
@@ -98,6 +99,8 @@ export async function buildServer(engine: SeraEngine): Promise<FastifyInstance> 
   // Mounted only when a node token is configured; a deployment with no node should not
   // have an endpoint that accepts one.
   registerExtractionNodeRoutes(app, engine);
+  // Likewise only with an admin token: usage counts for the operator.
+  registerAdminRoutes(app, engine);
 
   return app;
 }

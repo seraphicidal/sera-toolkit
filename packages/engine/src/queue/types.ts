@@ -16,6 +16,8 @@ export interface JobRecord {
   readonly spec: JobSpec;
   /** Opaque per-client key used for concurrency accounting. Never logged. */
   readonly clientKey: string;
+  /** The server's own canary: its outcome is left out of the usage counts. */
+  readonly uncounted?: boolean;
 }
 
 export type JobPatch = Partial<Pick<JobRecord, 'state' | 'step' | 'progress' | 'result' | 'error'>>;

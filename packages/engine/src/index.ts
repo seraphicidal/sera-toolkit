@@ -42,6 +42,16 @@ export { createZip, type ZipEntry } from './jobs/zip.js';
 
 export { MemoryJobBackend } from './queue/memory.js';
 export {
+  MemoryUsageCounter,
+  RedisUsageCounter,
+  totalUsage,
+  USAGE_RETENTION_DAYS,
+  type SourceUsage,
+  type UsageCounter,
+  type UsageDay,
+  type UsageEvent,
+} from './usage/counts.js';
+export {
   toPublicJob,
   isActive,
   ACTIVE_STATES,

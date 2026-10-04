@@ -13,6 +13,7 @@ import type { MediaResolver } from '../resolver.js';
 import type { WorkspaceManager } from '../storage/workspace.js';
 import { classifyFailure } from '../extract/failure.js';
 import type { RemoteExtraction } from '../extract/remote.js';
+import type { UsageCounter } from '../usage/counts.js';
 import { newJobId } from '../util/tokens.js';
 import type { JobBackend, JobRecord, WorkerHandle } from '../queue/types.js';
 import { toPublicJob } from '../queue/types.js';
@@ -36,6 +37,8 @@ export interface JobServiceDependencies {
   /** Extraction nodes, for a job whose plans were made on another network. */
   readonly remote?: RemoteExtraction;
   readonly runner?: JobRunner;
+  /** Where each finished job is counted, by source and outcome only. */
+  readonly usage?: UsageCounter;
 }
 
 /** Progress updates are coalesced to this interval before they hit the store. */
@@ -58,8 +61,15 @@ export class JobService {
       });
   }
 
-  /** Validates a request and queues it. Throws a `SeraError` if it cannot be accepted. */
-  async create(request: CreateJobRequest, clientKey: string): Promise<Job> {
+  /**
+   * Validates a request and queues it. Throws a `SeraError` if it cannot be accepted.
+   * `uncounted` keeps the job out of the usage counts: the server's own canary.
+   */
+  async create(
+    request: CreateJobRequest,
+    clientKey: string,
+    { uncounted = false }: { readonly uncounted?: boolean } = {},
+  ): Promise<Job> {
     const { config, resolver, backend } = this.deps;
 
     const info = resolver.verifyInfoId(request.infoId);
@@ -148,6 +158,7 @@ export class JobService {
       updatedAt: now,
       spec,
       clientKey,
+      ...(uncounted ? { uncounted: true } : {}),
     };
 
     await backend.submit(record);
@@ -241,6 +252,15 @@ export class JobService {
     return this.deps.backend.startWorker((record) => this.execute(record), concurrency);
   }
 
+  /** Counts a finished job by its source and outcome, unless it is the canary's. */
+  private count(
+    record: JobRecord,
+    outcome: { readonly ok: true } | { readonly ok: false; readonly code: string },
+  ): void {
+    if (record.uncounted || !this.deps.usage) return;
+    void this.deps.usage.record({ source: record.provider, kind: 'download', ...outcome });
+  }
+
   /** Runs one job to completion, translating every outcome into a stored state. */
   private async execute(record: JobRecord): Promise<void> {
     const { backend, logger, workspaces } = this.deps;
@@ -299,9 +319,12 @@ export class JobService {
         },
         result,
       });
+      this.count(record, { ok: true });
     } catch (error) {
       const seraErr = SeraError.from(error);
       const cancelled = seraErr.code === 'CANCELLED' || controller.signal.aborted;
+      // A visitor changing their mind is not a failure of the source.
+      if (!cancelled) this.count(record, { ok: false, code: seraErr.code });
 
       await backend.patch(record.id, {
         state: cancelled ? 'cancelled' : 'failed',

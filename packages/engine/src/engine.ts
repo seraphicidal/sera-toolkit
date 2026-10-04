@@ -14,6 +14,7 @@ import { MemoryJobBackend } from './queue/memory.js';
 import type { JobBackend, WorkerHandle } from './queue/types.js';
 import { MediaResolver, type ResolverDependencies } from './resolver.js';
 import { AbuseGuard } from './security/abuse.js';
+import { MemoryUsageCounter, type UsageCounter } from './usage/counts.js';
 import { WorkspaceManager } from './storage/workspace.js';
 
 /**
@@ -39,6 +40,8 @@ export interface EngineOptions {
    * it at their loopback origin.
    */
   readonly importHosts?: MediaHostPolicy;
+  /** Where usage is counted; by default Redis with the Redis driver, memory otherwise. */
+  readonly usage?: UsageCounter;
 }
 
 export class SeraEngine {
@@ -51,6 +54,8 @@ export class SeraEngine {
   readonly workspaces: WorkspaceManager;
   readonly backend: JobBackend;
   readonly jobs: JobService;
+  /** Per-source usage counts, with nothing about the visitor. See `usage/counts.ts`. */
+  readonly usage: UsageCounter;
   /**
    * Cooldown for clients that keep failing.
    *
@@ -72,6 +77,7 @@ export class SeraEngine {
     workspaces: WorkspaceManager;
     backend: JobBackend;
     jobs: JobService;
+    usage: UsageCounter;
   }) {
     this.config = parts.config;
     this.logger = parts.logger;
@@ -81,6 +87,7 @@ export class SeraEngine {
     this.workspaces = parts.workspaces;
     this.backend = parts.backend;
     this.jobs = parts.jobs;
+    this.usage = parts.usage;
   }
 
   static async create(options: EngineOptions = {}): Promise<SeraEngine> {
@@ -129,6 +136,7 @@ export class SeraEngine {
     });
     const workspaces = new WorkspaceManager(config.dataDir, config.retentionSeconds, logger);
     const backend = options.backend ?? (await createBackend(config, logger));
+    const usage = options.usage ?? (await createUsageCounter(config, logger));
     const jobs = new JobService({
       config,
       logger,
@@ -136,6 +144,7 @@ export class SeraEngine {
       workspaces,
       backend,
       remote,
+      usage,
     });
 
     const engine = new SeraEngine({
@@ -147,6 +156,7 @@ export class SeraEngine {
       workspaces,
       backend,
       jobs,
+      usage,
     });
     engine.stopReaper = workspaces.startReaper(config.reapIntervalSeconds);
     // One sweep at boot clears anything a previous process left behind.
@@ -235,6 +245,7 @@ export class SeraEngine {
     this.stopReaper?.();
     await this.worker?.close().catch(() => undefined);
     await this.backend.close().catch(() => undefined);
+    await this.usage.close().catch(() => undefined);
   }
 }
 
@@ -258,4 +269,16 @@ async function createBackend(config: EngineConfig, logger: Logger): Promise<JobB
     return new RedisJobBackend(config.redisUrl, logger);
   }
   return new MemoryJobBackend(logger);
+}
+
+async function createUsageCounter(config: EngineConfig, logger: Logger): Promise<UsageCounter> {
+  if (config.queueDriver === 'redis') {
+    const [{ Redis }, { RedisUsageCounter }] = await Promise.all([
+      import('ioredis'),
+      import('./usage/counts.js'),
+    ]);
+    // Its own connection, failing fast: a count is never worth holding a request up for.
+    return new RedisUsageCounter(new Redis(config.redisUrl, { maxRetriesPerRequest: 1 }), logger);
+  }
+  return new MemoryUsageCounter();
 }
