@@ -52,6 +52,14 @@ export class InstagramProvider extends YtdlpProvider {
    */
   override readonly capabilities: ProviderCapabilities;
 
+  /**
+   * An extraction node can hold the session instead: its operator's own account, on their
+   * own connection, which never reaches this server. While one is connected, photo posts
+   * and carousels go to it.
+   */
+  readonly nodeSession = 'instagram-session' as const;
+  readonly withNodeSession: Partial<ProviderCapabilities> = { image: true, carousel: true };
+
   constructor(config?: EngineConfig) {
     super();
     const withSession = config?.instagram.configured === true;

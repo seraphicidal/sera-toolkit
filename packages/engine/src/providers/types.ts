@@ -1,3 +1,4 @@
+import type { NodeFeature } from '../extract/remote.js';
 import type { SubtitleTrack } from '@sera/contracts/types';
 import type {
   ContainerFormat,
@@ -39,6 +40,14 @@ export interface MediaProvider {
    * before anyone pastes a link.
    */
   readonly capabilities: ProviderCapabilities;
+  /**
+   * The node feature that holds an account for this provider, when one can. A node whose
+   * operator gave it a session declares it, and the router sends it what the server could
+   * not read without one.
+   */
+  readonly nodeSession?: NodeFeature;
+  /** What this provider can do once such a node is connected, over `capabilities`. */
+  readonly withNodeSession?: Partial<ProviderCapabilities>;
 
   /** Whether this provider handles the URL. Must be cheap and side-effect free. */
   canHandle(url: URL, host: string): boolean;

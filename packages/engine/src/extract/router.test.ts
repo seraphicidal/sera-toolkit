@@ -334,3 +334,71 @@ describe('the capability matrix decides where work may go', () => {
     expect(primary.calls).toBe(0);
   });
 });
+
+describe('a post only an account can read', () => {
+  const instagram = new URL('https://www.instagram.com/p/DcOX3hWFiey/');
+  const needsAccount = () =>
+    seraError('PROVIDER_AUTH_REQUIRED', { detail: 'instagram: no video in post' });
+
+  function route(
+    signedIn: ExtractionBackend | undefined,
+    lastResort?: () => Promise<ResolvedMedia>,
+  ) {
+    return new ExtractionRouter({
+      primary: backend('oracle', { result: needsAccount() }),
+      logger: silentLogger(),
+      fallbacks: () => [],
+      capabilitiesOf: caps(),
+      authenticated: () => signedIn,
+      ...(lastResort ? { lastResort } : {}),
+    });
+  }
+
+  it('goes to a node holding an account, before the lesser cover image', async () => {
+    const node = backend('instagram-session', { result: 'ok' });
+    let covers = 0;
+    const outcome = await route(node, () => {
+      covers += 1;
+      return Promise.resolve(media);
+    }).resolve(instagram, 'instagram');
+
+    expect(node.calls).toBe(1);
+    expect(covers).toBe(0);
+    expect(outcome).toMatchObject({ backend: 'instagram-session', remote: true });
+  });
+
+  it('gives the node’s own answer when that is final, such as a private account', async () => {
+    const node = backend('instagram-session', { result: seraError('PRIVATE_CONTENT') });
+    await expect(route(node).resolve(instagram, 'instagram')).rejects.toMatchObject({
+      code: 'PRIVATE_CONTENT',
+    });
+  });
+
+  it('keeps the original answer when the node fails for some other reason', async () => {
+    const node = backend('instagram-session', { result: seraError('NETWORK_ERROR') });
+    await expect(route(node).resolve(instagram, 'instagram')).rejects.toMatchObject({
+      code: 'PROVIDER_AUTH_REQUIRED',
+    });
+  });
+
+  it('is not asked when no such node is connected, or for any other failure', async () => {
+    const offline = backend('instagram-session', { healthy: false });
+    await expect(route(offline).resolve(instagram, 'instagram')).rejects.toMatchObject({
+      code: 'PROVIDER_AUTH_REQUIRED',
+    });
+    expect(offline.calls).toBe(0);
+
+    const node = backend('instagram-session', { result: 'ok' });
+    const router = new ExtractionRouter({
+      primary: backend('oracle', { result: seraError('PRIVATE_CONTENT') }),
+      logger: silentLogger(),
+      fallbacks: () => [],
+      capabilitiesOf: caps(),
+      authenticated: () => node,
+    });
+    await expect(router.resolve(instagram, 'instagram')).rejects.toMatchObject({
+      code: 'PRIVATE_CONTENT',
+    });
+    expect(node.calls).toBe(0);
+  });
+});
