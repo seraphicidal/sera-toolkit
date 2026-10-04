@@ -98,12 +98,16 @@ services:
 
   redis:
     image: redis:7.4-alpine
+    # noeviction, not an LRU policy: this Redis holds a work queue, not a cache. An
+    # eviction policy would drop live job records and BullMQ's bookkeeping to stay under
+    # the cap. With noeviction a full Redis refuses new writes instead, which surfaces as
+    # a job that would not start. deploy/docker-compose.oracle.yml explains it at length.
     command: >
       redis-server
       --save ''
       --appendonly no
       --maxmemory 256mb
-      --maxmemory-policy allkeys-lru
+      --maxmemory-policy noeviction
     healthcheck:
       test: ['CMD', 'redis-cli', 'ping']
       interval: 10s
