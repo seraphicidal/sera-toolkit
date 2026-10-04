@@ -50,8 +50,18 @@ const FORCE = args.includes('--force');
 const ONLY = args.find((a) => a.startsWith('--only='))?.slice('--only='.length);
 const PIN_FROM = args.find((a) => a.startsWith('--pin-from='))?.slice('--pin-from='.length);
 
-const EXE = process.platform === 'win32' ? '.exe' : '';
-const PLATFORM_KEY = `${process.platform}-${process.arch}`;
+/** `SERA_TOOLS_PLATFORM` stands in for this machine's `platform-arch`, for testing a fetch. */
+const PLATFORM_KEY = process.env.SERA_TOOLS_PLATFORM ?? `${process.platform}-${process.arch}`;
+const EXE = PLATFORM_KEY.startsWith('win32-') ? '.exe' : '';
+/**
+ * Android (Termux) cannot run yt-dlp's Linux builds, which are linked against glibc. There
+ * the platform-independent zipapp runs under Termux's own Python: it is checked against the
+ * same checksum file, installed as `.tools/yt-dlp.pyz`, and `.tools/yt-dlp` becomes a
+ * launcher for it with an absolute interpreter path, so nothing depends on `/usr/bin/env`
+ * resolving, which on Android it does not by itself.
+ */
+const ZIPAPP = PLATFORM_KEY.startsWith('android-');
+const TERMUX_PREFIX = process.env.PREFIX ?? '/data/data/com.termux/files/usr';
 
 function log(...parts) {
   console.log('[tools]', ...parts);
@@ -150,7 +160,7 @@ function installBinary(sourcePath, targetName) {
   const target = join(TOOLS_DIR, targetName);
   const staging = `${target}.download`;
   renameSync(sourcePath, staging);
-  if (process.platform !== 'win32') chmodSync(staging, 0o755);
+  if (!EXE) chmodSync(staging, 0o755);
   if (existsSync(target)) {
     // Moved aside rather than deleted: Windows will not delete an executable that is
     // running, but it will rename one, so a node mid-download keeps its copy and the next
@@ -206,14 +216,27 @@ async function fetchYtdlp() {
     fail(`checksum mismatch for ${asset}\n  expected ${expected}\n  actual   ${actual}`);
   log(`yt-dlp checksum verified (${actual.slice(0, 16)}…)`);
 
-  const staging = join(TOOLS_DIR, `yt-dlp${EXE}.download`);
-  writeFileSync(staging, binary);
-  installBinary(staging, `yt-dlp${EXE}`);
-  writeFileSync(
-    versionFile,
-    `${spec.version}
-`,
-  );
+  if (ZIPAPP) {
+    const staging = join(TOOLS_DIR, 'yt-dlp.pyz.download');
+    writeFileSync(staging, binary);
+    installBinary(staging, 'yt-dlp.pyz');
+    const launcher = join(TOOLS_DIR, 'yt-dlp.launcher');
+    writeFileSync(
+      launcher,
+      [
+        `#!${TERMUX_PREFIX}/bin/sh`,
+        "# Written by scripts/fetch-tools.mjs: the yt-dlp zipapp, run by Termux's Python.",
+        `exec "${TERMUX_PREFIX}/bin/python3" "\${0%/*}/yt-dlp.pyz" "$@"`,
+        '',
+      ].join('\n'),
+    );
+    installBinary(launcher, 'yt-dlp');
+  } else {
+    const staging = join(TOOLS_DIR, `yt-dlp${EXE}.download`);
+    writeFileSync(staging, binary);
+    installBinary(staging, `yt-dlp${EXE}`);
+  }
+  writeFileSync(versionFile, `${spec.version}\n`);
   log(`installed .tools/yt-dlp${EXE} ${spec.version}${installed ? ` (was ${installed})` : ''}`);
 }
 
