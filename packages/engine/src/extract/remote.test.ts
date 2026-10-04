@@ -2,7 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { seraError, SeraError } from '../errors.js';
 import { silentLogger } from '../logging.js';
 import type { ResolvedMedia } from '../providers/types.js';
-import { ExtractionNodeRegistry, remoteBackend, remoteBackends } from './remote.js';
+import {
+  ExtractionNodeRegistry,
+  remoteBackend,
+  remoteBackends,
+  requiredFeatures,
+} from './remote.js';
 
 const media: ResolvedMedia = {
   provider: 'youtube',
@@ -218,6 +223,58 @@ describe('matching a task to a node', () => {
     const status = new Map(nodes.status().map((node) => [node.id, node]));
     expect(status.get('first')?.inFlight).toBe(1);
     expect(status.get('second')?.inFlight).toBe(1);
+  });
+});
+
+describe('a task that needs more than a download', () => {
+  const job = (extra: object) => ({
+    kind: 'job' as const,
+    url: media.url,
+    providerId: 'youtube',
+    planKeys: ['video/mp4/1080p'],
+    ...extra,
+  });
+
+  it('is not handed to a node that never said it understands it', async () => {
+    const nodes = registry();
+    // An outdated node would ignore the trim and send back the whole video.
+    nodes.dispatchJob(job({ trim: { start: 10, end: 20 } })).catch(() => undefined);
+    expect(await nodes.claim('old', ['youtube'], 1, 120)).toBeUndefined();
+    expect(
+      await nodes.claim('old', ['youtube'], 1, 120, 'residential', ['subtitles']),
+    ).toBeUndefined();
+    const task = await nodes.claim('new', ['youtube'], 1, 120, 'residential', [
+      'trim',
+      'subtitles',
+    ]);
+    expect(task?.trim).toEqual({ start: 10, end: 20 });
+  });
+
+  it('wakes the node that understands it, not the one that asked first', async () => {
+    const nodes = registry();
+    const old = nodes.claim('old', ['youtube'], 1, 200);
+    const current = nodes.claim('new', ['youtube'], 1, 1000, 'residential', ['trim', 'subtitles']);
+    nodes
+      .dispatchJob(job({ subtitles: { lang: 'en', auto: false, format: 'embed', only: false } }))
+      .catch(() => undefined);
+    expect((await current)?.subtitles?.lang).toBe('en');
+    expect(await old).toBeUndefined();
+  });
+
+  it('leaves a plain job to any node, old or new', async () => {
+    const nodes = registry();
+    nodes.dispatchJob(job({})).catch(() => undefined);
+    expect(await nodes.claim('old', ['youtube'], 1, 120)).toBeDefined();
+  });
+
+  it('names what a task needs', () => {
+    expect(requiredFeatures({})).toEqual([]);
+    expect(
+      requiredFeatures({
+        trim: { start: 1 },
+        subtitles: { lang: 'en', auto: true, format: 'srt', only: true },
+      }),
+    ).toEqual(['trim', 'subtitles']);
   });
 });
 
