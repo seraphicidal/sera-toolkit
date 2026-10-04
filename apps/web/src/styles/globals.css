@@ -36,6 +36,7 @@
   --color-danger: oklch(0.52 0.19 25);
   --color-danger-wash: oklch(0.96 0.03 25);
   --color-success: oklch(0.55 0.14 155);
+  --color-warning: oklch(0.7 0.15 75);
 
   --radius-input: 0.875rem;
   --radius-panel: 1.125rem;
@@ -71,6 +72,7 @@
   --color-danger: oklch(0.7 0.17 25);
   --color-danger-wash: oklch(0.27 0.06 25);
   --color-success: oklch(0.72 0.15 155);
+  --color-warning: oklch(0.8 0.14 80);
 
   --shadow-lift: 0 1px 2px oklch(0 0 0 / 0.4), 0 12px 32px -16px oklch(0 0 0 / 0.7);
   --shadow-focus: 0 0 0 3px oklch(0.7 0.16 268 / 0.34);

@@ -2114,6 +2114,20 @@ analyzing → ready → submitting → running → done`.
   - `ThemeToggle` is a three-button radiogroup (Light, System, Dark); in System mode it
     follows the OS live.
   - `themeScript` is the inline pre-paint script.
+- **`health-indicator.tsx` — `HealthIndicator`**, the status dot in the header (between
+  the wordmark and About):
+  - asks `/health` (same-origin, through the rewrite; 10 s timeout, `no-store`) every 60 s,
+    **only while the tab is visible**, and at once on returning to a tab whose last answer is
+    over a minute old;
+  - feeds each answer, or its absence, to `nextHealth` (`lib/health.ts`), and shows grey
+    (checking), green, amber or red with the matching `--color-*` token (`--color-warning`
+    was added for amber);
+  - a button whose `aria-label` and `title` are the summary ("Service status: …") with
+    `aria-expanded`/`aria-controls`, opening a region listing each line from
+    `describeHealth` with a dot and a screen-reader "Working:"/"Not working:" prefix; it
+    closes on Escape and on a pointer outside it. On a phone the panel is positioned against
+    the (now `relative`) header, since the dot sits mid-row and a panel anchored to it ran off
+    the left edge.
 - **`wordmark.tsx`** — "SERA" in tight tracking plus a muted ".toolkit", in sizes sm/md/lg.
 - **`icons.tsx`** — hand-drawn 24-unit, 1.6-stroke, `aria-hidden` icons: Link, Clipboard,
   Download, Check, Close, Alert, Spinner (using `animate-spin-slow`), Sun, Moon, Monitor,
@@ -2130,6 +2144,15 @@ analyzing → ready → submitting → running → done`.
   so the engine never enters the bundle): `formatBytes`, `formatDuration`, `formatEta`,
   `formatSpeed`, `formatRelativeDate`, `KIND_LABELS`, `pluralize`, `isRunning`, `displayUrl`,
   and `cx` for class joining.
+- **`health.ts`** — the status light's rules:
+  - `nextHealth(state, observation)` — a report sets the light (`ok` green, `degraded` amber,
+    `error` red) and resets the failure count; a missing report only turns it red at
+    `FAILURES_BEFORE_DOWN` (2) in a row, keeping the previous light and report until then.
+  - `isHealthReport` — tells a report from whatever a proxy returns when the API is down.
+  - `describeHealth` — the visitor's view: a Server line, then each check renamed for what
+    it is for (`yt-dlp` → "Media extractor", `extraction-nodes` → "YouTube", …) without the
+    operator detail; only the Server line while the server is down.
+  - `summarizeHealth` — the accessible name for each light.
 - **`selection.ts`** — turns UI state into a job request:
   - `availableKinds` — in video, audio, image, gif order;
   - `optionsOfKind`, and `defaultOption` (recommended, else the first);
@@ -2328,10 +2351,21 @@ the same limits and hardening.
   and the image tags, `up -d` again, and records the release in
   `/var/lib/sera/auto-update.refused` so it is not redeployed every 15 minutes. Writes
   `ok …` / `failed …` / `paused` to `/var/lib/sera/auto-update.status`.
+- **`alert-check.sh`** — run by `sera-alert.timer` every 5 minutes; does nothing unless
+  `SERA_ALERT_NTFY_TOPIC` is set in `.env`. Five conditions, each `up` or `down`: `api`
+  (`/health` answers through Caddy), `nodes` (the `extraction-nodes` check, when present),
+  `checks` (every other check ok), `auto-update` (`/var/lib/sera/auto-update.status` is not
+  `failed`), and `ytdlp-update` (the last finished _Update yt-dlp_ run on GitHub, read from
+  the public API; `SERA_ALERT_REPO` overrides the repository). State lives in
+  `/var/lib/sera/alerts/<name>`; a change must be seen **twice in a row** before it is sent,
+  and only changes are sent — "down" at high priority, "recovered" at default — to
+  `https://ntfy.sh/<topic>`, with a click-through to `/health`. A first run is quiet.
+  `--test` sends a test notification.
 - **`install-timers.sh`** and **`systemd/`** — copies every unit in `systemd/` into
   `/etc/systemd/system` (rewriting `/opt/sera` for another `SERA_DIR`) and enables the
   timers. `sera-update.service` is a oneshot with a 20-minute ceiling; `sera-update.timer`
-  fires 10 minutes after boot and every 15 minutes after (±1 minute).
+  fires 10 minutes after boot and every 15 minutes after (±1 minute). `sera-alert.timer` fires
+  3 minutes after boot and every 5 minutes.
 - **`node-windows/`** — the Windows node launcher, meant to be copied out of the checkout
   (the laptop's copy is `~/.sera-node`): `run-node.cmd` (clears orphans, rotates
   `node.log` and `ytdlp-update.log`, refreshes yt-dlp once, starts the daily refresher, then
@@ -2500,6 +2534,7 @@ ffprobe. The counts below are tests collected by `vitest list`.
 | `apps/web/src/lib/bookmarklet.test.ts`             | 14    | A self-contained `javascript:` URL that loads and evaluates nothing, opens no popup and posts no message, uses the fragment, makes one request to Instagram only, targets its own origin, trims slides, caps text, refuses long URLs, diagnosable alerts that never contain a URL/cookie/body, correct shortcode decoding, post-only activation. |
 | `apps/web/src/lib/csp-headers.test.ts`             | 4     | The `/import` COOP exception is scoped to exactly that path, changes only the opener policy, leaves every other header (and the default COOP) in force, and is ordered so it wins.                                                                                                                                                               |
 | `apps/web/src/lib/import-handshake.test.ts`        | 12    | `trustedImport` (origin, opener, shape); `readImportFragment` (accept and clear, empty posts allowed, off-CDN refusal without POSTing, video and nested checks, oversize refusal before decoding, version mismatch, malformed payloads cleared, wrong shapes).                                                                                   |
+| `apps/web/src/lib/health.test.ts`                  | 13    | Green/amber/red from the report; unknown (not red) on a first failure; the last answer kept through one failure; red after two in a row, and only consecutive ones; recovery on the next report; proxy error bodies refused; visitor labels without operator detail; only the Server line while down; unknown checks kept; accessible names.     |
 | `apps/web/src/lib/selection.test.ts`               | 16    | `availableKinds`, `initialKind`, `defaultOption`, `optionForItem`, `qualityLabels`, `resolveSelection` (per-item preference, unselected items, unknown sizes, approximate flag, empty selection).                                                                                                                                                |
 
 ---
@@ -2553,6 +2588,7 @@ Read by the engine's `loadConfig` unless marked otherwise. Durations are in seco
 | `SERA_NODE_ID` / `_PROVIDERS` / `_NETWORK_CLASS`                                              | `residential` / all / `residential` | Read by the extraction node only.                                                                                                      |
 | `SERA_WEB_PORT`, `SERA_WORKER_CPUS`, `SERA_WORKER_MEMORY`, `SERA_IMAGE_API`, `SERA_IMAGE_WEB` | —                                   | Compose only.                                                                                                                          |
 | `SERA_DOMAIN`, `SERA_TLS_EMAIL`, `SERA_REPO`, `SERA_DIR`, `SERA_PUBLIC_IP`                    | —                                   | Caddy / `provision.sh` only.                                                                                                           |
+| `SERA_ALERT_NTFY_TOPIC` / `SERA_ALERT_REPO`                                                   | —                                   | `deploy/alert-check.sh` only: the ntfy.sh topic, and the repository whose yt-dlp workflow it watches.                                  |
 | `SERA_TEST_REDIS_URL`                                                                         | —                                   | Tests only: enables the live Redis suite.                                                                                              |
 
 ### 22.2 HTTP endpoints
