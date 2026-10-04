@@ -55,12 +55,23 @@ export function registerMediaRoutes(app: FastifyInstance, engine: SeraEngine): v
       try {
         const info = await engine.resolver.resolve(body.url, signal, request.id);
         abuse.recordSuccess();
+        if (!request.canary)
+          void engine.usage.record({ source: info.provider, kind: 'resolve', ok: true });
         return await reply.header('cache-control', 'no-store').send(info);
       } catch (error) {
         // A client giving up mid-probe is not abuse, and neither is a private or
         // deleted post; only the codes that suggest probing count.
         if (!signal.aborted) {
           abuse.recordFailure(error instanceof SeraError ? error.code : undefined);
+          // Counted by source and code only; the link itself is never kept.
+          if (!request.canary) {
+            void engine.usage.record({
+              source: engine.resolver.sourceOf(body.url),
+              kind: 'resolve',
+              ok: false,
+              code: SeraError.from(error).code,
+            });
+          }
         }
         throw error;
       }
@@ -94,11 +105,18 @@ export function registerMediaRoutes(app: FastifyInstance, engine: SeraEngine): v
       try {
         const info = engine.resolver.importSubmitted(body, request.id);
         abuse.recordSuccess();
+        void engine.usage.record({ source: info.provider, kind: 'resolve', ok: true });
         return await reply.header('cache-control', 'no-store').send(info);
       } catch (error) {
         // Media named off Instagram's hosts counts: nothing Instagram serves produces that,
         // so it is someone finding out what this endpoint will fetch.
         abuse.recordFailure(error instanceof SeraError ? error.code : undefined);
+        void engine.usage.record({
+          source: 'instagram',
+          kind: 'resolve',
+          ok: false,
+          code: SeraError.from(error).code,
+        });
         throw error;
       }
     },

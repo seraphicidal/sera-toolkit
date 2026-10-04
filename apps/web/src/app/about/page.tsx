@@ -165,6 +165,13 @@ export default async function AboutPage() {
           , whether or not you downloaded them. Thumbnails are fetched by the server rather than
           your browser, so the site you pasted from never sees your address.
         </p>
+        <p>
+          To see which sites work, the server keeps daily totals per site: how many links were
+          looked up and how many downloads were made, how many of each failed and with which error,
+          and how many bytes were sent. That is all that is counted — never your address, the link,
+          your browser or anything else about you — and each day&apos;s totals are deleted after 90
+          days.
+        </p>
       </Section>
 
       <Section title="Responsible use">

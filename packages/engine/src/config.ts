@@ -131,6 +131,11 @@ const envSchema = z.object({
    * usage counts. Empty disables the exemption entirely.
    */
   SERA_CANARY_TOKEN: z.string().default(''),
+  /**
+   * Opens `GET /api/admin/usage` to a request carrying it as a bearer token. Empty leaves
+   * the endpoint answering 404, as if it did not exist.
+   */
+  SERA_ADMIN_TOKEN: z.string().default(''),
   /** How long a node's request for work is held open before it asks again. */
   SERA_EXTRACTION_CLAIM_HOLD_SECONDS: seconds.default(25),
   /**
@@ -246,6 +251,9 @@ export interface EngineConfig {
 
   /** The canary's shared secret; empty when no canary is configured. */
   readonly canaryToken: string;
+
+  /** The operator's token for the admin endpoints; empty when they are closed. */
+  readonly adminToken: string;
 
   readonly extractionNodes: {
     readonly token: string;
@@ -409,6 +417,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): EngineConfig {
     },
 
     canaryToken: e.SERA_CANARY_TOKEN,
+    adminToken: e.SERA_ADMIN_TOKEN,
 
     extractionNodes: {
       token: e.SERA_EXTRACTION_NODE_TOKEN,

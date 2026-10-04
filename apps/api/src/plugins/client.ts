@@ -26,12 +26,17 @@ declare module 'fastify' {
   }
 }
 
-/** Whether a presented canary token is the configured one, in constant time. */
-export function isCanaryToken(presented: unknown, configured: string): boolean {
+/** Whether a presented token is the configured one, in constant time. Never true for an empty one. */
+export function matchesToken(presented: unknown, configured: string): boolean {
   if (!configured || typeof presented !== 'string') return false;
   const a = Buffer.from(presented);
   const b = Buffer.from(configured);
   return a.length === b.length && timingSafeEqual(a, b);
+}
+
+/** Whether a presented canary token is the configured one, in constant time. */
+export function isCanaryToken(presented: unknown, configured: string): boolean {
+  return matchesToken(presented, configured);
 }
 
 /**

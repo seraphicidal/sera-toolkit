@@ -92,6 +92,9 @@ services:
       # The daily canary's secret (deploy/canary.sh): exempts its requests from rate limits
       # and abuse strikes, and keeps them out of usage counts. Empty disables it.
       SERA_CANARY_TOKEN: ${SERA_CANARY_TOKEN:-}
+      # Opens /api/admin/usage, the usage counts `sudo sera stats` prints. Empty leaves
+      # the endpoint unmounted. See deploy/ORACLE.md, "Usage counts".
+      SERA_ADMIN_TOKEN: ${SERA_ADMIN_TOKEN:-}
       # An Instagram session for photo posts. Read the warning in deploy/ORACLE.md
       # before setting this on a deployment other people can reach.
       SERA_INSTAGRAM_SESSION_ID: ${SERA_INSTAGRAM_SESSION_ID:-}
@@ -204,12 +207,18 @@ services:
     # under the cap — jobs vanishing mid-download with nothing in the logs. BullMQ warns
     # about it on every worker connection, and it is right to. With noeviction a full
     # Redis refuses new writes instead, which surfaces as a job that would not start.
+    #
+    # Snapshotted hourly to a volume, because it also holds the usage counts, which are kept
+    # for 90 days and would otherwise be lost with every Redis restart or image update. Jobs
+    # outlive a restart too, which is harmless: their files expire on their own schedule.
     command: >
       redis-server
-      --save ''
+      --save '3600 1'
       --appendonly no
       --maxmemory 256mb
       --maxmemory-policy noeviction
+    volumes:
+      - redis_data:/data
     healthcheck:
       test: ['CMD', 'redis-cli', 'ping']
       interval: 10s
@@ -224,3 +233,5 @@ volumes:
   media:
   caddy_data:
   caddy_config:
+  # Redis's hourly snapshot: job records and the usage counts.
+  redis_data:

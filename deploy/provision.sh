@@ -189,6 +189,8 @@ cat > /usr/local/bin/sera <<WRAPPER
 #!/usr/bin/env bash
 # Thin wrapper around docker compose for this deployment. Written by
 # deploy/provision.sh; edit that instead.  Usage: sudo sera ps | logs -f worker | up -d
+# One command of its own: \`sudo sera stats\`, the usage counts (deploy/stats.sh).
+if [ "\${1:-}" = stats ]; then shift; exec bash "$INSTALL_DIR/deploy/stats.sh" "\$@"; fi
 exec docker compose --project-directory "$INSTALL_DIR" --env-file "$INSTALL_DIR/.env" -f "$INSTALL_DIR/$COMPOSE_FILE" "\$@"
 WRAPPER
 chmod 755 /usr/local/bin/sera
