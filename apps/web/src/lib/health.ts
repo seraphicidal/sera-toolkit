@@ -115,6 +115,15 @@ export function describeHealth(state: HealthState): HealthLine[] {
   return lines;
 }
 
+/**
+ * Whether the dot is drawn at all. Not until the first answer — or the second failure in a
+ * row — has said something: a grey dot on every page load reads as "something is off".
+ * The button and its label are there all along.
+ */
+export function showsLight(state: HealthState): boolean {
+  return state.light !== 'unknown';
+}
+
 /** The light's accessible name, which is also its tooltip. */
 export function summarizeHealth(state: HealthState): string {
   switch (state.light) {

@@ -2,8 +2,14 @@
 
 import type { MediaInfo } from '@sera/contracts/types';
 import { AudioIcon, ChevronIcon, GifIcon, ImageIcon, VideoIcon } from './icons';
-import { cx, formatBytes, KIND_LABELS } from '@/lib/format';
-import { availableKinds, optionsOfKind, qualityLabels, type SelectableKind } from '@/lib/selection';
+import { cx, formatBytes } from '@/lib/format';
+import {
+  availableKinds,
+  kindLabel,
+  optionsOfKind,
+  qualityLabels,
+  type SelectableKind,
+} from '@/lib/selection';
 
 const KIND_ICON = {
   video: VideoIcon,
@@ -69,14 +75,15 @@ export function FormatPicker({
                   aria-checked={selected}
                   onClick={() => onKindChange(candidate)}
                   className={cx(
-                    'flex cursor-pointer items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-[0.8125rem] font-medium transition-all duration-150',
+                    'flex min-w-0 cursor-pointer items-center justify-center gap-2 rounded-lg px-1.5 py-2.5 text-[0.8125rem] font-medium transition-all duration-150 min-[400px]:px-3',
                     selected
                       ? 'bg-[var(--color-surface)] text-[var(--color-ink)] shadow-[0_1px_2px_oklch(0_0_0/0.06)]'
                       : 'text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]',
                   )}
                 >
-                  <Icon size={16} />
-                  {KIND_LABELS[candidate]}
+                  {/* Three formats on a phone leave no room for "Thumbnail" beside an icon. */}
+                  <Icon size={16} className={cx(kinds.length > 2 && 'max-[399px]:hidden')} />
+                  {kindLabel(info, candidate)}
                 </button>
               );
             })}

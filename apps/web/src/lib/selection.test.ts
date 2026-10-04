@@ -4,6 +4,7 @@ import {
   availableKinds,
   defaultOption,
   initialKind,
+  kindLabel,
   optionForItem,
   qualityLabels,
   resolveSelection,
@@ -81,6 +82,32 @@ describe('availableKinds', () => {
     expect(availableKinds(info([videoItem]))).toEqual(['video', 'audio']);
     expect(availableKinds(info([imageItem]))).toEqual(['image']);
     expect(availableKinds(info([videoItem, imageItem]))).toEqual(['video', 'audio', 'image']);
+  });
+});
+
+describe('kindLabel', () => {
+  const withThumbnail = item('i2', 1, 'video', [
+    option({ id: 'v', kind: 'video', label: '720p' }),
+    option({ id: 't', kind: 'image', label: 'Original', container: 'jpg' }),
+  ]);
+
+  it("calls a video's picture its thumbnail", () => {
+    expect(kindLabel(info([withThumbnail]), 'image')).toBe('Thumbnail');
+    const song = item('s', 1, 'audio', [
+      option({ id: 'a', kind: 'audio', label: 'MP3' }),
+      option({ id: 'c', kind: 'image', label: 'Original', container: 'jpg' }),
+    ]);
+    expect(kindLabel(info([song]), 'image')).toBe('Thumbnail');
+  });
+
+  it('keeps "Image" for a photo post, and for a carousel with photos in it', () => {
+    expect(kindLabel(info([imageItem]), 'image')).toBe('Image');
+    expect(kindLabel(info([withThumbnail, imageItem]), 'image')).toBe('Image');
+  });
+
+  it('leaves the other kinds as they are', () => {
+    expect(kindLabel(info([withThumbnail]), 'video')).toBe('Video');
+    expect(kindLabel(info([withThumbnail]), 'gif')).toBe('GIF');
   });
 });
 
