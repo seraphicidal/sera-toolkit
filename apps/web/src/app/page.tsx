@@ -1,14 +1,9 @@
 import Link from 'next/link';
 import { Downloader } from '@/components/downloader';
-import { HowItWorks, SupportedSources } from '@/components/home-guide';
+import { ShareHint } from '@/components/share-hint';
 import { Wordmark } from '@/components/wordmark';
-import { loadServiceInfo } from '@/lib/service-info';
 
-// The source list under the form is the running API's, refreshed once a minute.
-export const revalidate = 60;
-
-export default async function HomePage() {
-  const service = await loadServiceInfo();
+export default function HomePage() {
   return (
     <div className="flex flex-1 flex-col justify-center pt-6 pb-14 sm:pt-10">
       <div className="mb-8 text-center sm:mb-10">
@@ -21,6 +16,7 @@ export default async function HomePage() {
       </div>
 
       <Downloader />
+      <ShareHint />
 
       {/* Instagram photos can't be fetched server-side; this is the way in to the browser route. */}
       <p className="mt-6 text-center text-[0.8125rem] text-[var(--color-ink-faint)]">
@@ -32,15 +28,6 @@ export default async function HomePage() {
           Send it from your browser →
         </Link>
       </p>
-
-      <div className="mt-10 grid gap-8 sm:grid-cols-2">
-        <SupportedSources providers={service?.providers ?? []} />
-        <HowItWorks
-          {...(service
-            ? { retentionMinutes: Math.round(service.limits.retentionSeconds / 60) }
-            : {})}
-        />
-      </div>
     </div>
   );
 }
