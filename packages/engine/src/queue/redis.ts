@@ -39,6 +39,8 @@ export class RedisJobBackend implements JobBackend {
   private readonly queue: Queue<{ jobId: string }>;
   private readonly listeners = new Map<string, Set<(record: JobRecord) => void>>();
   private worker: Worker<{ jobId: string }> | undefined;
+  /** Settles once Redis has confirmed the update-channel subscription. */
+  private readonly subscribed: Promise<void>;
 
   constructor(
     redisUrl: string,
@@ -51,9 +53,12 @@ export class RedisJobBackend implements JobBackend {
     this.subscriber = new Redis(redisUrl, { maxRetriesPerRequest: null });
     this.queue = new Queue(QUEUE_NAME, { connection: this.connection });
 
-    void this.subscriber.subscribe(UPDATE_CHANNEL).catch((error: unknown) => {
-      this.logger.error({ err: error }, 'failed to subscribe to job updates');
-    });
+    this.subscribed = this.subscriber.subscribe(UPDATE_CHANNEL).then(
+      () => undefined,
+      (error: unknown) => {
+        this.logger.error({ err: error }, 'failed to subscribe to job updates');
+      },
+    );
     this.subscriber.on('message', (_channel, payload) => {
       let record: JobRecord;
       try {
@@ -123,6 +128,18 @@ export class RedisJobBackend implements JobBackend {
       await this.connection.srem(CLIENT_PREFIX + next.clientKey, next.id);
     }
     return next;
+  }
+
+  /**
+   * Resolves once this process will hear about updates published by others.
+   *
+   * The subscription is made in the constructor and not awaited there. A long-running process
+   * subscribes long before anything is published to it; a backend created and used at once —
+   * a test standing in for a second process — has to wait, or a message sent in the meantime
+   * is simply not delivered.
+   */
+  ready(): Promise<void> {
+    return this.subscribed;
   }
 
   subscribe(id: string, listener: (record: JobRecord) => void): () => void {

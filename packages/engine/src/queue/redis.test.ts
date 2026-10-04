@@ -136,6 +136,7 @@ describe.skipIf(!REDIS_URL)('RedisJobBackend against a live Redis', () => {
     await admin.flushdb();
     admin.disconnect();
     backend = new RedisJobBackend(REDIS_URL!, silentLogger());
+    await backend.ready();
   });
 
   afterAll(async () => {
@@ -231,6 +232,9 @@ describe.skipIf(!REDIS_URL)('RedisJobBackend against a live Redis', () => {
     // or the worker keeps going, finds its workspace deleted, and reports a failure.
     const worker = new RedisJobBackend(REDIS_URL!, silentLogger());
     try {
+      // A process that has only just connected; one that has run for more than a moment is
+      // long since subscribed. Without this the patch below could beat the subscription.
+      await worker.ready();
       await backend.submit(record('b8'));
 
       const seen: string[] = [];
