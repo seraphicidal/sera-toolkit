@@ -33,6 +33,11 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   // A self-contained server bundle, so the container does not ship node_modules.
   output: 'standalone',
+  // The container's filesystem is read-only. A revalidated page (/about, every minute) is
+  // written back over its prerendered copy in .next/server/app, not under .next/cache, so
+  // the tmpfs there does not cover it and every revalidation logged EROFS. In memory it
+  // is: the cache is one small page, and a restart simply prerenders it again.
+  experimental: { isrFlushToDisk: false },
   // fileURLToPath, not URL.pathname: on Windows the latter yields `/C:/…`, which is not
   // a path any filesystem call will accept.
   outputFileTracingRoot: fileURLToPath(new URL('../../', import.meta.url)),

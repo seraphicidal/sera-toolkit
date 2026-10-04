@@ -52,9 +52,9 @@ services:
     read_only: true
     tmpfs:
       - /tmp
-      # /about revalidates, and Next writes the incremental cache to disk when it does.
-      # Without this the only writable path is /tmp and the render logs EROFS every
-      # minute.
+      # Next's fetch cache. A revalidated page itself is kept in memory
+      # (isrFlushToDisk: false in next.config.ts), since it would be written over the
+      # prerendered copy in .next/server/app, which this tmpfs does not cover.
       - /app/apps/web/.next/cache
     security_opt:
       - no-new-privileges:true
