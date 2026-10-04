@@ -46,6 +46,8 @@ const dispatchSchema = z.object({
   planKeys: z.array(z.string().min(1).max(200)).max(100).optional(),
   filename: z.string().max(200).optional(),
   networkClass: z.enum(['datacenter', 'residential', 'unknown']).optional(),
+  // A trimmed job's range, already checked against the media by the job service.
+  trim: z.object({ start: z.number().min(0), end: z.number().positive().optional() }).optional(),
 });
 
 const progressSchema = z.object({

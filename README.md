@@ -22,6 +22,9 @@ Paste a link  →  detect the source  →  read what is there  →  choose  → 
 - **Honest formats.** Video in MP4, WebM or MOV — whichever the source remuxes into
   without re-encoding — at the resolutions the site actually publishes. Audio as MP3,
   M4A, Opus or WAV. Images untouched. Short videos convertible to GIF.
+- **Just the part you want.** Under "More options", give a start and an end (m:ss) to cut a
+  single video or audio file down to that part — accurate to the second, and only that part is
+  downloaded where the source allows it.
 - **Real progress.** Bytes, speed and ETA over Server-Sent Events, with polling as a
   fallback for networks that buffer streams.
 - **No account, no tracking, no retention.** Files are deleted on a timer whether or not

@@ -54,7 +54,28 @@ export interface DownloadRequest extends YtdlpOptions {
   readonly playlistItem?: number;
   /** Total bytes the caller expects, used to turn per-stream counters into one number. */
   readonly expectedTotalBytes?: number;
+  /**
+   * Download only this part, in seconds (`--download-sections`), so a ten-second clip of an
+   * hour does not cost the hour. `forceKeyframes` re-encodes around the cut, which any cut
+   * that does not start at 0 needs: a copy can only begin where the stream allows, possibly
+   * seconds early (a keyframe, or a fragment of a DASH audio stream).
+   */
+  readonly sections?: {
+    readonly start: number;
+    readonly end?: number;
+    readonly forceKeyframes: boolean;
+  };
   readonly onProgress?: (progress: YtdlpProgress) => void;
+}
+
+/** yt-dlp's arguments for a section download. */
+export function sectionArgs(sections: NonNullable<DownloadRequest['sections']>): string[] {
+  const range = `*${String(sections.start)}-${sections.end !== undefined ? String(sections.end) : 'inf'}`;
+  return [
+    '--download-sections',
+    range,
+    ...(sections.forceKeyframes ? ['--force-keyframes-at-cuts'] : []),
+  ];
 }
 
 export interface YtdlpProgress {
@@ -180,6 +201,7 @@ export async function download(request: DownloadRequest): Promise<void> {
     '--no-overwrites',
     '--no-post-overwrites',
   );
+  if (request.sections) args.push(...sectionArgs(request.sections));
   if (request.mergeContainer) args.push('--merge-output-format', request.mergeContainer);
   if (request.remuxContainer) args.push('--remux-video', request.remuxContainer);
   if (request.audioFormat) {

@@ -36,6 +36,25 @@ interface RemoteTask {
   readonly providerId: string;
   readonly planKeys?: readonly string[];
   readonly filename?: string;
+  /** For a job: keep only this part of the item, in seconds. */
+  readonly trim?: { readonly start: number; readonly end?: number };
+}
+
+/**
+ * A task's trim, if it has a sane one.
+ *
+ * The control plane checked it against the media; this checks it is a range at all, because
+ * the numbers end up on a command line on somebody's own machine.
+ */
+export function taskTrim(task: Pick<RemoteTask, 'trim'>): RemoteTask['trim'] {
+  const trim = task.trim;
+  if (trim === undefined) return undefined;
+  const valid =
+    Number.isFinite(trim.start) &&
+    trim.start >= 0 &&
+    (trim.end === undefined || (Number.isFinite(trim.end) && trim.end > trim.start));
+  if (!valid) throw seraError('INVALID_URL', { detail: 'node: malformed trim' });
+  return { start: trim.start, ...(trim.end !== undefined ? { end: trim.end } : {}) };
 }
 
 /** Who this node is and where it reports; read from the environment by `index.ts`. */
@@ -269,6 +288,7 @@ export class ExtractionNode {
     // knows the visitor asked for one archive, and it packages whatever arrives. A node
     // that zipped as well shipped the archive and every loose file, and the visitor got a
     // ZIP of those — an archive inside an archive, with each file in it twice.
+    const trim = taskTrim(task);
     const spec: JobSpec = {
       jobId,
       provider: task.providerId,
@@ -276,6 +296,7 @@ export class ExtractionNode {
       selections,
       packaging: 'individual',
       ...(task.filename ? { filename: task.filename } : {}),
+      ...(trim ? { trim } : {}),
     };
 
     try {

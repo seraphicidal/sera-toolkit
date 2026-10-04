@@ -67,6 +67,11 @@ interface OptionTokenPayload {
   readonly s?: string;
   /** Plan key: kind/container/label. */
   readonly k: string;
+  /**
+   * The item's length in seconds, when known. Signed with the option so a trim can be
+   * checked against it without trusting the client's idea of how long the media is.
+   */
+  readonly d?: number;
 }
 
 interface InfoTokenPayload {
@@ -713,6 +718,7 @@ export class MediaResolver {
         i: item.index,
         ...(item.sourceId ? { s: item.sourceId } : {}),
         k: planKey(plan),
+        ...(item.duration !== undefined ? { d: item.duration } : {}),
       },
       this.config.secret,
       ttl,

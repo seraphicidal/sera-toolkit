@@ -332,6 +332,119 @@ export interface CreateJobRequest {
   readonly packaging?: PackagingMode;
   /** Override the generated filename stem. Sanitized server-side regardless. */
   readonly filename?: string;
+  /** Keep only part of a single video or audio item. See `checkTrim`. */
+  readonly trim?: TrimRequest;
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Trim                                                                      */
+/* -------------------------------------------------------------------------- */
+
+/** Start and end as a person types them: `m:ss`, `mm:ss` or `h:mm:ss`. Either may be left out. */
+export interface TrimRequest {
+  readonly start?: string;
+  readonly end?: string;
+}
+
+/** A trim in seconds, as the pipeline uses it. No `end` means to the end of the media. */
+export interface TrimRange {
+  readonly start: number;
+  readonly end?: number;
+}
+
+/** `m:ss`, `mm:ss` or `h:mm:ss` — minutes and seconds always, hours when needed. */
+export const TIMECODE_PATTERN = /^(?:(\d{1,2}):)?([0-5]?\d):([0-5]\d)$/;
+
+/** Seconds for a timecode, or undefined if it is not one. */
+export function parseTimecode(text: string): number | undefined {
+  const match = TIMECODE_PATTERN.exec(text.trim());
+  if (!match) return undefined;
+  const [, hours, minutes, seconds] = match;
+  return Number(hours ?? 0) * 3600 + Number(minutes) * 60 + Number(seconds);
+}
+
+/** `0:42`, `12:05`, `1:02:03`. */
+export function formatTimecode(totalSeconds: number): string {
+  const whole = Math.max(0, Math.round(totalSeconds));
+  const hours = Math.floor(whole / 3600);
+  const minutes = Math.floor((whole % 3600) / 60);
+  const seconds = String(whole % 60).padStart(2, '0');
+  return hours
+    ? `${hours}:${String(minutes).padStart(2, '0')}:${seconds}`
+    : `${minutes}:${seconds}`;
+}
+
+/** The shortest piece worth cutting out. */
+export const MIN_TRIM_SECONDS = 1;
+
+/**
+ * Whether a trim makes sense for media of this length, and what it is in seconds.
+ *
+ * One rule, used by the form and by the server, so the two cannot disagree. A missing start
+ * is the beginning and a missing end is the end; at least one must be given, the start must
+ * come before the end, both must fall inside the media when its length is known, and what
+ * is left must be at least a second. Durations are whole seconds rounded by the source, so
+ * an end within a second of the reported length is still inside it.
+ */
+export function checkTrim(
+  trim: TrimRequest,
+  durationSeconds?: number,
+):
+  | { readonly ok: true; readonly range: TrimRange }
+  | { readonly ok: false; readonly message: string } {
+  const start = trim.start?.trim() ? parseTimecode(trim.start) : 0;
+  const end = trim.end?.trim() ? parseTimecode(trim.end) : undefined;
+  if (start === undefined || (trim.end?.trim() && end === undefined)) {
+    return { ok: false, message: 'Use m:ss or h:mm:ss for the trim times.' };
+  }
+  if (!trim.start?.trim() && !trim.end?.trim()) {
+    return { ok: false, message: 'Give a start or an end time to trim.' };
+  }
+  const known = durationSeconds !== undefined && durationSeconds > 0;
+  if (known && start >= durationSeconds) {
+    return {
+      ok: false,
+      message: `The start is past the end of the media (${formatTimecode(durationSeconds)}).`,
+    };
+  }
+  if (known && end !== undefined && end > Math.ceil(durationSeconds) + 1) {
+    return {
+      ok: false,
+      message: `The end is past the end of the media (${formatTimecode(durationSeconds)}).`,
+    };
+  }
+  const effectiveEnd = end ?? (known ? durationSeconds : undefined);
+  if (effectiveEnd !== undefined && effectiveEnd - start < MIN_TRIM_SECONDS) {
+    return { ok: false, message: 'The start has to come before the end.' };
+  }
+  if (start === 0 && (end === undefined || (known && end >= durationSeconds))) {
+    return { ok: false, message: 'That keeps the whole thing; there is nothing to trim.' };
+  }
+  const clippedEnd = known && end !== undefined ? Math.min(end, durationSeconds) : end;
+  return {
+    ok: true,
+    range: {
+      start,
+      ...(clippedEnd !== undefined && !(known && clippedEnd >= durationSeconds)
+        ? { end: clippedEnd }
+        : {}),
+    },
+  };
+}
+
+/** What a trimmed file's name gains: `-trim-0m10s-0m30s`, hours when needed. */
+export function trimSuffix(range: TrimRange, durationSeconds?: number): string {
+  const part = (seconds: number) => {
+    const whole = Math.round(seconds);
+    const h = Math.floor(whole / 3600);
+    const m = Math.floor((whole % 3600) / 60);
+    const s = whole % 60;
+    return h
+      ? `${h}h${String(m).padStart(2, '0')}m${String(s).padStart(2, '0')}s`
+      : `${m}m${String(s).padStart(2, '0')}s`;
+  };
+  const end = range.end ?? durationSeconds;
+  return `-trim-${part(range.start)}${end !== undefined ? `-${part(end)}` : '-end'}`;
 }
 
 /* -------------------------------------------------------------------------- */

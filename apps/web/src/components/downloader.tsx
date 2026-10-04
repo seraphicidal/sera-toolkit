@@ -3,10 +3,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Job, JobError, MediaInfo, PackagingMode } from '@sera/contracts/types';
 import { ApiError, cancelJob, createJob, resolveMedia } from '@/lib/api';
-import { cx, formatBytes, isRunning, pluralize } from '@/lib/format';
+import { cx, formatBytes, formatDuration, isRunning, pluralize } from '@/lib/format';
 import { addToHistory } from '@/lib/history';
 import { initialKind, qualityLabels, resolveSelection, type SelectableKind } from '@/lib/selection';
 import { urlFromFragment } from '@/lib/share';
+import { endPlaceholder, summarizeTrim, type TrimSummary } from '@/lib/trim';
 import { useJob } from '@/lib/use-job';
 import { DownloadIcon, SpinnerIcon } from './icons';
 import { ErrorPanel, type ErrorAction } from './error-panel';
@@ -61,6 +62,8 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
     initialInfo ? seedFrom(initialInfo).label : undefined,
   );
   const [filename, setFilename] = useState('');
+  const [trimStart, setTrimStart] = useState('');
+  const [trimEnd, setTrimEnd] = useState('');
   const [packaging, setPackaging] = useState<PackagingMode>('auto');
   const [showAdvanced, setShowAdvanced] = useState(false);
 
@@ -74,6 +77,8 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
     setError(undefined);
     setJobId(undefined);
     setFilename('');
+    setTrimStart('');
+    setTrimEnd('');
     setPackaging('auto');
     setShowAdvanced(false);
     // Import mode has nowhere to go back to but the post the browser read: reseed it rather
@@ -168,6 +173,20 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
     [info, selectedIds, kind, label],
   );
 
+  // Trimming applies to one video or audio item; for anything else the fields are hidden and
+  // whatever was typed in them is ignored.
+  const trimItem =
+    info && selection?.fileCount === 1 && (kind === 'video' || kind === 'audio')
+      ? info.items.find((item) => selectedIds.has(item.id))
+      : undefined;
+  const trim: TrimSummary = useMemo(
+    () =>
+      trimItem
+        ? summarizeTrim(trimStart, trimEnd, trimItem.duration, selection?.totalBytes)
+        : { state: 'none' },
+    [trimItem, trimStart, trimEnd, selection?.totalBytes],
+  );
+
   const start = useCallback(async () => {
     if (!info || !selection?.optionIds.length) return;
     setPhase('submitting');
@@ -179,6 +198,7 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
         optionIds: selection.optionIds,
         packaging,
         ...(filename.trim() ? { filename: filename.trim() } : {}),
+        ...(trim.state === 'ok' ? { trim: trim.request } : {}),
       });
       setJobId(created.id);
       setPhase('running');
@@ -195,7 +215,7 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
       );
       setPhase('ready');
     }
-  }, [info, selection, packaging, filename]);
+  }, [info, selection, packaging, filename, trim]);
 
   // Follow the job to its conclusion.
   useEffect(() => {
@@ -346,12 +366,24 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
                 packaging={packaging}
                 onPackagingChange={setPackaging}
                 multiple={(selection?.fileCount ?? 0) > 1}
+                trim={
+                  trimItem
+                    ? {
+                        start: trimStart,
+                        end: trimEnd,
+                        onStartChange: setTrimStart,
+                        onEndChange: setTrimEnd,
+                        summary: trim,
+                        endPlaceholder: endPlaceholder(trimItem.duration),
+                      }
+                    : undefined
+                }
               />
 
               <button
                 type="button"
                 onClick={() => void start()}
-                disabled={!selection?.optionIds.length}
+                disabled={!selection?.optionIds.length || trim.state === 'invalid'}
                 className={cx(
                   'flex h-12 w-full cursor-pointer items-center justify-center gap-2 rounded-[var(--radius-input)] text-[0.9375rem] font-medium transition-colors duration-200',
                   'bg-[var(--color-accent)] text-[var(--color-accent-ink)] hover:bg-[var(--color-accent-hover)]',
@@ -362,7 +394,11 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
                 {selection && selection.fileCount > 1
                   ? `Download ${pluralize(selection.fileCount, 'file')}`
                   : 'Download'}
-                {selection?.totalBytes ? (
+                {trim.state === 'ok' && trim.estimatedBytes ? (
+                  <span className="tabular font-normal opacity-75">
+                    · ~{formatBytes(trim.estimatedBytes)}
+                  </span>
+                ) : selection?.totalBytes ? (
                   <span className="tabular font-normal opacity-75">
                     · {selection.anyApproximate ? '~' : ''}
                     {formatBytes(selection.totalBytes)}
@@ -389,6 +425,7 @@ function AdvancedOptions({
   packaging,
   onPackagingChange,
   multiple,
+  trim,
 }: {
   readonly open: boolean;
   readonly onToggle: () => void;
@@ -397,6 +434,15 @@ function AdvancedOptions({
   readonly packaging: PackagingMode;
   readonly onPackagingChange: (value: PackagingMode) => void;
   readonly multiple: boolean;
+  /** Present only when the selection is one video or audio item. */
+  readonly trim?: {
+    readonly start: string;
+    readonly end: string;
+    readonly onStartChange: (value: string) => void;
+    readonly onEndChange: (value: string) => void;
+    readonly summary: TrimSummary;
+    readonly endPlaceholder: string;
+  };
 }) {
   return (
     <div className="border-t border-[var(--color-line)] pt-4">
@@ -435,6 +481,8 @@ function AdvancedOptions({
             />
           </div>
 
+          {trim && <TrimFields {...trim} />}
+
           {multiple && (
             <fieldset>
               <legend className="mb-1.5 text-xs font-medium tracking-wide text-[var(--color-ink-faint)] uppercase">
@@ -470,6 +518,87 @@ function AdvancedOptions({
         </div>
       )}
     </div>
+  );
+}
+
+const FIELD_LABEL =
+  'mb-1.5 block text-xs font-medium tracking-wide text-[var(--color-ink-faint)] uppercase';
+const FIELD_INPUT =
+  'tabular w-full rounded-xl border border-[var(--color-line)] bg-[var(--color-canvas)] px-3.5 py-2.5 text-[0.875rem] text-[var(--color-ink)] transition-colors outline-none placeholder:text-[var(--color-ink-faint)] focus:border-[var(--color-accent)] aria-[invalid=true]:border-[var(--color-danger)]';
+
+/** Start and end times, with what they keep or why they cannot be used. */
+function TrimFields({
+  start,
+  end,
+  onStartChange,
+  onEndChange,
+  summary,
+  endPlaceholder: placeholder,
+}: NonNullable<Parameters<typeof AdvancedOptions>[0]['trim']>) {
+  const invalid = summary.state === 'invalid';
+  return (
+    <fieldset>
+      <legend className={FIELD_LABEL}>Trim</legend>
+      <div className="grid grid-cols-2 gap-2.5">
+        <div>
+          <label htmlFor="sera-trim-start" className="sr-only">
+            Start time
+          </label>
+          <input
+            id="sera-trim-start"
+            type="text"
+            inputMode="numeric"
+            autoComplete="off"
+            value={start}
+            maxLength={9}
+            onChange={(event) => onStartChange(event.target.value)}
+            placeholder="0:00"
+            aria-invalid={invalid}
+            aria-describedby="sera-trim-summary"
+            className={FIELD_INPUT}
+          />
+        </div>
+        <div>
+          <label htmlFor="sera-trim-end" className="sr-only">
+            End time
+          </label>
+          <input
+            id="sera-trim-end"
+            type="text"
+            inputMode="numeric"
+            autoComplete="off"
+            value={end}
+            maxLength={9}
+            onChange={(event) => onEndChange(event.target.value)}
+            placeholder={placeholder}
+            aria-invalid={invalid}
+            aria-describedby="sera-trim-summary"
+            className={FIELD_INPUT}
+          />
+        </div>
+      </div>
+      <p
+        id="sera-trim-summary"
+        role={invalid ? 'alert' : undefined}
+        className={cx(
+          'mt-1.5 text-xs',
+          invalid ? 'text-[var(--color-danger)]' : 'text-[var(--color-ink-faint)]',
+        )}
+      >
+        {summary.state === 'invalid'
+          ? summary.message
+          : summary.state === 'ok'
+            ? [
+                summary.keptSeconds !== undefined
+                  ? `Keeps ${formatDuration(summary.keptSeconds)}`
+                  : 'Keeps the part between these times',
+                summary.estimatedBytes ? `about ${formatBytes(summary.estimatedBytes)}` : undefined,
+              ]
+                .filter(Boolean)
+                .join(' · ')
+            : 'Optional: start and end as m:ss or h:mm:ss.'}
+      </p>
+    </fieldset>
   );
 }
 

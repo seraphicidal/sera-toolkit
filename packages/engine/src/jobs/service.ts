@@ -1,5 +1,5 @@
 import type { CreateJobRequest, Job, JobEvent } from '@sera/contracts/types';
-import { isTerminalJobState } from '@sera/contracts/types';
+import { checkTrim, isTerminalJobState, type TrimRange } from '@sera/contracts/types';
 import type { EngineConfig } from '../config.js';
 import { seraError, SeraError } from '../errors.js';
 import { logSafeUrl, type Logger } from '../logging.js';
@@ -61,6 +61,7 @@ export class JobService {
     // import of a post cannot be spent against another import of the same post.
     const expectedHash = resolver.resolutionHash(info.u, info.p, info.m);
     const selections: JobSelection[] = [];
+    const options = [];
 
     for (const optionId of request.optionIds) {
       const option = resolver.verifyOptionId(optionId);
@@ -73,6 +74,7 @@ export class JobService {
           detail: 'option token does not match info token',
         });
       }
+      options.push(option);
       selections.push({
         itemIndex: option.i,
         ...(option.s ? { sourceId: option.s } : {}),
@@ -87,6 +89,8 @@ export class JobService {
         message: `A single download can include at most ${config.maxItemsPerJob} items.`,
       });
     }
+
+    const trim = request.trim ? trimFor(request.trim, options) : undefined;
 
     const waiting = await backend.waitingCount();
     if (waiting >= config.maxQueueDepth) {
@@ -108,6 +112,7 @@ export class JobService {
       selections,
       packaging: request.packaging ?? 'auto',
       ...(request.filename ? { filename: request.filename } : {}),
+      ...(trim ? { trim } : {}),
       // Carried whole, because the job cannot read the post again. It only ever comes from a
       // token this server signed; nothing in the request body can reach it.
       ...(info.m
@@ -321,4 +326,34 @@ function eventTypeFor(job: Job): JobEvent['type'] {
   if (job.state === 'failed' || job.state === 'cancelled' || job.state === 'expired')
     return 'error';
   return job.state === 'queued' ? 'state' : 'progress';
+}
+
+/**
+ * A trim, checked against what was signed: one option, of a kind that has a timeline, and
+ * times inside the item's own length. The schema has already checked the shape and order;
+ * the length is only known here, from the option token, which the client cannot edit.
+ */
+function trimFor(
+  request: NonNullable<CreateJobRequest['trim']>,
+  options: readonly { readonly k: string; readonly d?: number }[],
+): TrimRange {
+  const [option, ...rest] = options;
+  if (!option || rest.length) {
+    throw seraError('INVALID_URL', {
+      message: 'Trimming works on one item at a time.',
+      detail: `trim with ${options.length} selections`,
+    });
+  }
+  const kind = option.k.split('/')[0];
+  if (kind !== 'video' && kind !== 'audio') {
+    throw seraError('INVALID_URL', {
+      message: 'Only video and audio can be trimmed.',
+      detail: `trim on ${kind ?? 'unknown'}`,
+    });
+  }
+  const checked = checkTrim(request, option.d);
+  if (!checked.ok) {
+    throw seraError('INVALID_URL', { message: checked.message, detail: 'trim out of range' });
+  }
+  return checked.range;
 }
