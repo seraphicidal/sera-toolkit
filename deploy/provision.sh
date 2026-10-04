@@ -210,6 +210,11 @@ done
 
 "${COMPOSE[@]}" ps
 
+# Automatic updates: a systemd timer that deploys newly published images and rolls back
+# if the site is not healthy afterwards (deploy/auto-update.sh).
+log "Installing the update timer"
+SERA_DIR="$INSTALL_DIR" bash "$INSTALL_DIR/deploy/install-timers.sh"
+
 cat <<EOF
 
   SERA.toolkit is starting.
@@ -231,7 +236,13 @@ cat <<EOF
     sudo sera ps
     sudo sera logs -f worker
 
-  To update:
+  Updates are automatic: sera-update.timer deploys new images within 15 minutes of
+  their being published, and rolls back if the site is not healthy afterwards.
+
+    journalctl -u sera-update.service      # what it did
+    sudo touch ${INSTALL_DIR}/.auto-update-paused   # pause it (delete to resume)
+
+  To update by hand instead:
 
     sudo git -C ${INSTALL_DIR} pull
     sudo sera pull && sudo sera up -d

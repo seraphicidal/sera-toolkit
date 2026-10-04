@@ -1,0 +1,146 @@
+name: Update yt-dlp
+
+# Provider support is mostly yt-dlp's, and sites change faster than this repository does.
+# Once a day this looks for a new yt-dlp release and, when there is one, takes it the
+# whole way: a pull request that moves both pins (still checksum-verified at every
+# install), the full CI on that branch, a live smoke test against real sites, and then the
+# merge and the published images. The Oracle server picks the images up on its own
+# (deploy/auto-update.sh) and nodes refresh their own copy (`tools:fetch --pin-from=main`).
+#
+# To pause it: set the repository variable YTDLP_AUTO_UPDATE to `off`
+# (gh variable set YTDLP_AUTO_UPDATE --body off), or disable the workflow
+# (gh workflow disable update-ytdlp.yml). deploy/ORACLE.md lists the other two switches.
+#
+# Everything is done with the workflow's own token, which has two consequences worth
+# knowing. Pushes and merges made with it do not trigger other workflows, so CI is started
+# explicitly with a dispatch, on the branch and then on main. And the repository has to
+# allow Actions to create pull requests (Settings → Actions → General).
+on:
+  schedule:
+    - cron: '17 5 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: update-ytdlp
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+jobs:
+  update:
+    name: Pin, test and merge a new yt-dlp
+    if: vars.YTDLP_AUTO_UPDATE != 'off'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24.18.1'
+          cache: npm
+
+      - name: Look for a newer release
+        id: bump
+        run: |
+          before=$(node -p "require('./scripts/tools.manifest.json').ytdlp.version")
+          node scripts/update-providers.mjs --write
+          after=$(node -p "require('./scripts/tools.manifest.json').ytdlp.version")
+          echo "version=$after" >> "$GITHUB_OUTPUT"
+          echo "branch=auto/yt-dlp-$after" >> "$GITHUB_OUTPUT"
+          if git diff --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "yt-dlp $before is the latest release."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "yt-dlp $before → $after"
+          fi
+
+      # The branch is rewritten on every attempt, so a release that failed yesterday is
+      # tried again from the current main rather than from a stale base.
+      - name: Push the branch and open the pull request
+        if: steps.bump.outputs.changed == 'true'
+        env:
+          VERSION: ${{ steps.bump.outputs.version }}
+          BRANCH: ${{ steps.bump.outputs.branch }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch -c "$BRANCH"
+          git commit -am "Update yt-dlp to $VERSION"
+          git push --force origin "$BRANCH"
+          if ! gh pr view "$BRANCH" --json state -q .state 2>/dev/null | grep -qx OPEN; then
+            gh pr create --base main --head "$BRANCH" \
+              --title "Update yt-dlp to $VERSION" \
+              --body "Opened by the **Update yt-dlp** workflow. It merges itself once CI and the live smoke test pass; if it is still open, one of them failed — see the workflow run. Release notes: https://github.com/yt-dlp/yt-dlp/releases/tag/$VERSION"
+          fi
+
+      - name: Install
+        if: steps.bump.outputs.changed == 'true'
+        run: npm ci --ignore-scripts
+
+      - name: Install FFmpeg
+        if: steps.bump.outputs.changed == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+
+      # The new pin, fetched and checked against yt-dlp's published checksums the same way
+      # every install of it is.
+      - name: Fetch the new yt-dlp
+        if: steps.bump.outputs.changed == 'true'
+        run: |
+          npm run tools:fetch -- --only=ytdlp
+          .tools/yt-dlp --version
+
+      - name: Build
+        if: steps.bump.outputs.changed == 'true'
+        run: npm run build
+
+      # Real sites, through the real engine, with the new binary. Only providers that answer
+      # a datacentre the same way they answer a home connection (deploy/PROVIDERS.md), all
+      # of them yt-dlp's, each taken through to bytes. YouTube is not among them: GitHub's
+      # runners are refused like any datacentre, and the laptop node checks it in production.
+      # One retry, so a site having a bad minute does not hold the update for a day.
+      - name: Live smoke test
+        if: steps.bump.outputs.changed == 'true'
+        run: |
+          cases=(dailymotion soundcloud bandcamp)
+          npm run check:providers -- --download "${cases[@]}" ||
+            { sleep 60; npm run check:providers -- --download "${cases[@]}"; }
+
+      # The full CI, on the branch. A dispatch is the one event the workflow token is
+      # allowed to start, and its checks attach to the commit, so they show on the PR.
+      - name: Run CI on the branch
+        if: steps.bump.outputs.changed == 'true'
+        env:
+          BRANCH: ${{ steps.bump.outputs.branch }}
+        run: |
+          sha=$(git rev-parse HEAD)
+          gh workflow run ci.yml --ref "$BRANCH"
+          for _ in $(seq 1 30); do
+            run=$(gh run list --workflow ci.yml --branch "$BRANCH" --event workflow_dispatch \
+              --json databaseId,headSha -q "map(select(.headSha == \"$sha\")) | .[0].databaseId")
+            [ -n "$run" ] && break
+            sleep 10
+          done
+          test -n "$run" || { echo 'CI did not start'; exit 1; }
+          gh run watch "$run" --exit-status --interval 30
+
+      - name: Merge
+        if: steps.bump.outputs.changed == 'true'
+        env:
+          BRANCH: ${{ steps.bump.outputs.branch }}
+        run: gh pr merge "$BRANCH" --rebase --delete-branch
+
+      # The merge was made with the workflow token, so it does not trigger CI on main by
+      # itself, and CI on main is what publishes the images.
+      - name: Publish the images
+        if: steps.bump.outputs.changed == 'true'
+        run: gh workflow run ci.yml --ref main
