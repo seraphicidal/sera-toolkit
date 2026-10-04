@@ -1,8 +1,14 @@
 import Link from 'next/link';
 import { Downloader } from '@/components/downloader';
+import { HowItWorks, SupportedSources } from '@/components/home-guide';
 import { Wordmark } from '@/components/wordmark';
+import { loadServiceInfo } from '@/lib/service-info';
 
-export default function HomePage() {
+// The source list under the form is the running API's, refreshed once a minute.
+export const revalidate = 60;
+
+export default async function HomePage() {
+  const service = await loadServiceInfo();
   return (
     <div className="flex flex-1 flex-col justify-center pt-6 pb-14 sm:pt-10">
       <div className="mb-8 text-center sm:mb-10">
@@ -26,6 +32,15 @@ export default function HomePage() {
           Send it from your browser →
         </Link>
       </p>
+
+      <div className="mt-10 grid gap-8 sm:grid-cols-2">
+        <SupportedSources providers={service?.providers ?? []} />
+        <HowItWorks
+          {...(service
+            ? { retentionMinutes: Math.round(service.limits.retentionSeconds / 60) }
+            : {})}
+        />
+      </div>
     </div>
   );
 }

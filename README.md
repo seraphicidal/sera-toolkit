@@ -25,7 +25,10 @@ Paste a link  →  detect the source  →  read what is there  →  choose  → 
 - **Real progress.** Bytes, speed and ETA over Server-Sent Events, with polling as a
   fallback for networks that buffer streams.
 - **No account, no tracking, no retention.** Files are deleted on a timer whether or not
-  you downloaded them.
+  you downloaded them. The list of recent downloads is kept in your browser only.
+- **On a phone, it is an app.** Install it from the browser menu ("Add to Home screen"),
+  and SERA appears in the share sheet: share a video from YouTube or TikTok and it opens
+  already analysing the link.
 
 ### Supported sources
 
@@ -373,12 +376,14 @@ Platforms change how they serve media, and yt-dlp changes to follow them:
 ```bash
 npm run update-providers            # report
 npm run update-providers -- --write # pin the newest release
-npm run tools:fetch -- --force
+npm run tools:fetch                 # fetches the newly pinned version
 npm test && node scripts/smoke-live.mjs
 ```
 
 The version is pinned in both `scripts/tools.manifest.json` and `docker/api.Dockerfile`,
-and the script keeps them in step.
+and the script keeps them in step. On the public deployment none of this is manual any
+more: a daily workflow bumps the pin, tests it and merges it, the server deploys it, and
+nodes refresh themselves — see [deploy/ORACLE.md](deploy/ORACLE.md#automatic-updates).
 
 ---
 

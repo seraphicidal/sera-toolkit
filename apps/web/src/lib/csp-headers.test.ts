@@ -64,3 +64,52 @@ describe('the /import COOP exception', () => {
     expect(imp).toBeGreaterThan(site);
   });
 });
+
+/**
+ * The installable app adds a manifest, icons and a share target. None of it gets a header
+ * of its own: it is all same-origin, so the strict site-wide policy already allows it, and
+ * a relaxation added "to make the PWA work" would be one nobody needed.
+ */
+describe('the installable app under the site-wide policy', () => {
+  const directive = (csp: string, name: string) =>
+    csp
+      .split(';')
+      .map((part) => part.trim())
+      .find((part) => part.startsWith(`${name} `));
+
+  it('adds no header rule beyond the site rule and the /import exception', async () => {
+    expect((await rules()).map((r) => r.source)).toEqual(['/:path*', '/import']);
+  });
+
+  it('serves the manifest, icons and /share under the strict policy, with nothing relaxed', async () => {
+    const csp = value(
+      (await rules()).find((r) => r.source === '/:path*')!,
+      'content-security-policy',
+    )!;
+    // No manifest-src or worker-src of its own: both fall back to default-src 'self'.
+    expect(directive(csp, 'default-src')).toBe("default-src 'self'");
+    expect(directive(csp, 'manifest-src')).toBeUndefined();
+    expect(directive(csp, 'img-src')).toBe("img-src 'self' data: blob:");
+    expect(directive(csp, 'connect-src')).toBe("connect-src 'self'");
+    expect(csp).not.toContain('unsafe-eval');
+    expect(csp).not.toMatch(/https?:\/\//);
+  });
+
+  it('names only same-origin paths in the manifest, and shares into /share', async () => {
+    const { default: manifest } = await import('../app/manifest');
+    const m = manifest();
+    const paths = [
+      m.start_url,
+      m.scope,
+      ...(m.icons ?? []).map((icon) => icon.src),
+      m.share_target?.action,
+    ];
+    for (const path of paths) expect(path, String(path)).toMatch(/^\/(?!\/)/);
+    expect(m.share_target).toMatchObject({ action: '/share', method: 'GET' });
+    expect(m.icons?.map((icon) => `${icon.sizes ?? ''} ${icon.purpose ?? ''}`)).toEqual([
+      '192x192 any',
+      '512x512 any',
+      '512x512 maskable',
+    ]);
+  });
+});

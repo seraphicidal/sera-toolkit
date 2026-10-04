@@ -4,7 +4,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Job, JobError, MediaInfo, PackagingMode } from '@sera/contracts/types';
 import { ApiError, cancelJob, createJob, resolveMedia } from '@/lib/api';
 import { cx, formatBytes, isRunning, pluralize } from '@/lib/format';
+import { addToHistory } from '@/lib/history';
 import { initialKind, qualityLabels, resolveSelection, type SelectableKind } from '@/lib/selection';
+import { urlFromFragment } from '@/lib/share';
 import { useJob } from '@/lib/use-job';
 import { DownloadIcon, SpinnerIcon } from './icons';
 import { ErrorPanel, type ErrorAction } from './error-panel';
@@ -12,6 +14,7 @@ import { FormatPicker } from './format-picker';
 import { ItemPicker } from './item-picker';
 import { MediaPreview } from './media-preview';
 import { ProgressPanel } from './progress-panel';
+import { RecentDownloads } from './recent-downloads';
 import { ResultPanel } from './result-panel';
 import { UrlForm } from './url-form';
 
@@ -128,6 +131,27 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
     }
   }, []);
 
+  // A link shared to SERA arrives as /#url=… (see lib/share.ts) and is read straight away.
+  // The fragment is cleared first, so a reload or Back does not analyse it a second time.
+  useEffect(() => {
+    if (importMode) return;
+    const shared = urlFromFragment(window.location.hash);
+    if (!shared) return;
+    window.history.replaceState(null, '', window.location.pathname + window.location.search);
+    setUrl(shared);
+    void analyze(shared);
+  }, [importMode, analyze]);
+
+  /** "Download again" on an expired entry: the original link, read afresh. */
+  const again = useCallback(
+    (link: string) => {
+      setUrl(link);
+      void analyze(link);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    },
+    [analyze],
+  );
+
   // Keep the quality choice valid when the format changes.
   useEffect(() => {
     if (!info) return;
@@ -178,6 +202,19 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
     if (!job) return;
     if (job.state === 'ready') {
       setPhase('done');
+      // Remembered in this browser only; see lib/history.ts.
+      if (job.result && info) {
+        addToHistory({
+          jobId: job.id,
+          title: info.title,
+          source: info.providerLabel,
+          url: info.url,
+          filename: job.result.filename,
+          downloadPath: job.result.downloadPath,
+          savedAt: new Date().toISOString(),
+          expiresAt: job.result.expiresAt,
+        });
+      }
       return;
     }
     if (job.state === 'failed' || job.state === 'cancelled' || job.state === 'expired') {
@@ -185,7 +222,7 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
       setPhase('ready');
       setJobId(undefined);
     }
-  }, [job]);
+  }, [job, info]);
 
   const cancel = useCallback(() => {
     if (jobId) void cancelJob(jobId);
@@ -336,6 +373,8 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
           )}
         </>
       )}
+
+      {!importMode && <RecentDownloads onAgain={again} />}
     </div>
   );
 }

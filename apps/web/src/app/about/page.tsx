@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import type { ServiceInfo } from '@sera/contracts/types';
 import { Wordmark } from '@/components/wordmark';
+import { loadServiceInfo } from '@/lib/service-info';
 
 export const metadata: Metadata = {
   title: 'About',
@@ -12,18 +12,6 @@ export const metadata: Metadata = {
 // The supported-source list is read from the running API, so this page describes the
 // deployment the visitor is actually using rather than a list that drifts out of date.
 export const revalidate = 60;
-
-const API_ORIGIN = (process.env.SERA_API_URL ?? 'http://127.0.0.1:4000').replace(/\/+$/, '');
-
-async function loadServiceInfo(): Promise<ServiceInfo | undefined> {
-  try {
-    const response = await fetch(`${API_ORIGIN}/api/info`, { next: { revalidate: 60 } });
-    if (!response.ok) return undefined;
-    return (await response.json()) as ServiceInfo;
-  } catch {
-    return undefined;
-  }
-}
 
 function formatGigabytes(bytes: number): string {
   const gb = bytes / 1024 ** 3;
