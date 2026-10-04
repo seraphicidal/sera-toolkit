@@ -9,7 +9,8 @@
       "linux-x64": "yt-dlp_linux",
       "linux-arm64": "yt-dlp_linux_aarch64",
       "darwin-x64": "yt-dlp_macos",
-      "darwin-arm64": "yt-dlp_macos"
+      "darwin-arm64": "yt-dlp_macos",
+      "android-arm64": "yt-dlp"
     }
   },
   "ffmpeg": {
