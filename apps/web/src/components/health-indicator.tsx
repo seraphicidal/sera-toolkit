@@ -7,6 +7,7 @@ import {
   initialHealth,
   isHealthReport,
   nextHealth,
+  showsLight,
   summarizeHealth,
   type HealthLight,
 } from '@/lib/health';
@@ -113,7 +114,11 @@ export function HealthIndicator() {
       >
         <span
           aria-hidden
-          className={cx('block size-2.5 rounded-full transition-colors', DOT[state.light])}
+          className={cx(
+            'block size-2.5 rounded-full transition-[background-color,opacity] duration-300',
+            DOT[state.light],
+            !showsLight(state) && 'opacity-0',
+          )}
         />
       </button>
 

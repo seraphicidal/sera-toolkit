@@ -1,4 +1,5 @@
 import type { DownloadOption, MediaInfo, MediaItem, MediaKind } from '@sera/contracts/types';
+import { KIND_LABELS } from './format';
 
 export type SelectableKind = Exclude<MediaKind, 'unknown'>;
 
@@ -21,6 +22,16 @@ export function availableKinds(info: MediaInfo): SelectableKind[] {
     for (const option of item.options) present.add(option.kind);
   }
   return order.filter((kind) => present.has(kind));
+}
+
+/**
+ * What a kind is called in the picker. An image is a "Thumbnail" when no item in the post is
+ * itself an image — the picture of a video or a song is its thumbnail, not a photo — and an
+ * "Image" when one is, so a photo post or a carousel with photos keeps the word.
+ */
+export function kindLabel(info: MediaInfo, kind: SelectableKind): string {
+  if (kind === 'image' && !info.items.some((item) => item.kind === 'image')) return 'Thumbnail';
+  return KIND_LABELS[kind];
 }
 
 /** Options of one kind for one item, in the order the engine produced them. */
