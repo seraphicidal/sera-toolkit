@@ -2665,8 +2665,10 @@ the same limits and hardening.
 ## 20. Continuous integration
 
 `.github/workflows/ci.yml` runs on pushes and pull requests to `main`, and on manual dispatch.
-Concurrency is cancel-in-progress per ref; permissions are `contents: read` and
-`packages: write`.
+Concurrency is per ref, cancelling an in-progress run everywhere but on `main`, where a run
+always finishes (a newer push only replaces a queued one): a publish cancelled halfway left
+the server with the API image of one commit and the web image of another. Permissions are
+`contents: read` and `packages: write`.
 
 **Job `verify`** (Ubuntu, 20 min, with a Redis 7.4 service):
 
@@ -2694,8 +2696,10 @@ Concurrency is cancel-in-progress per ref; permissions are `contents: read` and
    the home page to render, `/health` to be proxied, the manifest (with its share target) and
    an app icon to be served, `/about` to render twice (ISR), and no
    `EROFS` in the logs.
-5. On `main` only: logs in to GHCR, publishes both images for amd64 and arm64 (`latest` and
-   the commit SHA), and confirms the arm64 manifests exist.
+5. On `main` only: logs in to GHCR, publishes both images for amd64 and arm64 under the
+   commit SHA, then moves `latest` for both together (`imagetools create`, a registry-side
+   copy taking seconds), so `latest` never pairs two commits; and confirms the arm64
+   manifests exist.
 
 **`update-ytdlp.yml`** runs daily at 05:17 UTC and on dispatch, unless the repository
 variable `YTDLP_AUTO_UPDATE` is `off`. It runs `update-providers --write`; when a pin moved,
