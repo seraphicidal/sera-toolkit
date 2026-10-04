@@ -261,6 +261,18 @@ describe('a task that needs more than a download', () => {
     expect(await old).toBeUndefined();
   });
 
+  it('is refused at once when the connected nodes cannot do it', async () => {
+    const nodes = registry();
+    // Only an outdated node is connected: waiting would only end at the task timeout.
+    await nodes.claim('old', ['youtube'], 1, 50);
+    const started = Date.now();
+    await expect(nodes.dispatchJob(job({ trim: { start: 10 } }))).rejects.toMatchObject({
+      code: 'PROVIDER_UNAVAILABLE',
+      message: expect.stringMatching(/^Trimming cannot be done/),
+    });
+    expect(Date.now() - started).toBeLessThan(100);
+  });
+
   it('leaves a plain job to any node, old or new', async () => {
     const nodes = registry();
     nodes.dispatchJob(job({})).catch(() => undefined);
