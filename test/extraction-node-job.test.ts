@@ -1,3 +1,5 @@
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -42,6 +44,30 @@ let running: Promise<void>;
 let apiDir: string;
 let nodeDir: string;
 
+/**
+ * Videos added after the two real ones, each with a full ladder of formats, so a test can
+ * make the resolution as large as a real playlist's: about 4 KB a video, like YouTube's.
+ */
+let padding = 0;
+
+function paddedItem(index: number) {
+  return {
+    index,
+    kind: 'video' as const,
+    title: `Padding ${String(index)} ${'x'.repeat(200)}`,
+    plans: [144, 240, 360, 480, 720, 1080, 1440, 2160].map((height) => ({
+      kind: 'video' as const,
+      container: 'mp4' as const,
+      label: `${String(height)}p`,
+      detail: `MP4 · H.264 · ${'a'.repeat(120)}`,
+      height,
+      requiresConversion: false,
+      recommended: height === 1080,
+      fetch: { via: 'ytdlp' as const, selector: `bestvideo[height<=${String(height)}]+bestaudio` },
+    })),
+  };
+}
+
 /** What the node's own network makes of the playlist: two videos, one file each. */
 function playlist(): ResolvedMedia {
   const video = (index: number, path: string) => ({
@@ -65,7 +91,11 @@ function playlist(): ResolvedMedia {
     url: PLAYLIST,
     type: 'playlist',
     title: 'Two parts',
-    items: [video(0, '/one.mp4'), video(1, '/two.mp4')],
+    items: [
+      video(0, '/one.mp4'),
+      video(1, '/two.mp4'),
+      ...Array.from({ length: padding }, (_, offset) => paddedItem(offset + 2)),
+    ],
   };
 }
 
@@ -214,5 +244,107 @@ describe('a multi-file job on an extraction node', () => {
     const names = entryNames(download.rawPayload);
     expect(names.sort()).toEqual(result.files!.map((file) => file.name).sort());
     expect(names.some((name) => name.endsWith('.zip'))).toBe(false);
+  });
+});
+
+describe('a large resolution from an extraction node', () => {
+  it('is accepted, where the 64 KB limit for visitors refused it', async () => {
+    await waitForNode();
+    // 40 more videos: a resolution well past 64 KB, as a 17-video YouTube playlist was (74 KB).
+    padding = 40;
+    try {
+      expect(Buffer.byteLength(JSON.stringify({ media: playlist() }))).toBeGreaterThan(64 * 1024);
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/media/info',
+        // A playlist of its own, so the server's resolve cache cannot answer for it.
+        payload: { url: `${PLAYLIST}large` },
+      });
+      expect(response.statusCode, response.body.slice(0, 300)).toBe(200);
+      expect(response.json<MediaInfo>().items).toHaveLength(42);
+    } finally {
+      padding = 0;
+    }
+  });
+});
+
+describe('a node whose result is refused', () => {
+  it('reports the task as failed instead of falling silent', async () => {
+    // A stand-in control plane: one resolve task, a refusal of its result, and a record of
+    // what the node says next. The real server no longer refuses a large resolution; this
+    // is the node's half, for whatever refusal comes next.
+    const failures: unknown[] = [];
+    let handedOut = false;
+    const server: Server = createServer((request, response) => {
+      let body = '';
+      request.on('data', (chunk: Buffer) => (body += chunk.toString('utf8')));
+      request.on('end', () => {
+        const path = request.url ?? '';
+        if (path.endsWith('/claim')) {
+          if (handedOut) {
+            response.writeHead(204).end();
+            return;
+          }
+          handedOut = true;
+          response.writeHead(200, { 'content-type': 'application/json' });
+          response.end(
+            JSON.stringify({
+              id: 'refused-task',
+              kind: 'resolve',
+              url: PLAYLIST,
+              providerId: 'youtube',
+            }),
+          );
+        } else if (path.endsWith('/resolved')) {
+          response.writeHead(413).end();
+        } else if (path.endsWith('/failed')) {
+          failures.push(JSON.parse(body));
+          response.writeHead(200, { 'content-type': 'application/json' }).end('{"accepted":true}');
+        } else {
+          response
+            .writeHead(200, { 'content-type': 'application/json' })
+            .end('{"cancelled":false}');
+        }
+      });
+    });
+    await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+    const { port } = server.address() as AddressInfo;
+
+    const config = loadConfig({ NODE_ENV: 'test', LOG_LEVEL: 'silent', SERA_DATA_DIR: nodeDir });
+    const logger = silentLogger();
+    const registry = new ProviderRegistry(undefined, config);
+    const resolver = new MediaResolver({ config, logger, registry });
+    vi.spyOn(resolver, 'resolveCanonical').mockImplementation(() => Promise.resolve(playlist()));
+    const workspaces = new WorkspaceManager(config.dataDir, config.retentionSeconds, logger);
+    const refused = new ExtractionNode(
+      {
+        apiUrl: `http://127.0.0.1:${String(port)}`,
+        token: TOKEN,
+        nodeId: 'refused-node',
+        networkClass: 'residential',
+        providers: ['youtube'],
+      },
+      logger,
+      config,
+      registry,
+      resolver,
+      new JobRunner({ config, logger, resolver, workspaces }),
+      workspaces,
+    );
+    const loop = refused.run();
+    try {
+      const deadline = Date.now() + 15_000;
+      while (!failures.length && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      expect(failures).toHaveLength(1);
+      expect(failures[0]).toMatchObject({ code: 'INTERNAL' });
+      expect((failures[0] as { detail?: string }).detail).toContain('413');
+    } finally {
+      refused.stop();
+      await loop.catch(() => undefined);
+      await new Promise((done) => server.close(done));
+    }
   });
 });
