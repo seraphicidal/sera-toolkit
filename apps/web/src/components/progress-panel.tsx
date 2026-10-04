@@ -1,7 +1,7 @@
 'use client';
 
 import type { Job } from '@sera/contracts/types';
-import { CheckIcon, SpinnerIcon } from './icons';
+import { SpinnerIcon } from './icons';
 import { cx, formatBytes, formatEta, formatSpeed } from '@/lib/format';
 
 /**
@@ -93,15 +93,5 @@ export function ProgressPanel({
         {job.step}
       </p>
     </section>
-  );
-}
-
-/** The completed-step marker used above the active step in multi-stage jobs. */
-export function CompletedStep({ label }: { readonly label: string }) {
-  return (
-    <p className="flex items-center gap-2 text-[0.8125rem] text-[var(--color-ink-muted)]">
-      <CheckIcon size={15} className="text-[var(--color-success)]" />
-      {label}
-    </p>
   );
 }

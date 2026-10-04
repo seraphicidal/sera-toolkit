@@ -2105,8 +2105,7 @@ analyzing → ready → submitting → running → done`.
   untruncated title, a subtitle (author · duration · N items) and the provider label.
 - **`progress-panel.tsx` — `ProgressPanel`**: the current step, "File X of Y", the percentage,
   an ARIA progress bar (shimmering while queued), bytes / speed / ETA in tabular figures, a
-  Cancel button, and a screen-reader status announced per step rather than per percent. It
-  also exports `CompletedStep`.
+  Cancel button, and a screen-reader status announced per step rather than per percent.
 - **`result-panel.tsx` — `ResultPanel`**: starts the download automatically, once, with a
   same-origin navigation to the attachment URL (no blob held in memory). It also shows a
   Download / Download ZIP button, per-file links when there are several, "Deleted from the
@@ -2166,12 +2165,11 @@ analyzing → ready → submitting → running → done`.
 - **`api.ts`** — the browser's view of the API. Every call is same-origin through `call()`,
   which turns a thrown fetch into `NETWORK_ERROR` "We couldn't reach the server." and a
   non-2xx response into an `ApiError` carrying the server's `JobError`. It exports
-  `ApiError`, `resolveMedia`, `importMedia`, `createJob`, `getJob`, `cancelJob`
-  (fire-and-forget DELETE) and `getServiceInfo`.
+  `ApiError`, `resolveMedia`, `importMedia`, `createJob`, `getJob` and `cancelJob`
+  (fire-and-forget DELETE). Server components read `/api/info` through `service-info.ts`.
 - **`format.ts`** — browser-side copies of the formatting helpers (deliberately duplicated,
   so the engine never enters the bundle): `formatBytes`, `formatDuration`, `formatEta`,
-  `formatSpeed`, `formatRelativeDate`, `KIND_LABELS`, `pluralize`, `isRunning`, `displayUrl`,
-  and `cx` for class joining.
+  `formatSpeed`, `KIND_LABELS`, `pluralize`, `isRunning`, and `cx` for class joining.
 - **`share.ts`** — `firstHttpUrl` (the first http(s) link in text, without the sentence's
   trailing punctuation but keeping a balanced `)`), `sharedUrl` (`url`, then `text`, then
   `title`), and the fragment hand-off `homeWithUrl` / `urlFromFragment`.
@@ -2196,7 +2194,7 @@ analyzing → ready → submitting → running → done`.
   - `availableKinds` — in video, audio, image, gif order;
   - `optionsOfKind`, and `defaultOption` (recommended, else the first);
   - `optionForItem(item, kind, label)` — the exact label if the item has it, else that kind's
-    default, else the item's own default. This is what lets one control drive a mixed
+    `defaultOption`, else the item's own default. This is what lets one control drive a mixed
     carousel;
   - `initialKind`, and `qualityLabels` (deduplicated across the selected items);
   - `resolveSelection` — the option ids, a total size only when every size is known, an
@@ -2713,9 +2711,7 @@ more specific sentence; the table shows the defaults.
 Nothing below is covered by a failing test; these are places where the code, its comments or
 its docs disagree, or where something looks worth a second look.
 
-1. **Exported but unused outside their own file** (web): `CompletedStep`, `getServiceInfo`,
-   `displayUrl`, `formatRelativeDate`.
-2. **Documentation drift**:
+1. **Documentation drift**:
    - the README's "449 tests" (the suite now collects 521, plus 9 Redis tests);
    - `tsconfig.json` refers to `tsconfig.web.json`;
    - `docker-compose.yml`'s header mentions a "standalone profile at the bottom" that is
@@ -2724,5 +2720,5 @@ its docs disagree, or where something looks worth a second look.
      transport, while the bookmarklet now uses the v2 same-tab fragment;
    - `EXTRACTION-NODE.md` suggests `SERA_NODE_ID=home`, while the program's default is
      `residential`.
-3. **`scripts/check-providers.mjs` calls `engine.jobs.create` without a client key.** It
+2. **`scripts/check-providers.mjs` calls `engine.jobs.create` without a client key.** It
    works with the memory backend, but it isn't the signature's intent.
