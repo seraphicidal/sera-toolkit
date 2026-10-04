@@ -2020,11 +2020,10 @@ The dev and start servers run on port **3200**. The app imports only
   `<head>` so dark mode never flashes white, and adds a skip-to-content link. The header has
   the wordmark, an About link and the theme toggle; `<main>`; the footer has the rights
   reminder, "How this works" and `v{SERA_VERSION}`.
-- **`page.tsx`** (home) — revalidated every 60 s. The large wordmark, the tagline "One link
-  in, whatever media is available out.", the `Downloader`, a pointer to `/import` for Instagram
-  photo posts, then `SupportedSources` (from `/api/info`, each with its status) and
-  `HowItWorks` (three steps, naming the retention from `/api/info`'s limits). Without the API
-  — at image build time — the sources are simply omitted.
+- **`page.tsx`** (home) — static. The large wordmark, the tagline "One link in, whatever media
+  is available out.", the `Downloader`, the `ShareHint`, and a pointer to `/import` for
+  Instagram photo posts. Nothing else: the supported sources and how it works are on
+  `/about`.
 - **`manifest.ts`** — the web app manifest at `/manifest.webmanifest`: `SERA.toolkit` /
   `SERA`, standalone, start and scope `/`, the light canvas as background and theme colour
   (the layout's `theme-color` meta tags carry light and dark), icons 192 and 512 (`any`) and
@@ -2093,8 +2092,9 @@ analyzing → ready → submitting → running → done`.
   **Download again** button. **Clear history** empties it. It follows this tab
   (`sera-history-change`) and other tabs (`storage`), and re-renders every 30 s so times and
   expiry stay current.
-- **`home-guide.tsx`** — `SupportedSources` (each provider with a status dot and, when not
-  `ok`, a screen-reader status) and `HowItWorks`, both server components.
+- **`share-hint.tsx` — `ShareHint`**: one muted line under the form — add SERA to the home
+  screen to share links to it — rendered only after mounting, and only when `isInstalledApp`
+  says the page is not already the installed app.
 - **`share-redirect.tsx` — `ShareRedirect`**: see `share/page.tsx`.
 - **`url-form.tsx` — `UrlForm`**:
   - a URL input sized at 16 px, which prevents iOS zoom;
@@ -2183,7 +2183,9 @@ analyzing → ready → submitting → running → done`.
   `formatSpeed`, `KIND_LABELS`, `pluralize`, `isRunning`, and `cx` for class joining.
 - **`share.ts`** — `firstHttpUrl` (the first http(s) link in text, without the sentence's
   trailing punctuation but keeping a balanced `)`), `sharedUrl` (`url`, then `text`, then
-  `title`), and the fragment hand-off `homeWithUrl` / `urlFromFragment`.
+  `title`), the fragment hand-off `homeWithUrl` / `urlFromFragment`, and `isInstalledApp`
+  (`display-mode: standalone`, or iOS's `navigator.standalone`; false where neither can be
+  asked).
 - **`history.ts`** — recent downloads in `localStorage['sera-history']`, never sent anywhere:
   `readHistory`, `addToHistory` (newest first, one per job, at most 10), `clearHistory`,
   `isExpired`, `timeAgo`. Every storage access is in `try`/`catch` and reads as empty when
@@ -2604,7 +2606,7 @@ ffprobe. The counts below are tests collected by `vitest list`.
 | `apps/web/src/lib/bookmarklet.test.ts`             | 14    | A self-contained `javascript:` URL that loads and evaluates nothing, opens no popup and posts no message, uses the fragment, makes one request to Instagram only, targets its own origin, trims slides, caps text, refuses long URLs, diagnosable alerts that never contain a URL/cookie/body, correct shortcode decoding, post-only activation.                                                                                                                                   |
 | `apps/web/src/lib/csp-headers.test.ts`             | 8     | The `/import` COOP exception is scoped to exactly that path, changes only the opener policy, leaves every other header (and the default COOP) in force, and is ordered so it wins. The installable app adds no header rule; the manifest, icons and `/share` live under the strict policy (no `manifest-src`, nothing third-party, no `unsafe-eval`); the manifest names only same-origin paths and shares into `/share`. The `/api` rewrite waits at least 120 s on a silent API. |
 | `apps/web/src/lib/import-handshake.test.ts`        | 12    | `trustedImport` (origin, opener, shape); `readImportFragment` (accept and clear, empty posts allowed, off-CDN refusal without POSTing, video and nested checks, oversize refusal before decoding, version mismatch, malformed payloads cleared, wrong shapes).                                                                                                                                                                                                                     |
-| `apps/web/src/lib/share.test.ts`                   | 11    | The url field first; YouTube's and TikTok's links inside their text; the title as a last resort; a non-web `url` skipped; sentence punctuation dropped and a link's own bracket kept; only http(s); the fragment round trip, and other fragments ignored.                                                                                                                                                                                                                          |
+| `apps/web/src/lib/share.test.ts`                   | 14    | The url field first; YouTube's and TikTok's links inside their text; the title as a last resort; a non-web `url` skipped; sentence punctuation dropped and a link's own bracket kept; only http(s); the fragment round trip, and other fragments ignored. `isInstalledApp` on Android and iOS, in a browser tab, and where nothing can be asked.                                                                                                                                   |
 | `apps/web/src/lib/history.test.ts`                 | 9     | Newest first and one per job; the limit; clearing removes the key; storage that throws reads as empty and never throws; junk in the key; entries that would link off the site dropped; expiry, including an unreadable time; `timeAgo`.                                                                                                                                                                                                                                            |
 | `apps/web/src/lib/health.test.ts`                  | 13    | Green/amber/red from the report; unknown (not red) on a first failure; the last answer kept through one failure; red after two in a row, and only consecutive ones; recovery on the next report; proxy error bodies refused; visitor labels without operator detail; only the Server line while down; unknown checks kept; accessible names.                                                                                                                                       |
 | `apps/web/src/lib/selection.test.ts`               | 16    | `availableKinds`, `initialKind`, `defaultOption`, `optionForItem`, `qualityLabels`, `resolveSelection` (per-item preference, unselected items, unknown sizes, approximate flag, empty selection).                                                                                                                                                                                                                                                                                  |

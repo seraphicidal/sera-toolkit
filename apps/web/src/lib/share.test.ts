@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { firstHttpUrl, homeWithUrl, sharedUrl, urlFromFragment } from './share';
+import { firstHttpUrl, homeWithUrl, isInstalledApp, sharedUrl, urlFromFragment } from './share';
 
 /**
  * What a phone's share sheet hands to `/share`.
@@ -87,5 +87,33 @@ describe('the fragment hand-off', () => {
     expect(urlFromFragment('')).toBeUndefined();
     expect(urlFromFragment('#main')).toBeUndefined();
     expect(urlFromFragment('#url=javascript%3Aalert(1)')).toBeUndefined();
+  });
+});
+
+describe('isInstalledApp', () => {
+  const media = (standalone: boolean) => (query: string) => ({
+    matches: standalone && query === '(display-mode: standalone)',
+  });
+
+  it('is true for an installed app, on Android and on iOS', () => {
+    expect(isInstalledApp({ matchMedia: media(true) })).toBe(true);
+    expect(isInstalledApp({ matchMedia: media(false), navigator: { standalone: true } })).toBe(
+      true,
+    );
+  });
+
+  it('is false in a browser tab, so the hint about installing shows there', () => {
+    expect(isInstalledApp({ matchMedia: media(false), navigator: {} })).toBe(false);
+  });
+
+  it('is false, not an error, where neither can be asked', () => {
+    expect(isInstalledApp({})).toBe(false);
+    expect(
+      isInstalledApp({
+        matchMedia: () => {
+          throw new Error('not supported');
+        },
+      }),
+    ).toBe(false);
   });
 });
