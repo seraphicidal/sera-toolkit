@@ -103,6 +103,13 @@ From now on Termux:Boot starts it whenever the phone boots. Within a minute
 "extraction-nodes" … "laptop [residential] (youtube), phone [residential] (youtube)"
 ```
 
+### Instagram photo posts
+
+To let the phone download Instagram photo posts and carousels too, add the line
+`SERA_INSTAGRAM_SESSION_ID=<the value of sessionid>` to `~/sera-toolkit/.env.node.local` with
+`nano`, as in step 3, and restart the node. Where the value comes from and what it means are
+in [EXTRACTION-NODE.md](EXTRACTION-NODE.md#instagram-photo-posts-and-carousels).
+
 ## Keeping it running
 
 `run-node.sh` is a small supervisor. Every 30 seconds it:

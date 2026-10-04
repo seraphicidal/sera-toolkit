@@ -142,6 +142,7 @@ export {
   ExtractionNodeRegistry,
   remoteBackend,
   requiredFeatures,
+  sessionBackend,
   type NodeFeature,
   type NodeStatus,
   type RemoteProgress,
