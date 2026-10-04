@@ -166,8 +166,3 @@ export async function run(command: string, options: RunOptions): Promise<RunResu
     stderrTail: stderr,
   };
 }
-
-/** True when `value` could be mistaken for a command-line flag. */
-export function looksLikeFlag(value: string): boolean {
-  return value.startsWith('-');
-}

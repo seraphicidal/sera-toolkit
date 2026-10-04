@@ -1,13 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { seraError } from '../errors.js';
-import {
-  classifyFailure,
-  FAILURE_BY_CODE,
-  isEgressProblem,
-  isTransient,
-  requiresOriginatingNode,
-} from './failure.js';
+import { classifyFailure, FAILURE_BY_CODE, isEgressProblem } from './failure.js';
 
 /**
  * Every routing decision rests on this. Wrong in one direction it spends a scarce
@@ -35,7 +29,6 @@ describe('classifyFailure', () => {
       seraError('NETWORK_ERROR', { detail: 'unable to download video data: HTTP Error 403' }),
     );
     expect(refused).toBe('STREAM_403');
-    expect(requiresOriginatingNode(refused)).toBe(true);
     expect(isEgressProblem(refused)).toBe(false);
   });
 
@@ -89,7 +82,6 @@ describe('classifyFailure', () => {
     // connection on the chance that it helps.
     expect(classifyFailure(new Error('something nobody has seen'))).toBe('EXTRACTOR_BUG');
     expect(isEgressProblem(classifyFailure(new Error('x')))).toBe(false);
-    expect(requiresOriginatingNode(classifyFailure(new Error('x')))).toBe(false);
   });
 });
 
@@ -115,22 +107,6 @@ describe('routing predicates', () => {
     ] as const) {
       expect(isEgressProblem(other), other).toBe(false);
     }
-  });
-
-  it('marks only the signed-URL case as needing the originating node', () => {
-    expect(requiresOriginatingNode('STREAM_403')).toBe(true);
-    expect(requiresOriginatingNode('DATACENTER_BLOCKED')).toBe(false);
-    expect(requiresOriginatingNode('NETWORK_ERROR')).toBe(false);
-  });
-
-  it('knows which failures asking again could plausibly change', () => {
-    expect(isTransient('RATE_LIMITED')).toBe(true);
-    expect(isTransient('SOURCE_ERROR')).toBe(true);
-    expect(isTransient('UPSTREAM_TIMEOUT')).toBe(true);
-    // Retrying these unchanged is just a slower way to the same answer.
-    expect(isTransient('PRIVATE_CONTENT')).toBe(false);
-    expect(isTransient('DELETED_CONTENT')).toBe(false);
-    expect(isTransient('UNSUPPORTED_MEDIA')).toBe(false);
   });
 });
 
@@ -177,7 +153,6 @@ describe('the taxonomy against the error codes it has to cover', () => {
     const cancelled = classifyFailure(seraError('CANCELLED'));
     expect(cancelled).toBe('CANCELLED');
     expect(isEgressProblem(cancelled)).toBe(false);
-    expect(isTransient(cancelled)).toBe(false);
   });
 
   it('says a live stream is unsupported media, not a bug', () => {
@@ -189,7 +164,8 @@ describe('the taxonomy against the error codes it has to cover', () => {
   it('keeps "the server is full" separate from "the source refused us"', () => {
     // They share the one property that matters for routing — waiting is the answer —
     // and nothing else, so the detail says which.
-    expect(classifyFailure(seraError('QUEUE_FULL'))).toBe('RATE_LIMITED');
-    expect(isTransient(classifyFailure(seraError('QUEUE_FULL')))).toBe(true);
+    const full = classifyFailure(seraError('QUEUE_FULL'));
+    expect(full).toBe('RATE_LIMITED');
+    expect(isEgressProblem(full)).toBe(false);
   });
 });
