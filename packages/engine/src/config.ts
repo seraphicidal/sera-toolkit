@@ -125,6 +125,12 @@ const envSchema = z.object({
    * deployment with no node should not have an endpoint that accepts one.
    */
   SERA_EXTRACTION_NODE_TOKEN: z.string().default(''),
+  /**
+   * Marks the server's own canary (deploy/canary.sh). A request carrying it in
+   * `x-sera-canary` is exempt from rate limits and abuse strikes and is left out of the
+   * usage counts. Empty disables the exemption entirely.
+   */
+  SERA_CANARY_TOKEN: z.string().default(''),
   /** How long a node's request for work is held open before it asks again. */
   SERA_EXTRACTION_CLAIM_HOLD_SECONDS: seconds.default(25),
   /**
@@ -237,6 +243,9 @@ export interface EngineConfig {
     /** True when this installation can talk to Reddit's Data API at all. */
     readonly configured: boolean;
   };
+
+  /** The canary's shared secret; empty when no canary is configured. */
+  readonly canaryToken: string;
 
   readonly extractionNodes: {
     readonly token: string;
@@ -398,6 +407,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): EngineConfig {
       clientSecret: e.SERA_REDDIT_CLIENT_SECRET,
       configured: Boolean(e.SERA_REDDIT_CLIENT_ID && e.SERA_REDDIT_CLIENT_SECRET),
     },
+
+    canaryToken: e.SERA_CANARY_TOKEN,
 
     extractionNodes: {
       token: e.SERA_EXTRACTION_NODE_TOKEN,

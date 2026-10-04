@@ -57,6 +57,9 @@ export async function buildServer(engine: SeraEngine): Promise<FastifyInstance> 
     global: false,
     // Keyed by the hashed client id rather than the raw address.
     keyGenerator: (request) => request.clientKey,
+    // The server's own canary checks every source once a day and must not be throttled by
+    // the limits it shares an address with.
+    allowList: (request) => request.canary,
     addHeaders: { 'retry-after': true, 'x-ratelimit-limit': true, 'x-ratelimit-remaining': true },
   });
 

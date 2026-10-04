@@ -330,13 +330,14 @@ when it recovers, never on every check. Each change has to be seen twice in a ro
 minutes) first, so a deploy's restart or a laptop node reconnecting does not page you. It
 watches five things:
 
-| Alert                      | Means                                                                   |
-| -------------------------- | ----------------------------------------------------------------------- |
-| The API is not answering   | `/health` does not answer through Caddy                                 |
-| No extraction node is live | YouTube will fail until a node reconnects                               |
-| Health check failing       | yt-dlp, FFmpeg, storage or the queue reports an error                   |
-| Auto-update failed         | this server rolled a release back (see `journalctl -u sera-update`)     |
-| Daily yt-dlp update failed | the GitHub workflow failed; its pull request is left open with the logs |
+| Alert                           | Means                                                                                                                                |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| The API is not answering        | `/health` does not answer through Caddy                                                                                              |
+| No extraction node is live      | YouTube will fail until a node reconnects                                                                                            |
+| Health check failing            | yt-dlp, FFmpeg, storage or the queue reports an error                                                                                |
+| Auto-update failed              | this server rolled a release back (see `journalctl -u sera-update`)                                                                  |
+| Daily yt-dlp update failed      | the GitHub workflow failed; its pull request is left open with the logs                                                              |
+| YouTube downloads failing: CODE | the daily canary (below) could not download from that source twice in a row; "YouTube downloads recovered" follows when it can again |
 
 **Set it up.** Pick a topic nobody can guess — anyone who knows it can read the alerts:
 
@@ -348,6 +349,70 @@ sudo /opt/sera/deploy/alert-check.sh --test
 Then install the ntfy app (Android or iOS), tap **+**, and subscribe to that topic on the
 default server, `ntfy.sh`. The test notification should arrive within seconds. To stop
 alerts, remove the line from `.env` or `sudo systemctl disable --now sera-alert.timer`.
+
+### The canary: proof that downloads work
+
+`/health` checks that yt-dlp and FFmpeg are installed and that a node is connected. A source
+can still break while all of that is green — YouTube changes its player, a site redesigns.
+So once a day (around 04:20 UTC) `sera-canary.timer` runs `deploy/canary.sh`, which asks
+the API — through its normal routes, so YouTube goes through the extraction nodes like any
+visitor's link — for one small file from each source: the smallest option of one test link,
+resolved, downloaded and counted. Each source has three minutes. The results land in
+`/var/lib/sera/canary.json`:
+
+```json
+[
+  {
+    "source": "youtube-shorts",
+    "label": "YouTube",
+    "ok": true,
+    "bytes": 812345,
+    "durationMs": 9120,
+    "at": "2026-10-05T04:31:02Z",
+    "consecutiveFailures": 0
+  }
+]
+```
+
+A source that fails **two runs in a row** raises "YouTube downloads failing: CODE" on your
+phone, and "YouTube downloads recovered" when it works again.
+
+**Set it up once.** The canary's requests carry a secret that exempts them from rate limits
+and abuse strikes (a source that is down must not lock the canary out of noticing it is back)
+and keeps them out of usage counts:
+
+```bash
+echo "SERA_CANARY_TOKEN=$(openssl rand -hex 32)" | sudo tee -a /opt/sera/.env >/dev/null
+sudo sera up -d          # the API reads the token at start
+```
+
+**Run it by hand:**
+
+```bash
+sudo systemctl start sera-canary.service          # the whole run, as the timer does it
+sudo /opt/sera/deploy/canary.sh                   # the same, printing each source
+sudo /opt/sera/deploy/canary.sh --only=youtube-shorts,vimeo   # some sources; the rest are kept
+jq . /var/lib/sera/canary.json                    # the last results
+journalctl -u sera-canary.service                 # what the last runs printed
+```
+
+**Change the test links** in `scripts/provider-cases.json`, the same list
+`npm run check:providers` uses. A case runs on the canary when it has a `canary` field:
+
+```json
+{
+  "id": "vimeo",
+  "url": "https://vimeo.com/22439234",
+  "expect": { "kinds": ["video"] },
+  "download": [{ "kind": "video" }],
+  "canary": { "label": "Vimeo", "kind": "video" }
+}
+```
+
+`label` is how alerts name the source; `kind` is what to download (the smallest option of
+it). Pick links that will stay up — an official account's own post, not a viral one — and
+leave out anything that needs a sign-in. The list ships in the API image, so a change
+reaches the server with the next release.
 
 ### Troubleshooting
 

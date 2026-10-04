@@ -99,6 +99,8 @@ COPY --from=build /app/apps/api/package.json ./apps/api/
 COPY --from=build /app/apps/api/dist ./apps/api/dist
 COPY --from=build /app/apps/worker/package.json ./apps/worker/
 COPY --from=build /app/apps/worker/dist ./apps/worker/dist
+# The canary's links (apps/api/dist/canary-cli.js reads them; deploy/canary.sh runs it).
+COPY scripts/provider-cases.json ./scripts/provider-cases.json
 
 # Media work runs as an unprivileged user, and /data is the only writable path it needs.
 RUN mkdir -p /data && chown -R node:node /data /app
