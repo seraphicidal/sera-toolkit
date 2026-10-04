@@ -24,6 +24,9 @@ Paste a link  →  detect the source  →  read what is there  →  choose  → 
   M4A, Opus or WAV. Images untouched. Short videos convertible to GIF.
 - **Audio that knows what it is.** MP3, M4A and Opus files carry the title, the artist (or
   uploader) and the album where the source says, and the thumbnail as square cover art.
+- **Subtitles.** Where a video has them, pick a language — tracks written by people first,
+  the auto-generated one labelled — and get it inside the video as a track your player can
+  switch on, as an SRT or VTT file beside it, or on its own.
 - **Just the part you want.** Under "More options", give a start and an end (m:ss) to cut a
   single video or audio file down to that part — accurate to the second, and only that part is
   downloaded where the source allows it.

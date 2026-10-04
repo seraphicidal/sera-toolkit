@@ -1,3 +1,4 @@
+import type { SubtitleTrack } from '@sera/contracts/types';
 import type {
   ContainerFormat,
   MediaInfoType,
@@ -152,6 +153,8 @@ export interface ResolvedItem {
    * that never had one, which answers 404.
    */
   readonly thumbnailFallbackUrl?: string;
+  /** Subtitle tracks worth offering (`subtitleTracks`). */
+  readonly subtitles?: readonly SubtitleTrack[];
   /** Music metadata the source published, for tagging audio files. */
   readonly tags?: { readonly artist?: string; readonly album?: string; readonly track?: string };
   readonly width?: number;

@@ -1,3 +1,4 @@
+import { readdir } from 'node:fs/promises';
 import { seraError, type SeraError } from '../errors.js';
 import { run } from '../util/spawn.js';
 import type { YtdlpInfo } from './ytdlp-types.js';
@@ -60,6 +61,11 @@ export interface DownloadRequest extends YtdlpOptions {
    * that does not start at 0 needs: a copy can only begin where the stream allows, possibly
    * seconds early (a keyframe, or a fragment of a DASH audio stream).
    */
+  /**
+   * A subtitle track to embed as a soft track (`--embed-subs`). yt-dlp converts it to what
+   * the container takes — mov_text for MP4 — when it merges.
+   */
+  readonly subtitles?: { readonly lang: string; readonly auto: boolean };
   readonly sections?: {
     readonly start: number;
     readonly end?: number;
@@ -202,6 +208,9 @@ export async function download(request: DownloadRequest): Promise<void> {
     '--no-post-overwrites',
   );
   if (request.sections) args.push(...sectionArgs(request.sections));
+  if (request.subtitles) {
+    args.push(...subtitleArgs(request.subtitles), '--embed-subs');
+  }
   if (request.mergeContainer) args.push('--merge-output-format', request.mergeContainer);
   if (request.remuxContainer) args.push('--remux-video', request.remuxContainer);
   if (request.audioFormat) {
@@ -274,6 +283,71 @@ export async function download(request: DownloadRequest): Promise<void> {
   });
 
   if (result.code !== 0) throw classifyYtdlpFailure(result.stderrTail, result.code);
+}
+
+/** yt-dlp's arguments to fetch one subtitle track, written by people or by the site. */
+export function subtitleArgs(track: { readonly lang: string; readonly auto: boolean }): string[] {
+  return [track.auto ? '--write-auto-subs' : '--write-subs', '--sub-langs', track.lang];
+}
+
+export interface SubtitleDownloadRequest extends YtdlpOptions {
+  readonly url: string;
+  readonly workdir: string;
+  readonly lang: string;
+  readonly auto: boolean;
+  readonly format: 'srt' | 'vtt';
+  /** As in `DownloadRequest`: one entry of a multi-item post, 1-based. */
+  readonly playlistItem?: number;
+}
+
+/**
+ * Fetches one subtitle track as a file, without the media.
+ *
+ * The site's own format is taken when it already is the one asked for, and converted by
+ * FFmpeg otherwise (`--convert-subs`). Answers the path of the file written.
+ */
+export async function downloadSubtitles(request: SubtitleDownloadRequest): Promise<string> {
+  const args = baseArgs(request);
+  if (request.playlistItem !== undefined) {
+    const index = args.indexOf('--no-playlist');
+    if (index >= 0) args.splice(index, 1);
+    args.push('--yes-playlist', '--playlist-items', String(request.playlistItem));
+  }
+  args.push(
+    '--skip-download',
+    ...subtitleArgs(request),
+    '--sub-format',
+    `${request.format}/best`,
+    '--convert-subs',
+    request.format,
+    '--paths',
+    `temp:${request.workdir}`,
+    '--paths',
+    `home:${request.workdir}`,
+    '--output',
+    'subtitle.%(ext)s',
+    '--',
+    request.url,
+  );
+
+  const result = await run(request.binary, {
+    args,
+    cwd: request.workdir,
+    timeoutMs: request.timeoutMs,
+    ...(request.signal ? { signal: request.signal } : {}),
+  });
+  if (result.code !== 0) throw classifyYtdlpFailure(result.stderrTail, result.code);
+
+  const written = (await readdir(request.workdir)).find((name) =>
+    name.endsWith(`.${request.format}`),
+  );
+  if (!written) {
+    throw seraError('MEDIA_UNAVAILABLE', {
+      message: 'Those subtitles are not available any more.',
+      detail: `no .${request.format} written for ${request.lang}`,
+    });
+  }
+  return `${request.workdir}/${written}`;
 }
 
 function sum(map: Map<string, number>): number {

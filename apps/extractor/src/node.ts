@@ -38,6 +38,31 @@ interface RemoteTask {
   readonly filename?: string;
   /** For a job: keep only this part of the item, in seconds. */
   readonly trim?: { readonly start: number; readonly end?: number };
+  /** For a job: a subtitle track to embed or deliver. */
+  readonly subtitles?: {
+    readonly lang: string;
+    readonly auto: boolean;
+    readonly format: 'srt' | 'vtt' | 'embed';
+    readonly only: boolean;
+  };
+}
+
+/** A task's subtitles, if it has well-formed ones: the language goes onto a command line. */
+export function taskSubtitles(task: Pick<RemoteTask, 'subtitles'>): RemoteTask['subtitles'] {
+  const subtitles = task.subtitles;
+  if (subtitles === undefined) return undefined;
+  const valid =
+    typeof subtitles.lang === 'string' &&
+    /^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/.test(subtitles.lang) &&
+    ['srt', 'vtt', 'embed'].includes(subtitles.format) &&
+    !(subtitles.only && subtitles.format === 'embed');
+  if (!valid) throw seraError('INVALID_URL', { detail: 'node: malformed subtitles' });
+  return {
+    lang: subtitles.lang,
+    auto: subtitles.auto === true,
+    format: subtitles.format,
+    only: subtitles.only === true,
+  };
 }
 
 /**
@@ -289,6 +314,7 @@ export class ExtractionNode {
     // that zipped as well shipped the archive and every loose file, and the visitor got a
     // ZIP of those — an archive inside an archive, with each file in it twice.
     const trim = taskTrim(task);
+    const subtitles = taskSubtitles(task);
     const spec: JobSpec = {
       jobId,
       provider: task.providerId,
@@ -297,6 +323,7 @@ export class ExtractionNode {
       packaging: 'individual',
       ...(task.filename ? { filename: task.filename } : {}),
       ...(trim ? { trim } : {}),
+      ...(subtitles ? { subtitles } : {}),
     };
 
     try {

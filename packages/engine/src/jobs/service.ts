@@ -1,5 +1,11 @@
 import type { CreateJobRequest, Job, JobEvent } from '@sera/contracts/types';
-import { checkTrim, isTerminalJobState, type TrimRange } from '@sera/contracts/types';
+import {
+  checkTrim,
+  isTerminalJobState,
+  SUBTITLE_EMBED_CONTAINERS,
+  type ContainerFormat,
+  type TrimRange,
+} from '@sera/contracts/types';
 import type { EngineConfig } from '../config.js';
 import { seraError, SeraError } from '../errors.js';
 import { logSafeUrl, type Logger } from '../logging.js';
@@ -10,7 +16,7 @@ import type { RemoteExtraction } from '../extract/remote.js';
 import { newJobId } from '../util/tokens.js';
 import type { JobBackend, JobRecord, WorkerHandle } from '../queue/types.js';
 import { toPublicJob } from '../queue/types.js';
-import { JobRunner, type JobSelection, type JobSpec } from './runner.js';
+import { JobRunner, type JobSelection, type JobSpec, type JobSubtitles } from './runner.js';
 
 /**
  * Job lifecycle: accepting work, reporting on it, and cleaning up after it.
@@ -91,6 +97,9 @@ export class JobService {
     }
 
     const trim = request.trim ? trimFor(request.trim, options) : undefined;
+    const subtitles = request.subtitles
+      ? subtitlesFor(request.subtitles, options, trim !== undefined)
+      : undefined;
 
     const waiting = await backend.waitingCount();
     if (waiting >= config.maxQueueDepth) {
@@ -113,6 +122,7 @@ export class JobService {
       packaging: request.packaging ?? 'auto',
       ...(request.filename ? { filename: request.filename } : {}),
       ...(trim ? { trim } : {}),
+      ...(subtitles ? { subtitles } : {}),
       // Carried whole, because the job cannot read the post again. It only ever comes from a
       // token this server signed; nothing in the request body can reach it.
       ...(info.m
@@ -356,4 +366,45 @@ function trimFor(
     throw seraError('INVALID_URL', { message: checked.message, detail: 'trim out of range' });
   }
   return checked.range;
+}
+
+/**
+ * Subtitles, checked against what was signed: one option, never alongside a trim (the track
+ * would keep the whole timeline), and an embedded track only in a video container that
+ * holds one. Whether the language is really offered is checked when the job re-resolves.
+ */
+function subtitlesFor(
+  request: NonNullable<CreateJobRequest['subtitles']>,
+  options: readonly { readonly k: string }[],
+  trimmed: boolean,
+): JobSubtitles {
+  const [option, ...rest] = options;
+  if (!option || rest.length) {
+    throw seraError('INVALID_URL', {
+      message: 'Subtitles work on one item at a time.',
+      detail: `subtitles with ${options.length} selections`,
+    });
+  }
+  if (trimmed) {
+    throw seraError('INVALID_URL', {
+      message: 'Subtitles cannot be added to a trimmed download yet.',
+      detail: 'subtitles with trim',
+    });
+  }
+  const [kind, container] = option.k.split('/');
+  if (
+    request.format === 'embed' &&
+    (kind !== 'video' || !SUBTITLE_EMBED_CONTAINERS.includes(container as ContainerFormat))
+  ) {
+    throw seraError('INVALID_URL', {
+      message: 'Subtitles can be embedded only in an MP4, MKV or WebM video.',
+      detail: `embed into ${option.k}`,
+    });
+  }
+  return {
+    lang: request.lang,
+    auto: request.auto === true,
+    format: request.format,
+    only: request.only === true,
+  };
 }
