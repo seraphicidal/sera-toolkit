@@ -2413,7 +2413,7 @@ the same limits and hardening.
   3 minutes after boot and every 5 minutes.
 - **`node-android/`** — an extraction node in Termux (guide: `EXTRACTION-NODE-ANDROID.md`).
   `setup.sh` (idempotent; downloaded then run, so a `pkg` prompt cannot read the script from
-  stdin) installs `nodejs-lts`, `python`, `ffmpeg`, `git` and `termux-api`, clones or
+  stdin) runs a full `pkg upgrade` (Termux does not support partial upgrades), installs `nodejs-lts`, `python`, `ffmpeg`, `git` and `termux-api`, clones or
   fast-forwards `~/sera-toolkit` (`SERA_NODE_DIR`), runs a filtered `npm ci` (contracts,
   engine, extractor and the root — about 140 MB) and `build:node`, fetches yt-dlp with
   `--pin-from=main`, writes `~/.sera-node/node.conf` (`ONLY_ON_WIFI=1`,

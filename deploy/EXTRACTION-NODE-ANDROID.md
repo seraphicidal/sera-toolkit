@@ -57,7 +57,9 @@ curl -fsSLo setup.sh https://raw.githubusercontent.com/seraphicidal/sera-toolkit
 bash setup.sh
 ```
 
-It installs Node (the LTS, 22 or later), Python, FFmpeg and git; clones the repository into `~/sera-toolkit`;
+It upgrades Termux's packages (Termux does not support partial upgrades, and a package
+installed against older libraries fails to link), installs Node (the LTS, 22 or later),
+Python, FFmpeg and git; clones the repository into `~/sera-toolkit`;
 installs only what the node needs (about 140 MB, not the web app); builds the node; fetches
 the yt-dlp pinned on `main` (checked against yt-dlp's published checksums); writes
 `~/sera-toolkit/.env.node.local`; and installs the boot script. Running it again later
