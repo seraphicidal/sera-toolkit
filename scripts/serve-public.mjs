@@ -218,6 +218,10 @@ function prepareStandalone() {
   cpSync(join(built, 'static'), join(runDir, 'apps', 'web', '.next', 'static'), {
     recursive: true,
   });
+  // Nor public/, which holds the favicon and the app icons.
+  cpSync(join(ROOT, 'apps', 'web', 'public'), join(runDir, 'apps', 'web', 'public'), {
+    recursive: true,
+  });
 
   return join(runDir, 'apps', 'web', 'server.js');
 }

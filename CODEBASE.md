@@ -2008,14 +2008,28 @@ The dev and start servers run on port **3200**. The app imports only
 ### Pages (`src/app`)
 
 - **`layout.tsx`** — metadata (title template `%s · SERA.toolkit`, description, robots,
-  `referrer: no-referrer`) and light/dark theme colours. It runs the inline `themeScript` in
+  `referrer: no-referrer`, the SVG favicon and Apple touch icon, `appleWebApp`) and light/dark
+  theme colours. It runs the inline `themeScript` in
   `<head>` so dark mode never flashes white, and adds a skip-to-content link. The header has
   the wordmark, an About link and the theme toggle; `<main>`; the footer has the rights
   reminder, "How this works" and `v{SERA_VERSION}`.
-- **`page.tsx`** (home) — the large wordmark, the tagline "One link in, whatever media is
-  available out.", the `Downloader`, and a pointer to `/import` for Instagram photo posts.
+- **`page.tsx`** (home) — revalidated every 60 s. The large wordmark, the tagline "One link
+  in, whatever media is available out.", the `Downloader`, a pointer to `/import` for Instagram
+  photo posts, then `SupportedSources` (from `/api/info`, each with its status) and
+  `HowItWorks` (three steps, naming the retention from `/api/info`'s limits). Without the API
+  — at image build time — the sources are simply omitted.
+- **`manifest.ts`** — the web app manifest at `/manifest.webmanifest`: `SERA.toolkit` /
+  `SERA`, standalone, start and scope `/`, the light canvas as background and theme colour
+  (the layout's `theme-color` meta tags carry light and dark), icons 192 and 512 (`any`) and
+  512 (`maskable`) from `public/icons/`, and a **`share_target`** — `GET /share` with
+  `title`, `text` and `url`. No service worker: none is needed to install, and the site
+  stays network-only.
+- **`share/page.tsx`** — `noindex`; renders `ShareRedirect`, which pulls the first http(s)
+  link out of `url`, then `text`, then `title` (`lib/share.ts`), and `location.replace`s to
+  `/#url=<link>` — so `/share?…` leaves no history entry, and the second request carries
+  nothing. With no link it says so and links home.
 - **`about/page.tsx`** — a server component revalidated every 60 s. It fetches `/api/info`
-  directly from `API_ORIGIN` and renders:
+  through `loadServiceInfo` (`lib/service-info.ts`, shared with the home page) and renders:
   - How it works;
   - Supported sources, each with a status dot;
   - a line for each provider with `authRequiredFor`, linking to `/import` when it supports
@@ -2030,6 +2044,10 @@ The dev and start servers run on port **3200**. The app imports only
 
 - **`import/page.tsx`** — metadata "Import from Instagram", marked `noindex`, rendering
   `ImportClient`.
+
+`public/` holds `icon.svg` (the favicon) and `icons/` — `icon-192.png`, `icon-512.png`,
+`maskable-512.png` (glyph inside the safe zone) and `apple-touch-icon.png`: a download arrow
+over a tray in the accent colour, drawn on the 24-unit grid `icons.tsx` uses.
 
 ### Components (`src/components`)
 
@@ -2057,6 +2075,20 @@ analyzing → ready → submitting → running → done`.
     file count and total size, with `~` when estimated).
   - **`AdvancedOptions`** — a filename input (max 200) and, for several files, a packaging
     radio: Automatic, One ZIP, Separate files.
+- **Shared links and history in `Downloader`** (not in import mode): on mount it reads
+  `/#url=…` with `urlFromFragment`, clears the fragment with `history.replaceState`, fills the
+  input and analyses at once. A job reaching `ready` is recorded with `addToHistory`
+  (`lib/history.ts`). `RecentDownloads` sits at the bottom, and its "Download again" fills the
+  input, analyses and scrolls to the top.
+- **`recent-downloads.tsx` — `RecentDownloads`**: renders nothing until mounted (the server
+  has no history) or when empty. Each entry shows title, source and `timeAgo`; within
+  retention a **Download** link to the stored same-origin path, after it "expired" and a
+  **Download again** button. **Clear history** empties it. It follows this tab
+  (`sera-history-change`) and other tabs (`storage`), and re-renders every 30 s so times and
+  expiry stay current.
+- **`home-guide.tsx`** — `SupportedSources` (each provider with a status dot and, when not
+  `ok`, a screen-reader status) and `HowItWorks`, both server components.
+- **`share-redirect.tsx` — `ShareRedirect`**: see `share/page.tsx`.
 - **`url-form.tsx` — `UrlForm`**:
   - a URL input sized at 16 px, which prevents iOS zoom;
   - autofocus on desktop only (≥ 640 px);
@@ -2144,6 +2176,17 @@ analyzing → ready → submitting → running → done`.
   so the engine never enters the bundle): `formatBytes`, `formatDuration`, `formatEta`,
   `formatSpeed`, `formatRelativeDate`, `KIND_LABELS`, `pluralize`, `isRunning`, `displayUrl`,
   and `cx` for class joining.
+- **`share.ts`** — `firstHttpUrl` (the first http(s) link in text, without the sentence's
+  trailing punctuation but keeping a balanced `)`), `sharedUrl` (`url`, then `text`, then
+  `title`), and the fragment hand-off `homeWithUrl` / `urlFromFragment`.
+- **`history.ts`** — recent downloads in `localStorage['sera-history']`, never sent anywhere:
+  `readHistory`, `addToHistory` (newest first, one per job, at most 10), `clearHistory`,
+  `isExpired`, `timeAgo`. Every storage access is in `try`/`catch` and reads as empty when
+  storage is missing, full or forbidden. Entries are validated on read — every field a string,
+  the download path a same-origin `/api/` path, the link http(s) — since a stored value
+  becomes an `href`.
+- **`service-info.ts`** — `loadServiceInfo`, the `/api/info` fetch (cached 60 s) for server
+  components.
 - **`health.ts`** — the status light's rules:
   - `nextHealth(state, observation)` — a report sets the light (`ok` green, `degraded` amber,
     `error` red) and resets the failure count; a missing report only turns it red at
@@ -2242,7 +2285,7 @@ that must be kept in step with `apps/web/src/lib/bookmarklet.ts` by hand.
 | `clean.mjs`            | Removes every `dist/`, `apps/web/.next`, `apps/api/.data`, `coverage` and `.data`; with `--all`, also `.tools` and `node_modules`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `tools.manifest.json`  | The pinned tools: yt-dlp **2026.08.19** (assets per platform and arch, checksum file `SHA2-256SUMS`) and FFmpeg **n8.1-latest** from BtbN/FFmpeg-Builds (win64 zip, linux64 and linuxarm64 tar.xz, `checksums.sha256`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `fetch-tools.mjs`      | Downloads the manifest's assets into `.tools/` (skipping any already present unless `--force`; `--only=ytdlp` or `--only=ffmpeg`). yt-dlp's installed version is recorded in `.tools/yt-dlp.version` and a different pin re-fetches it; `--pin-from=<branch>` takes the yt-dlp version from that branch's manifest on GitHub (`SERA_MANIFEST_REPO`, default `seraphicidal/sera-toolkit`), which is how nodes follow `main`. The old binary is renamed to `.old` rather than deleted, so a running copy on Windows does not block the swap. Failures throw and set the exit code rather than calling `process.exit` mid-request. **Verifies each SHA-256** against the publisher's checksum file and aborts on a mismatch. Extracts FFmpeg with bsdtar — `System32\tar.exe` on Windows, because Git's GNU tar cannot read a zip. Installs through a staging rename and writes a `.tools/.gitignore`. |
-| `serve-public.mjs`     | Runs a production-mode SERA on this machine. It keeps a stable `SERA_SECRET` in `.env.production.local`, sets a production environment (API on 127.0.0.1:4000, memory queue, 2 GB / 3 h / 25 items / 20 min limits, 15 min retention, trusted proxy), and copies Next's standalone build plus static assets to `.data/run/web` (so a running server never locks `.next` on Windows). It supervises the API and web with crash backoff (more than 5 crashes a minute stops everything). Unless `--local`, it opens a **Cloudflare quick tunnel** with `.tools/cloudflared` and writes the public URL to `.data/public-url.txt`.                                                                                                                                                                                                                                                                      |
+| `serve-public.mjs`     | Runs a production-mode SERA on this machine. It keeps a stable `SERA_SECRET` in `.env.production.local`, sets a production environment (API on 127.0.0.1:4000, memory queue, 2 GB / 3 h / 25 items / 20 min limits, 15 min retention, trusted proxy), and copies Next's standalone build plus static assets and `public/` to `.data/run/web` (so a running server never locks `.next` on Windows). It supervises the API and web with crash backoff (more than 5 crashes a minute stops everything). Unless `--local`, it opens a **Cloudflare quick tunnel** with `.tools/cloudflared` and writes the public URL to `.data/public-url.txt`.                                                                                                                                                                                                                                                        |
 | `smoke-live.mjs`       | Resolves real URLs (default: a Creative Commons YouTube video) through the built engine and prints each option — metadata only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `update-providers.mjs` | Compares the yt-dlp pin in the manifest with `ARG YTDLP_VERSION` in `docker/api.Dockerfile` and GitHub's latest release; `--write` updates both pins together.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `check-providers.mjs`  | The live provider matrix: 23 cases (YouTube, Shorts, TikTok, Vimeo, Dailymotion, Twitch VOD and channel, SoundCloud, Bandcamp, X photo/video/multi-photo/no-media, Bluesky photos/video, Mastodon, Instagram reel/photo, Reddit image/video, direct image/GIF, a generic page). Each expects media kinds, a minimum item count, or a specific failure class. `--download` runs declared jobs through to bytes and sniffs their magic numbers. It passes through any credentials set in the environment.                                                                                                                                                                                                                                                                                                                                                                                             |
@@ -2279,8 +2322,8 @@ can never have different tooling.
 
 It builds the contracts, then the web app with `ARG SERA_API_URL=http://api:4000` baked in —
 a **build-time** setting, because Next resolves rewrites when it builds. CI checks that it
-matches the Compose value. The runtime stage carries only the standalone output and static
-assets, as the `node` user under tini, on port 3000, with an HTTP healthcheck. No media tools
+matches the Compose value. The runtime stage carries only the standalone output, the static
+assets and `public/` (the favicon and app icons, which the standalone output leaves out), as the `node` user under tini, on port 3000, with an HTTP healthcheck. No media tools
 are installed.
 
 ### `docker-compose.yml` — the four-service stack
@@ -2444,7 +2487,8 @@ Concurrency is cancel-in-progress per ref; permissions are `contents: read` and
    and **both containers still running with zero restarts** (a restart loop looks like a
    healthy boot if you only check once).
 4. Builds the web image and boots it **read-only** against an API aliased `api`. It requires
-   the home page to render, `/health` to be proxied, `/about` to render twice (ISR), and no
+   the home page to render, `/health` to be proxied, the manifest (with its share target) and
+   an app icon to be served, `/about` to render twice (ISR), and no
    `EROFS` in the logs.
 5. On `main` only: logs in to GHCR, publishes both images for amd64 and arm64 (`latest` and
    the commit SHA), and confirms the arm64 manifests exist.
@@ -2527,15 +2571,17 @@ ffprobe. The counts below are tests collected by `vitest list`.
 
 ### API and web tests
 
-| File                                               | Tests | Covers                                                                                                                                                                                                                                                                                                                                           |
-| -------------------------------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `apps/api/src/routes/extraction-node.test.ts`      | 10    | Token required everywhere and a bland 401; 204 when idle; a resolve end to end; cancellation propagated to the node; upload → completed job; name sanitization; an oversized upload stopped mid-stream; uploads in a reapable directory; node failures passed through.                                                                           |
-| `apps/api/src/routes/extraction-node.live.test.ts` | 5     | The **built** extractor as a child process: it dials in and becomes a backend, shows in `/health`, is refused without the token over a real socket, refuses a URL that isn't the named provider even from the control plane, and answers a routed task over the wire.                                                                            |
-| `apps/web/src/lib/bookmarklet.test.ts`             | 14    | A self-contained `javascript:` URL that loads and evaluates nothing, opens no popup and posts no message, uses the fragment, makes one request to Instagram only, targets its own origin, trims slides, caps text, refuses long URLs, diagnosable alerts that never contain a URL/cookie/body, correct shortcode decoding, post-only activation. |
-| `apps/web/src/lib/csp-headers.test.ts`             | 4     | The `/import` COOP exception is scoped to exactly that path, changes only the opener policy, leaves every other header (and the default COOP) in force, and is ordered so it wins.                                                                                                                                                               |
-| `apps/web/src/lib/import-handshake.test.ts`        | 12    | `trustedImport` (origin, opener, shape); `readImportFragment` (accept and clear, empty posts allowed, off-CDN refusal without POSTing, video and nested checks, oversize refusal before decoding, version mismatch, malformed payloads cleared, wrong shapes).                                                                                   |
-| `apps/web/src/lib/health.test.ts`                  | 13    | Green/amber/red from the report; unknown (not red) on a first failure; the last answer kept through one failure; red after two in a row, and only consecutive ones; recovery on the next report; proxy error bodies refused; visitor labels without operator detail; only the Server line while down; unknown checks kept; accessible names.     |
-| `apps/web/src/lib/selection.test.ts`               | 16    | `availableKinds`, `initialKind`, `defaultOption`, `optionForItem`, `qualityLabels`, `resolveSelection` (per-item preference, unselected items, unknown sizes, approximate flag, empty selection).                                                                                                                                                |
+| File                                               | Tests | Covers                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| -------------------------------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apps/api/src/routes/extraction-node.test.ts`      | 10    | Token required everywhere and a bland 401; 204 when idle; a resolve end to end; cancellation propagated to the node; upload → completed job; name sanitization; an oversized upload stopped mid-stream; uploads in a reapable directory; node failures passed through.                                                                                                                                                    |
+| `apps/api/src/routes/extraction-node.live.test.ts` | 5     | The **built** extractor as a child process: it dials in and becomes a backend, shows in `/health`, is refused without the token over a real socket, refuses a URL that isn't the named provider even from the control plane, and answers a routed task over the wire.                                                                                                                                                     |
+| `apps/web/src/lib/bookmarklet.test.ts`             | 14    | A self-contained `javascript:` URL that loads and evaluates nothing, opens no popup and posts no message, uses the fragment, makes one request to Instagram only, targets its own origin, trims slides, caps text, refuses long URLs, diagnosable alerts that never contain a URL/cookie/body, correct shortcode decoding, post-only activation.                                                                          |
+| `apps/web/src/lib/csp-headers.test.ts`             | 7     | The `/import` COOP exception is scoped to exactly that path, changes only the opener policy, leaves every other header (and the default COOP) in force, and is ordered so it wins. The installable app adds no header rule; the manifest, icons and `/share` live under the strict policy (no `manifest-src`, nothing third-party, no `unsafe-eval`); the manifest names only same-origin paths and shares into `/share`. |
+| `apps/web/src/lib/import-handshake.test.ts`        | 12    | `trustedImport` (origin, opener, shape); `readImportFragment` (accept and clear, empty posts allowed, off-CDN refusal without POSTing, video and nested checks, oversize refusal before decoding, version mismatch, malformed payloads cleared, wrong shapes).                                                                                                                                                            |
+| `apps/web/src/lib/share.test.ts`                   | 11    | The url field first; YouTube's and TikTok's links inside their text; the title as a last resort; a non-web `url` skipped; sentence punctuation dropped and a link's own bracket kept; only http(s); the fragment round trip, and other fragments ignored.                                                                                                                                                                 |
+| `apps/web/src/lib/history.test.ts`                 | 9     | Newest first and one per job; the limit; clearing removes the key; storage that throws reads as empty and never throws; junk in the key; entries that would link off the site dropped; expiry, including an unreadable time; `timeAgo`.                                                                                                                                                                                   |
+| `apps/web/src/lib/health.test.ts`                  | 13    | Green/amber/red from the report; unknown (not red) on a first failure; the last answer kept through one failure; red after two in a row, and only consecutive ones; recovery on the next report; proxy error bodies refused; visitor labels without operator detail; only the Server line while down; unknown checks kept; accessible names.                                                                              |
+| `apps/web/src/lib/selection.test.ts`               | 16    | `availableKinds`, `initialKind`, `defaultOption`, `optionForItem`, `qualityLabels`, `resolveSelection` (per-item preference, unselected items, unknown sizes, approximate flag, empty selection).                                                                                                                                                                                                                         |
 
 ---
 
