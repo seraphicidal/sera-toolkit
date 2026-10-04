@@ -31,6 +31,12 @@ export interface RemoteTask {
   readonly filename?: string;
   /** For a job: the part of its one item to keep, in seconds. The node does the cutting. */
   readonly trim?: TrimRange;
+  /**
+   * What the node must hold beyond the code to run the task: `instagram-session` for a post
+   * only an account can read. Sent as a requirement, never as the credential itself, which
+   * stays on the node.
+   */
+  readonly requires?: readonly NodeFeature[];
   /** For a job: a subtitle track to embed or deliver, fetched by the node with the media. */
   readonly subtitles?: {
     readonly lang: string;
@@ -47,11 +53,13 @@ export interface RemoteTask {
  * field and deliver the wrong file — the whole video for a trim, no subtitles for an embed —
  * so a node says which it understands, and a task needing one only goes to a node that does.
  */
-export type NodeFeature = 'trim' | 'subtitles';
+export type NodeFeature = 'trim' | 'subtitles' | 'instagram-session';
 
 /** The features a task cannot be done correctly without. */
-export function requiredFeatures(task: Pick<RemoteTask, 'trim' | 'subtitles'>): NodeFeature[] {
-  const required: NodeFeature[] = [];
+export function requiredFeatures(
+  task: Pick<RemoteTask, 'trim' | 'subtitles' | 'requires'>,
+): NodeFeature[] {
+  const required: NodeFeature[] = [...(task.requires ?? [])];
   if (task.trim) required.push('trim');
   if (task.subtitles) required.push('subtitles');
   return required;
@@ -138,6 +146,8 @@ export interface RemoteExtraction {
   availableProviders(networkClass?: NetworkClass): string[];
   hasHealthyNode(networkClass?: NetworkClass): boolean;
   networkClasses(): NetworkClass[];
+  /** Whether a live node declared this feature — and, given one, takes this provider. */
+  hasFeature(feature: NodeFeature, providerId?: string): boolean;
   dispatch(
     task: Omit<RemoteTask, 'id' | 'createdAt'>,
     options?: { onProgress?: (progress: RemoteProgress) => void; signal?: AbortSignal },
@@ -341,6 +351,14 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
       lastSeenMs: now - node.seen,
       healthy: now - node.seen < this.staleAfterMs,
     }));
+  }
+
+  hasFeature(feature: NodeFeature, providerId?: string): boolean {
+    return this.live().some(
+      (node) =>
+        node.features.includes(feature) &&
+        (providerId === undefined || !node.providers.length || node.providers.includes(providerId)),
+    );
   }
 
   /** Providers at least one live node will take, optionally on one kind of connection. */
@@ -601,4 +619,32 @@ export function remoteBackend(
 /** One backend per kind of connection currently connected. */
 export function remoteBackends(registry: RemoteExtraction): ExtractionBackend[] {
   return registry.networkClasses().map((networkClass) => remoteBackend(registry, networkClass));
+}
+
+/**
+ * A node holding an account for a provider, as a backend the router can ask.
+ *
+ * For a post the server cannot read without one — an Instagram photo post — and no node of
+ * this deployment holds it either unless its operator put a session in that node's own
+ * environment. The task names the feature; whichever live node declared it takes the task,
+ * so a laptop that is off leaves the work to the phone, and the other way round.
+ */
+export function sessionBackend(
+  registry: RemoteExtraction,
+  feature: NodeFeature,
+): ExtractionBackend {
+  return {
+    id: feature,
+    kind: 'remote',
+    networkClass: 'residential',
+    get providers() {
+      return registry.availableProviders();
+    },
+    isHealthy: () => registry.hasFeature(feature),
+    resolve: (url, providerId, signal) =>
+      registry.dispatch(
+        { kind: 'resolve', url: url.toString(), providerId, requires: [feature] },
+        signal ? { signal } : {},
+      ),
+  };
 }

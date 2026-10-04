@@ -2,6 +2,7 @@ import { SeraError, seraError } from '../errors.js';
 import type { Logger } from '../logging.js';
 import type { ResolvedMedia } from '../providers/types.js';
 import type {
+  NodeFeature,
   NodeStatus,
   RemoteExtraction,
   RemoteFile,
@@ -106,6 +107,15 @@ export class RemoteOverHttp implements RemoteExtraction {
 
   hasHealthyNode(networkClass?: NetworkClass): boolean {
     return this.live(networkClass).length > 0;
+  }
+
+  hasFeature(feature: NodeFeature, providerId?: string): boolean {
+    return this.status().some(
+      (node) =>
+        node.healthy &&
+        (node.features ?? []).includes(feature) &&
+        (providerId === undefined || !node.providers.length || node.providers.includes(providerId)),
+    );
   }
 
   networkClasses(): NetworkClass[] {

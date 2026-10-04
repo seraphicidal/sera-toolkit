@@ -1,3 +1,4 @@
+import type { NodeFeature } from './extract/remote.js';
 import { createHash, createHmac } from 'node:crypto';
 import { MAX_INFO_TOKEN_LENGTH } from '@sera/contracts';
 import type { DownloadOption, ImportRequest, MediaInfo, MediaItem } from '@sera/contracts/types';
@@ -128,6 +129,8 @@ export interface ResolverDependencies {
    * in later is usable without restarting the API.
    */
   readonly remoteBackends?: () => readonly ExtractionBackend[];
+  /** A connected node holding this feature (an account), as a backend; none when absent. */
+  readonly sessionBackend?: (feature: NodeFeature) => ExtractionBackend | undefined;
   /**
    * Where the media of a post a visitor's browser sends may be fetched from. Instagram's CDN
    * unless a test says otherwise; see `EngineOptions.importHosts`.
@@ -183,6 +186,11 @@ export class MediaResolver {
       // What each provider says about itself, rather than a conditional in the router
       // that knows about failure classes and nothing about platforms.
       capabilitiesOf: (providerId) => this.registry.get(providerId)?.capabilities,
+      // A node signed in to the platform, for what only an account can read.
+      authenticated: (providerId) => {
+        const feature = this.registry.get(providerId)?.nodeSession;
+        return feature ? deps.sessionBackend?.(feature) : undefined;
+      },
       // The bottom rung: the same provider, allowed to answer with a lesser public
       // representation now that nothing else has answered at all.
       lastResort: (url, providerId, signal) =>

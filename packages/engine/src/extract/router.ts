@@ -80,6 +80,11 @@ export interface RouterDependencies {
    * have returned in full would come back as one image instead, because the node is
    * only consulted once the local attempt has failed. Last means last.
    */
+  /**
+   * A backend holding an account for this provider, when one is connected: asked once
+   * every other backend has said the media needs one, before the lesser representation.
+   */
+  readonly authenticated?: (providerId: string) => ExtractionBackend | undefined;
   readonly lastResort?: (
     url: URL,
     providerId: string,
@@ -193,6 +198,40 @@ export class ExtractionRouter {
     return this.deps.lastResort(url, providerId, signal).catch(() => undefined);
   }
 
+  /**
+   * The same post, read by a node signed in to the platform.
+   *
+   * Only for a failure that says an account is what is missing. A private post the node's
+   * account cannot see either comes back as its own answer, which is the true one; any
+   * other failure there leaves the original answer standing.
+   */
+  private async withAccount(
+    url: URL,
+    providerId: string,
+    failure: FailureClass,
+    signal?: AbortSignal,
+  ): Promise<{ media: ResolvedMedia; backend: string } | undefined> {
+    if (failure !== 'LOGIN_REQUIRED') return undefined;
+    const backend = this.deps.authenticated?.(providerId);
+    if (!backend?.isHealthy()) return undefined;
+    try {
+      const media = await backend.resolve(url, providerId, signal);
+      this.deps.logger.info(
+        { provider: providerId, backend: backend.id, items: media.items.length },
+        'extraction succeeded on a node holding an account',
+      );
+      return { media, backend: backend.id };
+    } catch (error) {
+      const failed = classifyFailure(error);
+      this.deps.logger.warn(
+        { provider: providerId, backend: backend.id, failureClass: failed },
+        'the node holding an account could not read it either',
+      );
+      if (isDefinitive(failed)) throw SeraError.from(error);
+      return undefined;
+    }
+  }
+
   async resolve(url: URL, providerId: string, signal?: AbortSignal): Promise<ExtractionOutcome> {
     const { logger } = this.deps;
     const chain = this.plan(providerId);
@@ -242,6 +281,18 @@ export class ExtractionRouter {
 
         const next = chain[index + 1];
         if (!next || !this.shouldEscalate(failure, backend, next)) {
+          const signedIn = await this.withAccount(url, providerId, failure, signal);
+          if (signedIn) {
+            return {
+              media: signedIn.media,
+              backend: signedIn.backend,
+              networkClass: 'residential',
+              remote: true,
+              fallbackUsed: true,
+              attempts: index + 2,
+              ...(firstFailure ? { firstFailure } : {}),
+            };
+          }
           const salvaged = await this.lastResort(url, providerId, failure, signal);
           if (salvaged) {
             logger.info(

@@ -3,7 +3,12 @@ import type { HealthCheck, HealthReport, ServiceInfo } from '@sera/contracts/typ
 import type { Dispatcher } from 'undici';
 import { loadConfig, VERSION, type EngineConfig } from './config.js';
 import { ffmpegVersion } from './convert/ffmpeg.js';
-import { ExtractionNodeRegistry, remoteBackends, type RemoteExtraction } from './extract/remote.js';
+import {
+  ExtractionNodeRegistry,
+  remoteBackends,
+  sessionBackend,
+  type RemoteExtraction,
+} from './extract/remote.js';
 import { RemoteOverHttp } from './extract/remote-http.js';
 import { version as ytdlpVersion } from './extract/ytdlp.js';
 import { JobService } from './jobs/service.js';
@@ -130,6 +135,10 @@ export class SeraEngine {
       logger,
       registry,
       remoteBackends: () => (config.extractionNodes.enabled ? remoteBackends(remote) : []),
+      sessionBackend: (feature) =>
+        config.extractionNodes.enabled && remote.hasFeature(feature)
+          ? sessionBackend(remote, feature)
+          : undefined,
       ...(options.dispatcher ? { dispatcher: options.dispatcher } : {}),
       ...(options.probe ? { probe: options.probe } : {}),
       ...(options.importHosts ? { importHosts: options.importHosts } : {}),
@@ -178,7 +187,7 @@ export class SeraEngine {
     return {
       name: 'SERA.toolkit',
       version: VERSION,
-      providers: this.registry.summarize(),
+      providers: this.withNodeSessions(this.registry.summarize()),
       limits: {
         maxFilesizeBytes: this.config.maxFilesizeBytes,
         maxDurationSeconds: this.config.maxDurationSeconds,
@@ -186,6 +195,28 @@ export class SeraEngine {
         retentionSeconds: this.config.retentionSeconds,
       },
     };
+  }
+
+  /**
+   * What each provider can do right now: a provider whose account a connected node holds
+   * can do what that account unlocks, and no longer says an account is needed.
+   */
+  private withNodeSessions(providers: ServiceInfo['providers']): ServiceInfo['providers'] {
+    if (!this.config.extractionNodes.enabled) return providers;
+    return providers.map((summary) => {
+      const provider = this.registry.get(summary.id);
+      if (
+        !provider?.nodeSession ||
+        !this.extractionNodes.hasFeature(provider.nodeSession, summary.id)
+      ) {
+        return summary;
+      }
+      const { authRequiredFor: _unlocked, ...capabilities } = {
+        ...summary.capabilities,
+        ...provider.withNodeSession,
+      };
+      return { ...summary, capabilities };
+    });
   }
 
   /**

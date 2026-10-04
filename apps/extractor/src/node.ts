@@ -48,8 +48,35 @@ interface RemoteTask {
   };
 }
 
-/** What this node understands beyond a plain download; sent with every claim. */
+/** What every node of this version understands beyond a plain download. */
 export const NODE_FEATURES: readonly NodeFeature[] = ['trim', 'subtitles'];
+
+/**
+ * What this node declares with every claim: the code's features, and `instagram-session`
+ * when its operator gave it an Instagram session (`SERA_INSTAGRAM_SESSION_ID` in the node's
+ * own environment). The session itself stays here; the API learns only that one exists.
+ */
+export function nodeFeatures(config: Pick<EngineConfig, 'instagram'>): NodeFeature[] {
+  return [
+    ...NODE_FEATURES,
+    ...(config.instagram.configured ? (['instagram-session'] as const) : []),
+  ];
+}
+
+/**
+ * The providers this node takes. A node told to take only some (`SERA_NODE_PROVIDERS`)
+ * takes Instagram as well once it holds a session for it — that is what the session is for.
+ */
+export function nodeProviders(
+  providers: readonly string[],
+  config: Pick<EngineConfig, 'instagram'>,
+): string[] {
+  const list = [...providers];
+  if (list.length && config.instagram.configured && !list.includes('instagram')) {
+    list.push('instagram');
+  }
+  return list;
+}
 
 /** A task's subtitles, if it has well-formed ones: the language goes onto a command line. */
 export function taskSubtitles(task: Pick<RemoteTask, 'subtitles'>): RemoteTask['subtitles'] {
@@ -125,6 +152,7 @@ export class ExtractionNode {
   private readonly nodeId: string;
   private readonly networkClass: string;
   private readonly providers: string[];
+  private readonly features: NodeFeature[];
   private stopping = false;
 
   constructor(
@@ -140,7 +168,8 @@ export class ExtractionNode {
     this.token = options.token;
     this.nodeId = options.nodeId;
     this.networkClass = options.networkClass;
-    this.providers = [...options.providers];
+    this.providers = nodeProviders(options.providers, config);
+    this.features = nodeFeatures(config);
 
     if (!this.apiUrl || !this.token) {
       throw new Error('SERA_API_URL and SERA_EXTRACTION_NODE_TOKEN are both required');
@@ -166,6 +195,7 @@ export class ExtractionNode {
         node: this.nodeId,
         providers: this.providers,
         networkClass: this.networkClass,
+        features: this.features,
       },
       'extraction node started',
     );
@@ -197,7 +227,7 @@ export class ExtractionNode {
         providers: this.providers,
         capacity: 1,
         networkClass: this.networkClass,
-        features: NODE_FEATURES,
+        features: this.features,
       },
       CLAIM_TIMEOUT_MS,
     );

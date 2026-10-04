@@ -122,13 +122,48 @@ nothing breaks while it is out of date — but update it (`git pull`, build, res
 phone, run `setup.sh` again) so it can take those jobs too. While no connected node can, a visitor asking for a trim or subtitles from that
 source is told so at once, and the full download still works.
 
+## Instagram photo posts and carousels
+
+Instagram shows photos only to a signed-in account, and the server has none. A node can hold
+one instead: give it the `sessionid` cookie of an Instagram account and photo posts and
+carousels download from it, every slide at the size it was uploaded (Instagram keeps up to
+1440 px wide). Without a node holding one, a photo post gives only the cover image Instagram
+publishes for embeds — the first slide, reduced.
+
+The cookie stays on the node. A node with one tells the server only that it holds an
+Instagram session, and the server sends it the posts that need one. When several nodes hold
+one, whichever is online takes the post, so a laptop that is off leaves it to the phone.
+
+**Get the cookie.** In a desktop browser signed in to instagram.com: open the developer tools
+(F12), then _Application_ (Chrome, Edge) or _Storage_ (Firefox) → _Cookies_ →
+`https://www.instagram.com`, and copy the value of `sessionid`. It is a password in all but
+name: anyone holding it is signed in as that account. Signing out of Instagram in that browser
+ends it, and the node then says the session no longer works.
+
+**Give it to each node**, in the node's own `.env.node.local` — never in the server's `.env`:
+
+```bash
+SERA_INSTAGRAM_SESSION_ID=<the value of sessionid>
+```
+
+Then restart the node (on Windows, `restart-task.ps1` as administrator; on a phone, see
+[EXTRACTION-NODE-ANDROID.md](EXTRACTION-NODE-ANDROID.md#logs-restarting-stopping)). Its log
+says `features: […, "instagram-session"]` when it starts, and the About page stops saying
+photo posts need an account.
+
+**What it costs.** Every photo post anyone downloads is read as that account: one request per
+post, from your own connection, which is what a person scrolling does. Instagram still
+suspends accounts it decides are automated, so a spare account is the safer choice; with your
+main one, the risk is your main one.
+
 ## What it will and will not be asked to do
 
 The router sends work to a node only when the server's own attempt failed in a way another
 network could fix — the datacentre refusal and the bot challenge, and nothing else. A
 private video, a deleted post, an unsupported link and a rate limit are the same answer
 from every address, so they are never sent. That keeps your connection for the cases that
-need it.
+need it. The one other case is a post that needs an account, which goes only to a node
+holding one (above).
 
 ## Operating it
 
