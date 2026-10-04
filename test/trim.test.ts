@@ -8,6 +8,7 @@ import { loadConfig, SeraEngine } from '@sera/engine';
 import { buildServer } from '../apps/api/src/server.js';
 import { copyIsAccurate, keyframeAtOrBefore } from '../packages/engine/src/convert/trim.js';
 import { sectionArgs } from '../packages/engine/src/extract/ytdlp.js';
+import { sectionIsUsable } from '../packages/engine/src/jobs/runner.js';
 import { taskTrim } from '../apps/extractor/src/node.js';
 import {
   ensureFixtures,
@@ -230,6 +231,24 @@ describe('the pieces', () => {
       '--download-sections',
       '*65-inf',
     ]);
+  });
+
+  it("trusts yt-dlp's section only when it is readable and the right length", () => {
+    const video = { video: {} };
+    // A 7 s cut that came back 7 s, or close: kept.
+    expect(sectionIsUsable({ ...video, durationSeconds: 7.04 }, { start: 5, end: 12 })).toBe(true);
+    // Debian's FFmpeg 5.1 with Vimeo's DASH streams: a second long, or no file at all.
+    expect(sectionIsUsable({ ...video, durationSeconds: 0.995 }, { start: 5, end: 12 })).toBe(
+      false,
+    );
+    expect(sectionIsUsable(undefined, { start: 5, end: 12 })).toBe(false);
+    expect(sectionIsUsable({ durationSeconds: 7 }, { start: 5, end: 12 })).toBe(false);
+    // To the end: measured against the item's length when it is known.
+    expect(sectionIsUsable({ ...video, durationSeconds: 55 }, { start: 5 }, 60)).toBe(true);
+    expect(sectionIsUsable({ ...video, durationSeconds: 20 }, { start: 5 }, 60)).toBe(false);
+    expect(sectionIsUsable({ ...video, durationSeconds: 20 }, { start: 5 })).toBe(true);
+    // A long cut may be a tenth off: keyframes and fragment edges.
+    expect(sectionIsUsable({ ...video, durationSeconds: 595 }, { start: 0, end: 600 })).toBe(true);
   });
 
   it('lets a node take only a sane range onto its command line', () => {

@@ -520,75 +520,121 @@ export class JobRunner {
     const fetchPlan = plan.fetch;
     let sawPostprocessor: string | undefined;
 
-    await ytdlpDownload({
-      binary: config.ytdlpPath,
-      ffmpegPath: config.ffmpegPath,
-      timeoutMs: config.jobTimeoutSeconds * 1000,
-      url: args.resolved.url,
-      format: fetchPlan.selector,
-      workdir: scratch,
-      // yt-dlp appends the real extension; a fixed stem makes the output easy to find.
-      outputTemplate: 'media.%(ext)s',
-      maxFilesizeBytes: config.maxFilesizeBytes,
-      // The resolve and the download are separate invocations. A proxy that applied to
-      // only one of them would produce a format list from one address and ask another to
-      // fetch it, which for a signed URL is the 403 this exists to avoid.
-      ...(config.proxyFor(args.resolved.provider)
-        ? { proxy: config.proxyFor(args.resolved.provider) }
-        : {}),
-      ...(fetchPlan.merge ? { mergeContainer: fetchPlan.merge } : {}),
-      ...(fetchPlan.remux ? { remuxContainer: fetchPlan.remux } : {}),
-      ...(fetchPlan.audio
-        ? {
-            audioFormat: fetchPlan.audio.format,
-            ...(fetchPlan.audio.quality ? { audioQuality: fetchPlan.audio.quality } : {}),
+    const download = (sections?: { start: number; end?: number; forceKeyframes: boolean }) =>
+      ytdlpDownload({
+        binary: config.ytdlpPath,
+        ffmpegPath: config.ffmpegPath,
+        timeoutMs: config.jobTimeoutSeconds * 1000,
+        url: args.resolved.url,
+        format: fetchPlan.selector,
+        workdir: scratch,
+        // yt-dlp appends the real extension; a fixed stem makes the output easy to find.
+        outputTemplate: 'media.%(ext)s',
+        maxFilesizeBytes: config.maxFilesizeBytes,
+        // The resolve and the download are separate invocations. A proxy that applied to
+        // only one of them would produce a format list from one address and ask another to
+        // fetch it, which for a signed URL is the 403 this exists to avoid.
+        ...(config.proxyFor(args.resolved.provider)
+          ? { proxy: config.proxyFor(args.resolved.provider) }
+          : {}),
+        ...(fetchPlan.merge ? { mergeContainer: fetchPlan.merge } : {}),
+        ...(fetchPlan.remux ? { remuxContainer: fetchPlan.remux } : {}),
+        ...(fetchPlan.audio
+          ? {
+              audioFormat: fetchPlan.audio.format,
+              ...(fetchPlan.audio.quality ? { audioQuality: fetchPlan.audio.quality } : {}),
+            }
+          : {}),
+        ...(args.resolved.items.length > 1 ? { playlistItem: item.index + 1 } : {}),
+        ...(plan.filesizeBytes ? { expectedTotalBytes: plan.filesizeBytes } : {}),
+        ...(fetchPlan.extractorArgs ? { extractorArgs: fetchPlan.extractorArgs } : {}),
+        ...(args.embedSubtitles
+          ? { subtitles: { lang: args.embedSubtitles.lang, auto: args.embedSubtitles.auto } }
+          : {}),
+        ...(sections ? { sections } : {}),
+        ...(signal ? { signal } : {}),
+        onProgress: (progress) => {
+          if (progress.postprocessor && progress.postprocessor !== sawPostprocessor) {
+            sawPostprocessor = progress.postprocessor;
           }
-        : {}),
-      ...(args.resolved.items.length > 1 ? { playlistItem: item.index + 1 } : {}),
-      ...(plan.filesizeBytes ? { expectedTotalBytes: plan.filesizeBytes } : {}),
-      ...(fetchPlan.extractorArgs ? { extractorArgs: fetchPlan.extractorArgs } : {}),
-      ...(args.embedSubtitles
-        ? { subtitles: { lang: args.embedSubtitles.lang, auto: args.embedSubtitles.auto } }
-        : {}),
-      ...(args.trim
-        ? {
-            sections: {
-              start: args.trim.start,
-              ...(args.trim.end !== undefined ? { end: args.trim.end } : {}),
-              // A copy can only begin where the stream lets it: a video's keyframe, possibly
-              // seconds early, and — measured on YouTube's audio-only streams, where a copy
-              // from 0:03 came back starting at 0:00 — an audio stream's fragment. A cut from
-              // the very start is accurate as a copy; any other is re-encoded around the cut.
-              forceKeyframes: args.trim.start > 0,
-            },
-          }
-        : {}),
-      ...(signal ? { signal } : {}),
-      onProgress: (progress) => {
-        if (progress.postprocessor && progress.postprocessor !== sawPostprocessor) {
-          sawPostprocessor = progress.postprocessor;
-        }
-        const state: JobState = sawPostprocessor
-          ? sawPostprocessor === 'ExtractAudio'
-            ? 'converting'
-            : 'merging'
-          : 'downloading';
-        report({
-          state,
-          step: sawPostprocessor ? stepForPostprocessor(sawPostprocessor, plan) : step,
-          progress: fileProgress((progress.percent / 100) * DOWNLOAD_SHARE, {
-            bytesDownloaded: progress.bytesDownloaded,
-            ...(progress.bytesTotal ? { bytesTotal: progress.bytesTotal } : {}),
-            ...(progress.speedBytesPerSecond
-              ? { speedBytesPerSecond: progress.speedBytesPerSecond }
-              : {}),
-            ...(progress.etaSeconds !== undefined ? { etaSeconds: progress.etaSeconds } : {}),
-          }),
-        });
-      },
-    });
+          const state: JobState = sawPostprocessor
+            ? sawPostprocessor === 'ExtractAudio'
+              ? 'converting'
+              : 'merging'
+            : 'downloading';
+          report({
+            state,
+            step: sawPostprocessor ? stepForPostprocessor(sawPostprocessor, plan) : step,
+            progress: fileProgress((progress.percent / 100) * DOWNLOAD_SHARE, {
+              bytesDownloaded: progress.bytesDownloaded,
+              ...(progress.bytesTotal ? { bytesTotal: progress.bytesTotal } : {}),
+              ...(progress.speedBytesPerSecond
+                ? { speedBytesPerSecond: progress.speedBytesPerSecond }
+                : {}),
+              ...(progress.etaSeconds !== undefined ? { etaSeconds: progress.etaSeconds } : {}),
+            }),
+          });
+        },
+      });
 
-    return findSingleFile(scratch);
+    if (!args.trim) {
+      await download();
+      return findSingleFile(scratch);
+    }
+
+    // Only the part asked for, where yt-dlp and FFmpeg manage it. A copy can only begin
+    // where the stream lets it: a video's keyframe, possibly seconds early, and — measured on
+    // YouTube's audio-only streams, where a copy from 0:03 came back starting at 0:00 — an
+    // audio stream's fragment. A cut from the very start is accurate as a copy; any other is
+    // re-encoded around the cut.
+    const range = args.trim;
+    try {
+      await download({
+        start: range.start,
+        ...(range.end !== undefined ? { end: range.end } : {}),
+        forceKeyframes: range.start > 0,
+      });
+      const cut = await findSingleFile(scratch);
+      const probed = await probe(cut, {
+        ffmpegPath: config.ffmpegPath,
+        ffprobePath: config.ffprobePath,
+        timeoutMs: 30_000,
+        ...(signal ? { signal } : {}),
+      }).catch(() => undefined);
+      if (sectionIsUsable(probed, range, item.duration)) return cut;
+      this.deps.logger.warn(
+        { jobId: workspace.jobId, provider: args.resolved.provider, got: probed?.durationSeconds },
+        'section download came back wrong; cutting the full file instead',
+      );
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      this.deps.logger.warn(
+        { jobId: workspace.jobId, provider: args.resolved.provider, err: error },
+        'section download failed; cutting the full file instead',
+      );
+    }
+
+    // The section did not come back usable — measured on Debian's FFmpeg 5.1 with Vimeo's
+    // DASH streams, it is unreadable with forced keyframes and a second long without. The
+    // whole file, cut here, is what a direct link gets: slower, and right.
+    await rm(scratch, { recursive: true, force: true });
+    await mkdir(scratch, { recursive: true });
+    sawPostprocessor = undefined;
+    await download();
+    const full = await findSingleFile(scratch);
+    report({ state: 'converting', step: 'Trimming', progress: fileProgress(DOWNLOAD_SHARE) });
+    const trimmed = join(scratch, `trimmed${extname(full)}`);
+    await trimMedia({
+      input: full,
+      output: trimmed,
+      range,
+      ffmpegPath: config.ffmpegPath,
+      ffprobePath: config.ffprobePath,
+      timeoutMs: config.jobTimeoutSeconds * 1000,
+      ...(signal ? { signal } : {}),
+    });
+    await rm(full, { force: true });
+    return trimmed;
   }
 
   /**
@@ -1074,6 +1120,26 @@ function subtitleName(name: string, lang: string): string {
   // for the language itself.
   const safe = lang.replace(/-orig$/, '').replace(/[^A-Za-z0-9_-]/g, '');
   return `${name.slice(0, dot)}.${safe}${name.slice(dot)}`;
+}
+
+/**
+ * Whether a section yt-dlp cut is the part asked for: readable, with a track, and within a
+ * second (or a tenth, for a long cut) of the length the range implies — when that length is
+ * known, from the range's end or the item's duration.
+ */
+export function sectionIsUsable(
+  probed:
+    | { readonly durationSeconds?: number; readonly video?: unknown; readonly audio?: unknown }
+    | undefined,
+  range: TrimRange,
+  itemDuration?: number,
+): boolean {
+  if (!probed || (!probed.video && !probed.audio)) return false;
+  const end = range.end ?? itemDuration;
+  if (end === undefined) return probed.durationSeconds === undefined || probed.durationSeconds > 0;
+  if (probed.durationSeconds === undefined) return false;
+  const expected = end - range.start;
+  return Math.abs(probed.durationSeconds - expected) <= Math.max(1, expected * 0.1);
 }
 
 async function findSingleFile(directory: string): Promise<string> {
