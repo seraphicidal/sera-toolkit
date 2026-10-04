@@ -141,6 +141,8 @@ export { classifyFailure, isEgressProblem, type FailureClass } from './extract/f
 export {
   ExtractionNodeRegistry,
   remoteBackend,
+  requiredFeatures,
+  type NodeFeature,
   type NodeStatus,
   type RemoteProgress,
   type RemoteTask,

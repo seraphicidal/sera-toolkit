@@ -28,6 +28,9 @@ const claimSchema = z.object({
   // A node says what kind of connection it is on. The default is the reason nodes
   // exist; an operator running a second cloud node says so and is routed accordingly.
   networkClass: z.enum(['datacenter', 'residential', 'unknown']).default('residential'),
+  // What it understands beyond a plain download (`NodeFeature`). A node from before this
+  // field sends nothing, and is then never handed a trim or subtitles it would ignore.
+  features: z.array(z.string().min(1).max(32)).max(20).default([]),
 });
 
 /**
@@ -188,13 +191,14 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
           });
         }
 
-        const { nodeId, providers, capacity, networkClass } = parsed.data;
+        const { nodeId, providers, capacity, networkClass, features } = parsed.data;
         const task = await extractionNodes.claim(
           nodeId,
           providers,
           capacity,
           config.extractionNodes.claimHoldMs,
           networkClass,
+          features,
         );
         if (!task) return reply.status(204).send();
         return reply.send(task);
