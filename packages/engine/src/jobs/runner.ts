@@ -10,6 +10,7 @@ import type {
 import { trimSuffix } from '@sera/contracts/types';
 import type { EngineConfig } from '../config.js';
 import { convert, probe, type ConversionSpec } from '../convert/ffmpeg.js';
+import { squareCover, tagAudio, TAGGABLE_AUDIO } from '../convert/tags.js';
 import { trimMedia } from '../convert/trim.js';
 import { seraError, SeraError } from '../errors.js';
 import { downloadDirect } from '../extract/direct-download.js';
@@ -240,13 +241,25 @@ export class JobRunner {
               ...(signal ? { signal } : {}),
             })
           : downloaded;
+        const finished =
+          used.kind === 'audio'
+            ? await this.tagOne({
+                input: converted,
+                resolved,
+                item,
+                workspace,
+                index,
+                ...(spec.imported ? { imported: true } : {}),
+                ...(signal ? { signal } : {}),
+              })
+            : converted;
 
         const name = dedupeFilename(
-          this.nameFor(spec, resolved, item, used, converted, totalFiles),
+          this.nameFor(spec, resolved, item, used, finished, totalFiles),
           taken,
         );
         const destination = workspace.outputPath(name);
-        await rename(converted, destination);
+        await rename(finished, destination);
         produced.push({ path: destination, name });
       }
     }
@@ -495,6 +508,93 @@ export class JobRunner {
     });
 
     return findSingleFile(scratch);
+  }
+
+  /**
+   * Titles, artist, album and cover art for an audio file (see convert/tags.ts).
+   *
+   * Best effort: a thumbnail that will not download or a tag FFmpeg refuses leaves the file
+   * as it was, because a working MP3 without its cover is still the thing that was asked
+   * for. An imported post gets tags but no cover; its pictures are Instagram's, fetched
+   * only under the rules the import was signed with.
+   */
+  private async tagOne(args: {
+    input: string;
+    resolved: ResolvedMedia;
+    item: ResolvedItem;
+    workspace: Workspace;
+    index: number;
+    imported?: boolean;
+    signal?: AbortSignal;
+  }): Promise<string> {
+    const { config, logger } = this.deps;
+    const extension = extname(args.input).slice(1).toLowerCase();
+    if (!TAGGABLE_AUDIO.has(extension)) return args.input;
+
+    const dir = join(args.workspace.scratchDir, `sel-${args.index}`);
+    const tools = {
+      ffmpegPath: config.ffmpegPath,
+      ffprobePath: config.ffprobePath,
+      timeoutMs: config.jobTimeoutSeconds * 1000,
+      ...(args.signal ? { signal: args.signal } : {}),
+    };
+    const { item, resolved } = args;
+    const artist = item.tags?.artist ?? resolved.author;
+    const title = item.tags?.track ?? item.title ?? resolved.title;
+
+    // The picked thumbnail first, then the one yt-dlp verified, then the post's own: the
+    // first that downloads and crops becomes the cover.
+    const candidates = args.imported
+      ? []
+      : [...new Set([item.thumbnailUrl, item.thumbnailFallbackUrl, resolved.thumbnailUrl])].filter(
+          (url): url is string => Boolean(url),
+        );
+    let coverPath: string | undefined;
+    for (const [attempt, thumbnail] of candidates.entries()) {
+      try {
+        const source = join(dir, `thumbnail-${attempt}.img`);
+        await downloadDirect({
+          url: thumbnail,
+          destination: source,
+          dispatcher: this.deps.resolver.dispatcher,
+          maxBytes: 10 * 1024 * 1024,
+          timeoutMs: 30_000,
+          ...(args.signal ? { signal: args.signal } : {}),
+        });
+        coverPath = join(dir, 'cover.jpg');
+        await squareCover(source, coverPath, tools);
+        break;
+      } catch (error) {
+        coverPath = undefined;
+        logger.info(
+          { jobId: args.workspace.jobId, attempt, err: SeraError.from(error).detail },
+          'a thumbnail could not be used as cover art',
+        );
+      }
+    }
+
+    const output = join(dir, `tagged.${extension}`);
+    try {
+      await tagAudio({
+        ...tools,
+        input: args.input,
+        output,
+        scratchDir: dir,
+        tags: {
+          ...(title ? { title } : {}),
+          ...(artist ? { artist } : {}),
+          ...(item.tags?.album ? { album: item.tags.album } : {}),
+        },
+        ...(coverPath ? { coverPath } : {}),
+      });
+      return output;
+    } catch (error) {
+      logger.warn(
+        { jobId: args.workspace.jobId, err: SeraError.from(error).detail },
+        'audio left untagged: tagging failed',
+      );
+      return args.input;
+    }
   }
 
   private async convertOne(args: {

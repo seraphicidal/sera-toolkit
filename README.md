@@ -22,6 +22,8 @@ Paste a link  →  detect the source  →  read what is there  →  choose  → 
 - **Honest formats.** Video in MP4, WebM or MOV — whichever the source remuxes into
   without re-encoding — at the resolutions the site actually publishes. Audio as MP3,
   M4A, Opus or WAV. Images untouched. Short videos convertible to GIF.
+- **Audio that knows what it is.** MP3, M4A and Opus files carry the title, the artist (or
+  uploader) and the album where the source says, and the thumbnail as square cover art.
 - **Just the part you want.** Under "More options", give a start and an end (m:ss) to cut a
   single video or audio file down to that part — accurate to the second, and only that part is
   downloaded where the source allows it.
