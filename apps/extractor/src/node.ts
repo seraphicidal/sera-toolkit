@@ -209,7 +209,7 @@ export class ExtractionNode {
 
       if (task.kind === 'resolve') {
         const media = await this.resolver.resolveCanonical(url, task.providerId, abort.signal);
-        await this.post(`/internal/extraction/${task.id}/resolved`, { media });
+        await this.report(`/internal/extraction/${task.id}/resolved`, { media });
         this.logger.info(
           {
             task: task.id,
@@ -295,7 +295,7 @@ export class ExtractionNode {
         const path = await this.workspaces.resolveFile(jobId, file.name);
         await this.upload(task.id, file.name, file.mimeType, path);
       }
-      await this.post(`/internal/extraction/${task.id}/complete`, {});
+      await this.report(`/internal/extraction/${task.id}/complete`, {});
     } finally {
       // Nothing stays on the node. It is someone's own machine.
       await this.workspaces.destroy(jobId).catch(() => undefined);
@@ -343,6 +343,20 @@ export class ExtractionNode {
       if (body.cancelled && !abort.signal.aborted) abort.abort();
     } catch {
       // A missed progress report is not a reason to abandon the work.
+    }
+  }
+
+  /**
+   * Sends a result, and makes sure it arrived.
+   *
+   * A result the server refused is not a finished task. Treated as one, the node fell silent,
+   * the server's lease handed the task out again, and the visitor waited for nothing. Thrown
+   * here, it becomes a `failed` report the visitor sees.
+   */
+  private async report(path: string, body: unknown): Promise<void> {
+    const response = await this.post(path, body);
+    if (!response.ok) {
+      throw new Error(`the server refused ${path.split('/').pop()} (HTTP ${response.status})`);
     }
   }
 
