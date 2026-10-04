@@ -322,6 +322,33 @@ Pausing the server also holds back everything else merged to `main`, not only yt
 come from `deploy/systemd/` and are installed by `deploy/install-timers.sh`, which
 provisioning runs; run it again after a release changes them.
 
+### Alerts on your phone
+
+`sera-alert.timer` checks the deployment every 5 minutes and sends a push notification
+through [ntfy.sh](https://ntfy.sh) when something **changes** — once when it breaks and once
+when it recovers, never on every check. Each change has to be seen twice in a row (ten
+minutes) first, so a deploy's restart or a laptop node reconnecting does not page you. It
+watches five things:
+
+| Alert                      | Means                                                                   |
+| -------------------------- | ----------------------------------------------------------------------- |
+| The API is not answering   | `/health` does not answer through Caddy                                 |
+| No extraction node is live | YouTube will fail until a node reconnects                               |
+| Health check failing       | yt-dlp, FFmpeg, storage or the queue reports an error                   |
+| Auto-update failed         | this server rolled a release back (see `journalctl -u sera-update`)     |
+| Daily yt-dlp update failed | the GitHub workflow failed; its pull request is left open with the logs |
+
+**Set it up.** Pick a topic nobody can guess — anyone who knows it can read the alerts:
+
+```bash
+echo "SERA_ALERT_NTFY_TOPIC=sera-$(openssl rand -hex 16)" | sudo tee -a /opt/sera/.env
+sudo /opt/sera/deploy/alert-check.sh --test
+```
+
+Then install the ntfy app (Android or iOS), tap **+**, and subscribe to that topic on the
+default server, `ntfy.sh`. The test notification should arrive within seconds. To stop
+alerts, remove the line from `.env` or `sudo systemctl disable --now sera-alert.timer`.
+
 ### Troubleshooting
 
 | Symptom                              | Cause                                                                                                                             |

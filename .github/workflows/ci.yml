@@ -157,6 +157,8 @@ jobs:
               "SERA_REPO",
               "SERA_DIR",
               "SERA_PUBLIC_IP",
+              "SERA_ALERT_NTFY_TOPIC",
+              "SERA_ALERT_REPO",
             ]);
             const files = execSync(
               "git ls-files .env.example README.md deploy docker",
