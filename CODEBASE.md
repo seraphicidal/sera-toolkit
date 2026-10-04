@@ -1686,7 +1686,9 @@ deflated. Progress is reported once per entry.
   - The queue is named **`sera-jobs`** — BullMQ rejects a `:` in queue names.
   - Records are JSON at `sera:job:<id>`, expiring after 24 h. Each client's active job ids
     live in the set `sera:client:<key>`, and updates fan out over the pub/sub channel
-    `sera:job-updates` to local listeners.
+    `sera:job-updates` to local listeners. The channel subscription is made in the
+    constructor; `ready()` resolves once Redis has confirmed it, for a backend that is used
+    the moment it is created (the live tests' second process).
   - `submit` writes the record, adds the id to the client set, and enqueues `download` with
     BullMQ `jobId` = our id, `attempts: 1` (the pipeline is not idempotent), completed jobs
     removed after 1 h or beyond 1000, failed ones after 24 h.
