@@ -80,6 +80,33 @@ More than one machine can be a node at once. Give each its own `SERA_NODE_ID` �
 will take work for any provider, which is rarely what you want — naming `youtube` keeps
 your connection out of everything the server can already do for itself.
 
+## Keeping it running and up to date
+
+yt-dlp is the part that goes stale: YouTube changes, and a node with last month's yt-dlp
+fails links the server could pass to it. A node should refresh its own copy, to the
+version the deployment runs — the one pinned on `main`:
+
+```bash
+npm run tools:fetch -- --only=ytdlp --pin-from=main
+```
+
+That reads the pin from `main`'s `scripts/tools.manifest.json` on GitHub, downloads that
+release, and checks it against yt-dlp's published checksums before it replaces anything.
+It does nothing when the installed version (recorded in `.tools/yt-dlp.version`) already
+matches, so it is cheap to run often. The checkout itself is not touched.
+
+**On Windows**, `deploy/node-windows/` has what the laptop node runs. Copy the folder out
+of the checkout (for example to `%USERPROFILE%\.sera-node`), set `REPO` in
+`run-node.cmd`, and run `install-task.ps1` once, elevated. The scheduled task starts the
+node at boot, at logon and from a five-minute watchdog, and restarts it 15 seconds after any
+exit. Each start refreshes yt-dlp before the node takes work, and a background loop
+refreshes it again every 24 hours; the log is `ytdlp-update.log` beside the scripts. The
+binary can be replaced while the node runs — the old one is renamed aside, which Windows
+allows for an executable in use — and the next job uses the new one.
+
+To pause the refresh, create `ytdlp-updates.paused` next to `run-node.cmd`; delete it to
+resume. [ORACLE.md](ORACLE.md#automatic-updates) covers pausing the rest of the chain.
+
 ## What it will and will not be asked to do
 
 The router sends work to a node only when the server's own attempt failed in a way another
