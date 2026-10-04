@@ -53,7 +53,7 @@ const CASES = [
   },
   {
     id: 'vimeo',
-    url: 'https://vimeo.com/347119375',
+    url: 'https://vimeo.com/22439234',
     expect: { kinds: ['video'] },
     download: [{ kind: 'video' }],
   },
@@ -166,6 +166,8 @@ const CASES = [
   },
 ];
 
+const CLIENT_KEY = 'check-providers';
+
 const args = process.argv.slice(2);
 const wantDownloads = args.includes('--download');
 const only = args.filter((arg) => !arg.startsWith('--'));
@@ -235,7 +237,9 @@ function pickOption(info, want) {
 async function runJob(info, want) {
   const option = pickOption(info, want);
   if (!option) return { ok: false, detail: `no option matching ${JSON.stringify(want)}` };
-  const job = await engine.jobs.create({ infoId: info.id, optionIds: [option.id] });
+  // A client key, as the API passes one for every visitor: it is what per-client limits count
+  // against. One key for the whole run, so the matrix is limited like a single visitor.
+  const job = await engine.jobs.create({ infoId: info.id, optionIds: [option.id] }, CLIENT_KEY);
 
   const deadline = Date.now() + 5 * 60_000;
   let state = job;

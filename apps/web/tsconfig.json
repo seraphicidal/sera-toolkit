@@ -20,8 +20,8 @@
     "noFallthroughCasesInSwitch": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
+    // Redundant under TypeScript 6, but `next build` writes it back if it is missing.
     "esModuleInterop": true,
-    "allowSyntheticDefaultImports": true,
     // No baseUrl: it is deprecated in TypeScript 6, and paths resolve relative to this
     // file without it.
     "paths": {

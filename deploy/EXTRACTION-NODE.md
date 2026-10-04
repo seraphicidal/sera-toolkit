@@ -59,12 +59,13 @@ npm run build
 
 SERA_API_URL=https://your-deployment \
 SERA_EXTRACTION_NODE_TOKEN=<the same secret> \
-SERA_NODE_ID=home \
+SERA_NODE_ID=laptop \
 SERA_NODE_PROVIDERS=youtube \
 node apps/extractor/dist/index.js
 ```
 
 It needs `yt-dlp` and `ffmpeg`; `npm run tools:fetch` puts pinned copies in `.tools/`.
+`SERA_NODE_ID` defaults to `residential`, which is fine for exactly one node.
 
 The same settings can live in `.env.node.local` at the repository root instead — git
 ignores it, and it is the form that works unchanged in PowerShell:

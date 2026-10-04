@@ -14,7 +14,7 @@ import { ExtractionNode } from './node.js';
  *
  *   SERA_API_URL=https://your-deployment
  *   SERA_EXTRACTION_NODE_TOKEN=<the same secret the API has>
- *   SERA_NODE_ID=home            (optional)
+ *   SERA_NODE_ID=laptop          (optional; default residential, one per machine)
  *   SERA_NODE_PROVIDERS=youtube  (optional; empty means every provider)
  *   SERA_NODE_NETWORK_CLASS=residential  (optional; datacenter for a second cloud node)
  */

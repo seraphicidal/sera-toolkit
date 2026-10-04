@@ -223,7 +223,3 @@ export async function magic(path: string, length = 12): Promise<Buffer> {
   const buffer = await readFile(path);
   return buffer.subarray(0, length);
 }
-
-export function toolsAvailable(): boolean {
-  return existsSync(ffmpegPath) || ffmpegPath !== 'ffmpeg';
-}
