@@ -1,8 +1,16 @@
 import { mkdir, open, readdir, rename, rm, stat } from 'node:fs/promises';
-import { basename, dirname, join } from 'node:path';
-import type { JobProgress, JobResult, JobState, PackagingMode } from '@sera/contracts/types';
+import { basename, dirname, extname, join } from 'node:path';
+import type {
+  JobProgress,
+  JobResult,
+  JobState,
+  PackagingMode,
+  TrimRange,
+} from '@sera/contracts/types';
+import { trimSuffix } from '@sera/contracts/types';
 import type { EngineConfig } from '../config.js';
 import { convert, probe, type ConversionSpec } from '../convert/ffmpeg.js';
+import { trimMedia } from '../convert/trim.js';
 import { seraError, SeraError } from '../errors.js';
 import { downloadDirect } from '../extract/direct-download.js';
 import { download as ytdlpDownload } from '../extract/ytdlp.js';
@@ -51,6 +59,8 @@ export interface JobSpec {
   readonly packaging: PackagingMode;
   /** User-supplied filename stem. Sanitized before use. */
   readonly filename?: string;
+  /** Keep only this part of the one item, in seconds. Single-item video and audio only. */
+  readonly trim?: TrimRange;
   /**
    * Present when the job came from a post the visitor's own browser read.
    *
@@ -150,6 +160,9 @@ export class JobRunner {
           providerId: spec.provider,
           planKeys: matched.map(({ plan }) => planKey(plan)),
           ...(spec.filename ? { filename: spec.filename } : {}),
+          // The node cuts the file itself: shipping the whole thing to cut it here would
+          // spend its upload on what is thrown away.
+          ...(spec.trim ? { trim: spec.trim } : {}),
         },
         {
           onProgress: (progress) =>
@@ -210,6 +223,7 @@ export class JobRunner {
           report,
           fileProgress,
           ...(spec.imported ? { imported: true } : {}),
+          ...(spec.trim ? { trim: spec.trim } : {}),
           ...(signal ? { signal } : {}),
         });
         if (used !== plan) delivered.push({ requested: plan.label, actual: used.label });
@@ -301,6 +315,7 @@ export class JobRunner {
     fileProgress: (fraction: number, extra?: Partial<JobProgress>) => JobProgress;
     /** The item came from a post the visitor's browser read. */
     imported?: boolean;
+    trim?: TrimRange;
     signal?: AbortSignal;
   }): Promise<{ path: string; plan: DownloadPlan }> {
     const candidates = [args.plan, ...lowerQualityAlternatives(args.item, args.plan)];
@@ -339,6 +354,7 @@ export class JobRunner {
     report: ReportFn;
     fileProgress: (fraction: number, extra?: Partial<JobProgress>) => JobProgress;
     imported?: boolean;
+    trim?: TrimRange;
     signal?: AbortSignal;
   }): Promise<string> {
     const { config } = this.deps;
@@ -391,7 +407,23 @@ export class JobRunner {
       // and either can be wrong — Bluesky's CDN serves WebP from URLs ending in `@jpeg`.
       // Renaming here is enough to correct everything downstream, because the produced
       // file's own extension is what names the download.
-      return renameToActualFormat(destination, plan.container);
+      const fetched = await renameToActualFormat(destination, plan.container);
+      if (!args.trim) return fetched;
+
+      // A direct file is cut after it arrives; yt-dlp, below, only fetches the part asked for.
+      report({ state: 'converting', step: 'Trimming', progress: fileProgress(DOWNLOAD_SHARE) });
+      const trimmed = join(scratch, `trimmed${extname(fetched)}`);
+      await trimMedia({
+        input: fetched,
+        output: trimmed,
+        range: args.trim,
+        ffmpegPath: config.ffmpegPath,
+        ffprobePath: config.ffprobePath,
+        timeoutMs: config.jobTimeoutSeconds * 1000,
+        ...(signal ? { signal } : {}),
+      });
+      await rm(fetched, { force: true });
+      return trimmed;
     }
 
     const fetchPlan = plan.fetch;
@@ -424,6 +456,19 @@ export class JobRunner {
       ...(args.resolved.items.length > 1 ? { playlistItem: item.index + 1 } : {}),
       ...(plan.filesizeBytes ? { expectedTotalBytes: plan.filesizeBytes } : {}),
       ...(fetchPlan.extractorArgs ? { extractorArgs: fetchPlan.extractorArgs } : {}),
+      ...(args.trim
+        ? {
+            sections: {
+              start: args.trim.start,
+              ...(args.trim.end !== undefined ? { end: args.trim.end } : {}),
+              // A copy can only begin where the stream lets it: a video's keyframe, possibly
+              // seconds early, and — measured on YouTube's audio-only streams, where a copy
+              // from 0:03 came back starting at 0:00 — an audio stream's fragment. A cut from
+              // the very start is accurate as a copy; any other is re-encoded around the cut.
+              forceKeyframes: args.trim.start > 0,
+            },
+          }
+        : {}),
       ...(signal ? { signal } : {}),
       onProgress: (progress) => {
         if (progress.postprocessor && progress.postprocessor !== sawPostprocessor) {
@@ -504,16 +549,21 @@ export class JobRunner {
     totalFiles: number,
   ): string {
     const extension = producedPath.split('.').pop() ?? plan.container;
+    // A trimmed file says which part it is, so two cuts of one video do not look alike.
+    const suffix = spec.trim ? trimSuffix(spec.trim, item.duration) : '';
     if (spec.filename && totalFiles === 1) {
-      return `${sanitizeStem(spec.filename)}.${extension}`;
+      return `${sanitizeStem(spec.filename)}${suffix}.${extension}`;
     }
-    return mediaFilename({
+    const name = mediaFilename({
       author: resolved.author,
       title: item.title ?? resolved.title,
       container: extension,
       // A collection numbers its parts; a single file does not need a "(1)".
       ...(totalFiles > 1 || resolved.items.length > 1 ? { index: item.index + 1 } : {}),
     });
+    if (!suffix) return name;
+    const dot = name.lastIndexOf('.');
+    return `${name.slice(0, dot)}${suffix}${name.slice(dot)}`;
   }
 
   private async package(

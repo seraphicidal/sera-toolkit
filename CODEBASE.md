@@ -419,6 +419,16 @@ page stop guessing:
 | `browserImport`                  | A visitor's signed-in browser can read a post and hand it over (Instagram only).                                             |
 | `authRequiredFor?`               | Names the part of the provider that needs credentials this installation lacks, e.g. `['photo posts', 'carousels']`.          |
 
+**Trim** (in `types.ts`, so the web app can run it): `TrimRequest {start?, end?}` as typed,
+`TrimRange {start, end?}` in seconds, `TIMECODE_PATTERN` (`m:ss`, `mm:ss`, `h:mm:ss`),
+`parseTimecode`, `formatTimecode`, `MIN_TRIM_SECONDS` (1), and **`checkTrim(trim, duration?)`**
+— the one rule the form and the server share: at least one time; a missing start is 0 and a
+missing end is the end; the start before the end by at least a second; both inside the media
+when its length is known (an end up to a second past a rounded length counts as the end);
+and not the whole thing. It returns the range, with an end at the media's length dropped, or
+a sentence for the visitor. `trimSuffix(range, duration?)` is the filename's
+`-trim-0m10s-0m30s` (hours when needed, `-end` when the end is unknown).
+
 ### `src/schemas.ts`
 
 Runtime validation for everything that crosses the network; only the server imports it.
@@ -439,7 +449,9 @@ Runtime validation for everything that crosses the network; only the server impo
   candidates per list, duration ≤ 86,400 s, alt text ≤ 2,000, carousel ≤ 50 slides,
   username ≤ 64, full name ≤ 256, caption ≤ 10,000.
 - `createJobRequestSchema` — `infoId` ≤ 40,000 characters; 1–64 `optionIds` of ≤ 512
-  characters each; optional `packaging`; optional `filename` ≤ 200.
+  characters each; optional `packaging`; optional `filename` ≤ 200; optional `trim`
+  (`trimRequestSchema`: `start`/`end` matching `TIMECODE_PATTERN`, then `checkTrim` for order,
+  with its sentence as the issue message, which the API returns as the error).
 - **Drift guards** — type-level assertions that fail the build if a schema and its public
   type diverge. Unions are compared with an identity check (`Exact`). Object types are
   compared structurally (`SameShape`: same keys, same optional keys, same value types),
@@ -1599,7 +1611,16 @@ substituted?}`, clears the scratch directory, validates, and logs `job complete`
 
 **Naming** (`nameFor`): a user-supplied filename is used only for a single file, sanitized.
 Otherwise it is `mediaFilename(author, item title or post title, extension, index for
-collections)`, deduplicated case-insensitively.
+collections)`, deduplicated case-insensitively. A trimmed job's name gains `trimSuffix`
+before the extension.
+
+**Trimming** (`spec.trim`, one video or audio item): through yt-dlp, `fetchOne` passes
+`sections` — `--download-sections "*S-E"`, so only that part is fetched, plus
+`--force-keyframes-at-cuts` whenever the start is not 0, because a copy can only begin where
+the stream allows (a video's keyframe, or a fragment of a DASH audio stream — measured on
+YouTube, an audio copy from 0:03 came back starting at 0:00). A direct download is fetched
+whole and cut by `trimMedia` (§11.9) before any conversion. A job routed to a node carries
+`trim` in its task, and the node's runner does the cutting.
 
 **Packaging** (`package`):
 
@@ -1634,6 +1655,10 @@ This is the only place client input becomes a `JobSpec`.
      `maxItemsPerJob`, that the backend's waiting count is below `maxQueueDepth`
      (`QUEUE_FULL`), and that the client's active jobs are below the per-client cap
      (`RATE_LIMITED` "You already have downloads in progress.").
+     3a. A `trim` (`trimFor`) must have exactly one option, of kind video or audio, and pass
+     `checkTrim` against the item's length **from the option token's `d`**, signed when the
+     option was minted, so the client cannot lie about it. Refusals are `INVALID_URL` with
+     the rule's own sentence. The spec carries the range in seconds.
   4. Builds the spec, carrying the imported entries **only** from the signed token.
   5. Submits a `queued` record and logs `job queued`.
 - **`get(id)`**, and **`cancel(id)`**: if the job is not terminal, it aborts the in-process
@@ -1752,6 +1777,16 @@ stats_mode=diff, paletteuse bayer`) with `-loop 0`; defaults 15 fps and 480 px w
   capped at 99 until done. A non-zero exit is `CONVERSION_FAILED` with the stderr tail as
   detail.
 - `ffmpegVersion`.
+
+`convert/trim.ts` — **`trimMedia({input, output, range})`** cuts a file to part of itself in
+the same container. A stream copy when it is accurate — no video stream, a start of 0, or the
+last keyframe at or before the start (`keyframeAtOrBefore`, an ffprobe of key frames from up
+to 30 s before) within `KEYFRAME_TOLERANCE_SECONDS` (0.25) — and otherwise a re-encode:
+H.264/AAC (VP9/Opus for WebM). The audio is re-encoded with the video, because a copied
+audio stream keeps its own start: on the fixture, a 0:01–0:02 cut gave 1.0 s of picture over
+2.02 s of sound. Input seeking (`-ss` before `-i`), `-t` for the length, and
+`-avoid_negative_ts make_zero`. A failure is `CONVERSION_FAILED` "…trimming it failed."
+`copyIsAccurate(start, keyframe)` is the decision on its own.
 
 ---
 
@@ -2099,6 +2134,12 @@ analyzing → ready → submitting → running → done`.
     `ResultPanel`, `ProgressPanel`, a "Starting…" notice, or the choice panel (`ItemPicker`
     for collections, `FormatPicker`, `AdvancedOptions`, and a Download button showing the
     file count and total size, with `~` when estimated).
+  - **Trim** — `trimItem` is the selected item when exactly one video or audio file is
+    selected; `summarizeTrim` (`lib/trim.ts`) turns the two fields into a `TrimSummary`, an
+    invalid one disables Download, and a valid one is sent as `trim` and replaces the size on
+    the Download button with its estimate. `TrimFields` shows start and end (placeholders
+    `0:00` and the media's length, `inputMode="numeric"`), `aria-invalid` and a `role="alert"`
+    sentence when the times cannot be used, and otherwise "Keeps 0:20 · about 4.1 MB".
   - **`AdvancedOptions`** — a filename input (max 200) and, for several files, a packaging
     radio: Automatic, One ZIP, Separate files.
 - **Shared links and history in `Downloader`** (not in import mode): on mount it reads
@@ -2223,6 +2264,9 @@ analyzing → ready → submitting → running → done`.
     it is for (`yt-dlp` → "Media extractor", `extraction-nodes` → "YouTube", …) without the
     operator detail; only the Server line while the server is down.
   - `summarizeHealth` — the accessible name for each light.
+- **`trim.ts`** — `summarizeTrim(start, end, duration?, totalBytes?)`: `none` until a time is
+  typed, `invalid` with `checkTrim`'s sentence, or `ok` with the request, the seconds kept and
+  a size in proportion to them; `endPlaceholder(duration)`.
 - **`selection.ts`** — turns UI state into a job request:
   - `availableKinds` — in video, audio, image, gif order;
   - `optionsOfKind`, and `defaultOption` (recommended, else the first);
@@ -2582,6 +2626,7 @@ ffprobe. The counts below are tests collected by `vitest list`.
 
 | File                           | Tests | Covers                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | ------------------------------ | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `trim.test.ts`                 | 10    | Through the pipeline, measured with ffprobe: a video cut from 0:01 to 0:02 is 1 s and re-encoded (the fixture's only keyframe is at 0), a cut from the start stays an H.264 copy and is 2 s, an MP3 cut from 0:01 is 1 s; names gain `-trim-…`; refused: more than one item, an image, times past the end or out of order. Units: `copyIsAccurate`, the fixture keyframe found at 0, yt-dlp's section arguments, the node's own check of a task's range.                                                   |
 | `canary.test.ts`               | 8     | A working source downloaded through the API; a broken one reported by its error code while the run carries on; a stuck one stopped at its timeout; never rate-limited or cooled down with the token, while a visitor is; the exact token required; the case list (labels, YouTube present, nothing needing sign-in); the smallest option of a kind.                                                                                                                                                        |
 | `pipeline.test.ts`             | 23    | Direct links (options, proxied thumbnail, redirects, non-media refused, missing → unavailable); the generic page reader (declared media, robots.txt honoured, nothing invented); video download with both streams intact, naming from metadata, filename override; audio to a real MP3 and a lossless WAV, and refusing audio from a silent video; untouched images; GIF original and GIF→MP4; ZIP packaging, per-file serving, individual and forced-ZIP modes; SSE ending in `done`; monotonic progress. |
 | `api-security.test.ts`         | 22    | Scheme, credential and length refusal and malformed bodies; forged option tokens, options from another resolution, empty and oversized selections, forged thumbnail tokens; bad job ids and path traversal in file names; files served as non-executable attachments; no stack traces; ENOTFOUND as a typo; hardening headers; no echo of the source URL; clean 404s; health and readiness; `/api/info`; long thumbnail tokens accepted, forged ones refused.                                              |
@@ -2593,6 +2638,7 @@ ffprobe. The counts below are tests collected by `vitest list`.
 
 | File                                | Tests | Covers                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | ----------------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `../../contracts/src/trim.test.ts`  | 12    | Timecodes read and written (m:ss, mm:ss, h:mm:ss; anything else refused); `checkTrim` for a start, an end or both, an end at the reported length, times outside the media, out of order or too short, a trim that keeps everything, an unknown length; `trimSuffix`; the job schema accepting a trim and refusing a malformed or backwards one in words.                                                                                                                                                                                                                              |
 | `config.test.ts`                    | 3     | Per-provider resolve ceilings: their defaults and the shared fallback, 0 meaning the shared one, and negative, fractional or a shared 0 refused.                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `convert/bounds.test.ts`            | 2     | FFmpeg stops at the output ceiling; writes everything when under it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `extract/failure.test.ts`           | 14    | Each class distinction (network-fixable, stream vs page, login vs misconfiguration, gone/private/geo, bad link vs unsupported media, ours vs theirs, unknown → extractor bug); routing predicates; every contract error code mapped deliberately; live streams; queue-full vs source refusal.                                                                                                                                                                                                                                                                                         |
@@ -2637,6 +2683,7 @@ ffprobe. The counts below are tests collected by `vitest list`.
 | `apps/web/src/lib/bookmarklet.test.ts`             | 14    | A self-contained `javascript:` URL that loads and evaluates nothing, opens no popup and posts no message, uses the fragment, makes one request to Instagram only, targets its own origin, trims slides, caps text, refuses long URLs, diagnosable alerts that never contain a URL/cookie/body, correct shortcode decoding, post-only activation.                                                                                                                                   |
 | `apps/web/src/lib/csp-headers.test.ts`             | 8     | The `/import` COOP exception is scoped to exactly that path, changes only the opener policy, leaves every other header (and the default COOP) in force, and is ordered so it wins. The installable app adds no header rule; the manifest, icons and `/share` live under the strict policy (no `manifest-src`, nothing third-party, no `unsafe-eval`); the manifest names only same-origin paths and shares into `/share`. The `/api` rewrite waits at least 120 s on a silent API. |
 | `apps/web/src/lib/import-handshake.test.ts`        | 12    | `trustedImport` (origin, opener, shape); `readImportFragment` (accept and clear, empty posts allowed, off-CDN refusal without POSTing, video and nested checks, oversize refusal before decoding, version mismatch, malformed payloads cleared, wrong shapes).                                                                                                                                                                                                                     |
+| `apps/web/src/lib/trim.test.ts`                    | 6     | Nothing until a time is typed; the length kept and a size in proportion; a missing end running to the end; the server's own sentence for a bad time; what is unknown left out; the end placeholder.                                                                                                                                                                                                                                                                                |
 | `apps/web/src/lib/share.test.ts`                   | 14    | The url field first; YouTube's and TikTok's links inside their text; the title as a last resort; a non-web `url` skipped; sentence punctuation dropped and a link's own bracket kept; only http(s); the fragment round trip, and other fragments ignored. `isInstalledApp` on Android and iOS, in a browser tab, and where nothing can be asked.                                                                                                                                   |
 | `apps/web/src/lib/history.test.ts`                 | 9     | Newest first and one per job; the limit; clearing removes the key; storage that throws reads as empty and never throws; junk in the key; entries that would link off the site dropped; expiry, including an unreadable time; `timeAgo`.                                                                                                                                                                                                                                            |
 | `apps/web/src/lib/health.test.ts`                  | 13    | Green/amber/red from the report; unknown (not red) on a first failure; the last answer kept through one failure; red after two in a row, and only consecutive ones; recovery on the next report; proxy error bodies refused; visitor labels without operator detail; only the Server line while down; unknown checks kept; accessible names.                                                                                                                                       |

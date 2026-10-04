@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { TrimRange } from '@sera/contracts/types';
 import { seraError, type SeraError } from '../errors.js';
 import type { Logger } from '../logging.js';
 import type { ResolvedMedia } from '../providers/types.js';
@@ -28,6 +29,8 @@ export interface RemoteTask {
   /** For a job: which plan to produce, by the same key the local runner uses. */
   readonly planKeys?: readonly string[];
   readonly filename?: string;
+  /** For a job: the part of its one item to keep, in seconds. The node does the cutting. */
+  readonly trim?: TrimRange;
   readonly createdAt: number;
 }
 

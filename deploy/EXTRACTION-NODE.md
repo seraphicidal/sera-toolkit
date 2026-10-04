@@ -109,6 +109,9 @@ allows for an executable in use — and the next job uses the new one.
 To pause the refresh, create `ytdlp-updates.paused` next to `run-node.cmd`; delete it to
 resume. [ORACLE.md](ORACLE.md#automatic-updates) covers pausing the rest of the chain.
 
+A trimmed download is cut on the node too: the task says which part to keep, and only that
+part crosses the node's upload.
+
 ## What it will and will not be asked to do
 
 The router sends work to a node only when the server's own attempt failed in a way another

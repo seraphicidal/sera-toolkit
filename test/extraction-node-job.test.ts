@@ -1,6 +1,6 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -19,7 +19,7 @@ import {
 } from '@sera/engine';
 import { buildServer } from '../apps/api/src/server.js';
 import { ExtractionNode } from '../apps/extractor/src/node.js';
-import { ensureFixtures, ffmpegPath, ffprobePath } from './helpers/fixtures.js';
+import { ensureFixtures, ffmpegPath, ffprobePath, probeFile } from './helpers/fixtures.js';
 import { MediaServer } from './helpers/media-server.js';
 
 /**
@@ -244,6 +244,34 @@ describe('a multi-file job on an extraction node', () => {
     const names = entryNames(download.rawPayload);
     expect(names.sort()).toEqual(result.files!.map((file) => file.name).sort());
     expect(names.some((name) => name.endsWith('.zip'))).toBe(false);
+  });
+});
+
+describe('a trimmed job on an extraction node', () => {
+  it('is cut by the node, to the second, and named for the part kept', async () => {
+    await waitForNode();
+    const resolved = await app.inject({
+      method: 'POST',
+      url: '/api/media/info',
+      payload: { url: `${PLAYLIST}trim` },
+    });
+    expect(resolved.statusCode, resolved.body).toBe(200);
+    const info = resolved.json<MediaInfo>();
+
+    const job = await runJob({
+      infoId: info.id,
+      optionIds: [info.items[0]!.options[0]!.id],
+      trim: { start: '0:01', end: '0:02' },
+    });
+    expect(job.state, JSON.stringify(job.error)).toBe('ready');
+    expect(job.result!.filename).toMatch(/-trim-0m01s-0m02s\.mp4$/);
+
+    const download = await app.inject({ method: 'GET', url: job.result!.downloadPath });
+    const path = join(apiDir, 'trimmed-check.mp4');
+    await writeFile(path, download.rawPayload);
+    const media = await probeFile(path);
+    expect(media.durationSeconds).toBeGreaterThan(0.9);
+    expect(media.durationSeconds).toBeLessThan(1.15);
   });
 });
 

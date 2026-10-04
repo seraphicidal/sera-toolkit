@@ -356,3 +356,30 @@ describe('extraction node endpoints', () => {
     expect((await dispatched)?.code).toBe('PRIVATE_CONTENT');
   });
 });
+
+describe('the dispatch route a standalone worker uses', () => {
+  it("carries a job's trim to the node that claims it", async () => {
+    // The route validates its body against a list of fields; one left off is dropped without
+    // a word, and the node cuts nothing. This is the path the Oracle worker takes.
+    const dispatched = await app.inject({
+      method: 'POST',
+      url: '/internal/extraction/dispatch',
+      headers: auth,
+      payload: {
+        kind: 'job',
+        url: 'https://www.youtube.com/watch?v=aqz-KE-bpKQ',
+        providerId: 'youtube',
+        planKeys: ['video/mp4/1080p'],
+        trim: { start: 10, end: 30 },
+      },
+    });
+    expect(dispatched.statusCode, dispatched.body).toBeLessThan(300);
+
+    const claimed = await claim();
+    expect(claimed.statusCode).toBe(200);
+    expect(claimed.json<{ kind: string; trim?: unknown }>()).toMatchObject({
+      kind: 'job',
+      trim: { start: 10, end: 30 },
+    });
+  });
+});
