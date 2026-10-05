@@ -132,7 +132,8 @@ publishes for embeds — the first slide, reduced.
 
 The cookie stays on the node. A node with one tells the server only that it holds an
 Instagram session, and the server sends it the posts that need one. When several nodes hold
-one, whichever is online takes the post, so a laptop that is off leaves it to the phone.
+one, whichever is online takes the post, so a laptop that is off leaves it to the phone; and
+if the one that takes it fails — out of date, or its session expired — the next one is asked.
 
 **Get the cookie.** In a desktop browser signed in to instagram.com: open the developer tools
 (F12), then _Application_ (Chrome, Edge) or _Storage_ (Firefox) → _Cookies_ →

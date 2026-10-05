@@ -7,6 +7,7 @@ import {
   remoteBackend,
   remoteBackends,
   requiredFeatures,
+  sessionBackend,
 } from './remote.js';
 
 const media: ResolvedMedia = {
@@ -287,6 +288,48 @@ describe('a task that needs more than a download', () => {
         subtitles: { lang: 'en', auto: true, format: 'srt', only: true },
       }),
     ).toEqual(['trim', 'subtitles']);
+  });
+});
+
+describe('a post only a node holding an account can read', () => {
+  const account = ['instagram-session'] as const;
+  const post = new URL('https://www.instagram.com/p/DdybLuqCXSN/');
+
+  it('goes to another such node when the first fails, and not back to the first', async () => {
+    const nodes = registry();
+    nodes.register('phone', ['instagram'], 1, 'residential', [...account]);
+    nodes.register('laptop', ['instagram'], 1, 'residential', [...account]);
+    const resolving = sessionBackend(nodes, 'instagram-session').resolve(post, 'instagram');
+
+    // The phone, out of date, takes it and cannot read it.
+    const first = await nodes.claim('phone', ['instagram'], 1, 500, 'residential', [...account]);
+    expect(first?.requires).toEqual(['instagram-session']);
+    nodes.fail(first!.id, seraError('PROVIDER_AUTH_REQUIRED'));
+    await wait(10);
+
+    // It is offered to the laptop, and the phone is not given it again.
+    expect(
+      await nodes.claim('phone', ['instagram'], 1, 120, 'residential', [...account]),
+    ).toBeUndefined();
+    const second = await nodes.claim('laptop', ['instagram'], 1, 500, 'residential', [...account]);
+    expect(second?.avoid).toEqual(['phone']);
+    nodes.completeResolve(second!.id, { ...media, provider: 'instagram' });
+    await expect(resolving).resolves.toMatchObject({ provider: 'instagram' });
+  });
+
+  it('gives up when no other node holds an account, or the answer is final', async () => {
+    const nodes = registry();
+    nodes.register('phone', ['instagram'], 1, 'residential', [...account]);
+    const alone = sessionBackend(nodes, 'instagram-session').resolve(post, 'instagram');
+    const task = await nodes.claim('phone', ['instagram'], 1, 500, 'residential', [...account]);
+    nodes.fail(task!.id, seraError('PROVIDER_AUTH_REQUIRED'));
+    await expect(alone).rejects.toMatchObject({ code: 'PROVIDER_AUTH_REQUIRED' });
+
+    nodes.register('laptop', ['instagram'], 1, 'residential', [...account]);
+    const privatePost = sessionBackend(nodes, 'instagram-session').resolve(post, 'instagram');
+    const claimed = await nodes.claim('phone', ['instagram'], 1, 500, 'residential', [...account]);
+    nodes.fail(claimed!.id, seraError('PRIVATE_CONTENT'));
+    await expect(privatePost).rejects.toMatchObject({ code: 'PRIVATE_CONTENT' });
   });
 });
 

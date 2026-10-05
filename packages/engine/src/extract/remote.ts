@@ -1,3 +1,4 @@
+import { classifyFailure, isDefinitive } from './failure.js';
 import { randomUUID } from 'node:crypto';
 import type { TrimRange } from '@sera/contracts/types';
 import { seraError, type SeraError } from '../errors.js';
@@ -37,6 +38,8 @@ export interface RemoteTask {
    * stays on the node.
    */
   readonly requires?: readonly NodeFeature[];
+  /** Nodes not to give it to: those that already tried it and could not. */
+  readonly avoid?: readonly string[];
   /** For a job: a subtitle track to embed or deliver, fetched by the node with the media. */
   readonly subtitles?: {
     readonly lang: string;
@@ -104,6 +107,8 @@ interface Pending {
   /** Files uploaded so far for a `job` task, in the order the node sent them. */
   readonly files: RemoteFile[];
   readonly onProgress?: (progress: RemoteProgress) => void;
+  /** Told which node took it, so a caller can try another if this one fails. */
+  readonly onClaimed?: (nodeId: string) => void;
   readonly timer: NodeJS.Timeout;
   cancelled: boolean;
   claimedAt?: number;
@@ -147,10 +152,14 @@ export interface RemoteExtraction {
   hasHealthyNode(networkClass?: NetworkClass): boolean;
   networkClasses(): NetworkClass[];
   /** Whether a live node declared this feature — and, given one, takes this provider. */
-  hasFeature(feature: NodeFeature, providerId?: string): boolean;
+  hasFeature(feature: NodeFeature, providerId?: string, except?: readonly string[]): boolean;
   dispatch(
     task: Omit<RemoteTask, 'id' | 'createdAt'>,
-    options?: { onProgress?: (progress: RemoteProgress) => void; signal?: AbortSignal },
+    options?: {
+      onProgress?: (progress: RemoteProgress) => void;
+      onClaimed?: (nodeId: string) => void;
+      signal?: AbortSignal;
+    },
   ): Promise<ResolvedMedia>;
   dispatchJob(
     task: Omit<RemoteTask, 'id' | 'createdAt'>,
@@ -237,6 +246,7 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
   private accepts(node: NodeRecord, task: RemoteTask): boolean {
     if (node.providers.length && !node.providers.includes(task.providerId)) return false;
     if (task.networkClass && task.networkClass !== node.networkClass) return false;
+    if (task.avoid?.includes(node.id)) return false;
     if (!requiredFeatures(task).every((feature) => node.features.includes(feature))) return false;
     return this.inFlightFor(node.id) < node.capacity;
   }
@@ -353,9 +363,10 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
     }));
   }
 
-  hasFeature(feature: NodeFeature, providerId?: string): boolean {
+  hasFeature(feature: NodeFeature, providerId?: string, except: readonly string[] = []): boolean {
     return this.live().some(
       (node) =>
+        !except.includes(node.id) &&
         node.features.includes(feature) &&
         (providerId === undefined || !node.providers.length || node.providers.includes(providerId)),
     );
@@ -391,7 +402,11 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
   /** Queues a resolve and waits for a node to answer it. */
   dispatch(
     task: Omit<RemoteTask, 'id' | 'createdAt'>,
-    options: { onProgress?: (progress: RemoteProgress) => void; signal?: AbortSignal } = {},
+    options: {
+      onProgress?: (progress: RemoteProgress) => void;
+      onClaimed?: (nodeId: string) => void;
+      signal?: AbortSignal;
+    } = {},
   ): Promise<ResolvedMedia> {
     return this.enqueue(task, options).then((outcome) => {
       if (!outcome.media) {
@@ -434,7 +449,11 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
 
   private enqueue(
     task: Omit<RemoteTask, 'id' | 'createdAt'>,
-    options: { onProgress?: (progress: RemoteProgress) => void; signal?: AbortSignal } = {},
+    options: {
+      onProgress?: (progress: RemoteProgress) => void;
+      onClaimed?: (nodeId: string) => void;
+      signal?: AbortSignal;
+    } = {},
   ): Promise<{ media?: ResolvedMedia; files?: readonly RemoteFile[] }> {
     const full: RemoteTask = { ...task, id: newTaskId(), createdAt: Date.now() };
 
@@ -474,6 +493,7 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
           task: full,
           settle: finish,
           ...(options.onProgress ? { onProgress: options.onProgress } : {}),
+          ...(options.onClaimed ? { onClaimed: options.onClaimed } : {}),
           files: [],
           timer,
           cancelled: false,
@@ -520,6 +540,7 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
     if (pending) {
       pending.claimedAt = Date.now();
       pending.claimedBy = nodeId;
+      pending.onClaimed?.(nodeId);
       this.renew(pending);
     }
   }
@@ -641,10 +662,30 @@ export function sessionBackend(
       return registry.availableProviders();
     },
     isHealthy: () => registry.hasFeature(feature),
-    resolve: (url, providerId, signal) =>
-      registry.dispatch(
-        { kind: 'resolve', url: url.toString(), providerId, requires: [feature] },
-        signal ? { signal } : {},
-      ),
+    // A node that fails without a final answer — out of date, or its session expired — is
+    // not asked again for this post; the next node holding the session is, while there is
+    // one. A phone on old code must not stand between a post and a laptop that can read it.
+    resolve: async (url, providerId, signal) => {
+      const tried: string[] = [];
+      for (;;) {
+        let claimedBy: string | undefined;
+        try {
+          return await registry.dispatch(
+            {
+              kind: 'resolve',
+              url: url.toString(),
+              providerId,
+              requires: [feature],
+              ...(tried.length ? { avoid: [...tried] } : {}),
+            },
+            { onClaimed: (nodeId) => (claimedBy = nodeId), ...(signal ? { signal } : {}) },
+          );
+        } catch (error) {
+          if (!claimedBy || isDefinitive(classifyFailure(error))) throw error;
+          tried.push(claimedBy);
+          if (!registry.hasFeature(feature, providerId, tried)) throw error;
+        }
+      }
+    },
   };
 }
