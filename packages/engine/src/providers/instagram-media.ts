@@ -74,17 +74,23 @@ export async function oembedFor(
   return JSON.parse(body) as InstagramOembed;
 }
 
-/** oEmbed answers anonymously and is the only place the numeric id is published. */
-export async function mediaIdFor(
-  shortcode: string,
-  fetchText: (url: URL, maxBytes?: number) => Promise<{ body: string }>,
-): Promise<string> {
-  const oembed = await oembedFor(new URL(`https://www.instagram.com/p/${shortcode}/`), fetchText);
-  if (typeof oembed.media_id !== 'string') {
-    throw seraError('MEDIA_UNAVAILABLE', { detail: 'instagram: oembed carried no media id' });
+const SHORTCODE_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+
+/**
+ * The numeric media id (`pk`) a post's shortcode encodes: its first eleven characters are
+ * the id in base 64 over `A–Z a–z 0–9 - _`. Computed rather than asked of oEmbed, which
+ * answers 400 for some public posts — measured, a four-photo carousel whose media endpoint
+ * served it to a session — and so made the session route fail before it started. Agrees
+ * with oEmbed's `media_id` wherever oEmbed answers.
+ */
+export function mediaIdFromShortcode(shortcode: string): string {
+  let id = 0n;
+  for (const character of shortcode.slice(0, 11)) {
+    const digit = SHORTCODE_ALPHABET.indexOf(character);
+    if (digit < 0) throw seraError('UNSUPPORTED_SOURCE', { detail: 'instagram: bad shortcode' });
+    id = id * 64n + BigInt(digit);
   }
-  // `<pk>_<userId>`; the media endpoint wants the pk.
-  return oembed.media_id.split('_')[0] ?? oembed.media_id;
+  return id.toString();
 }
 
 /**

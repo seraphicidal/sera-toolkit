@@ -6,7 +6,7 @@ import type { ExtractionStrategy } from '../extract/strategy.js';
 import {
   coverItemFrom,
   itemsFrom,
-  mediaIdFor,
+  mediaIdFromShortcode,
   oembedFor,
   sessionHeaders,
   shortcodeFrom,
@@ -100,9 +100,7 @@ export class InstagramProvider extends YtdlpProvider {
     const shortcode = shortcodeFrom(url);
     if (!shortcode) throw seraError('UNSUPPORTED_SOURCE', { detail: 'instagram: no shortcode' });
 
-    const mediaId = await mediaIdFor(shortcode, (endpoint, maxBytes) =>
-      context.fetchText(endpoint, maxBytes),
-    );
+    const mediaId = mediaIdFromShortcode(shortcode);
 
     const endpoint = new URL(`https://www.instagram.com/api/v1/media/${mediaId}/info/`);
     const { body } = await context.fetchText(endpoint, 4 * 1024 * 1024, {

@@ -381,7 +381,27 @@ describe('a post only an account can read', () => {
     });
   });
 
-  it('is not asked when no such node is connected, or for any other failure', async () => {
+  it('is asked however the extractor described the photo post', async () => {
+    for (const described of [
+      seraError('UNSUPPORTED_SOURCE', { detail: 'There is no video in this post' }),
+      // What the live log showed for one photo post: yt-dlp's "No video formats found".
+      seraError('MEDIA_UNAVAILABLE', { detail: 'ERROR: [Instagram] x: No video formats found!' }),
+    ]) {
+      const node = backend('instagram-session', { result: 'ok' });
+      const router = new ExtractionRouter({
+        primary: backend('oracle', { result: described }),
+        logger: silentLogger(),
+        fallbacks: () => [],
+        capabilitiesOf: caps(),
+        authenticated: () => node,
+      });
+      await expect(router.resolve(instagram, 'instagram')).resolves.toMatchObject({
+        backend: 'instagram-session',
+      });
+    }
+  });
+
+  it('is not asked when no such node is connected, or for a final answer', async () => {
     const offline = backend('instagram-session', { healthy: false });
     await expect(route(offline).resolve(instagram, 'instagram')).rejects.toMatchObject({
       code: 'PROVIDER_AUTH_REQUIRED',
