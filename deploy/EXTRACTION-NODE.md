@@ -115,12 +115,16 @@ part crosses the node's upload.
 Subtitles are fetched on the node as well, from the same network as the video: embedded in
 it, or as an `.srt`/`.vtt` file uploaded beside it or on its own.
 
+So is a choice of slides: picking only some of a carousel's photos sends the node which ones.
+
 A node says which of these it understands each time it asks for work, and a trimmed or
-subtitled job only goes to a node that said so: one running older code would ignore the
-request and send back the whole, plain video. Such a node still takes everything else, so
+subtitled job, or one picking some slides, only goes to a node that said so: one running older
+code would ignore the request and send back the whole, plain video, or the first slide in
+place of the one picked. Such a node still takes everything else, so
 nothing breaks while it is out of date — but update it (`git pull`, build, restart; on a
 phone, run `setup.sh` again) so it can take those jobs too. While no connected node can, a visitor asking for a trim or subtitles from that
-source is told so at once, and the full download still works.
+source is told so at once, and the full download still works; for slides, selecting all of
+them still works.
 
 ## Instagram photo posts and carousels
 

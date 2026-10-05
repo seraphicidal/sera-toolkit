@@ -29,6 +29,12 @@ export interface RemoteTask {
   readonly networkClass?: NetworkClass;
   /** For a job: which plan to produce, by the same key the local runner uses. */
   readonly planKeys?: readonly string[];
+  /**
+   * For a job: the item each plan key belongs to, in the same order. Without it a node takes
+   * the n-th key as the n-th item, so the last slide of a carousel, picked on its own, came
+   * back as the first.
+   */
+  readonly items?: readonly RemoteTaskItem[];
   readonly filename?: string;
   /** For a job: the part of its one item to keep, in seconds. The node does the cutting. */
   readonly trim?: TrimRange;
@@ -50,21 +56,30 @@ export interface RemoteTask {
   readonly createdAt: number;
 }
 
+/** One selected item of a job, as the resolution that offered it numbered it. */
+export interface RemoteTaskItem {
+  readonly index: number;
+  readonly sourceId?: string;
+}
+
 /**
  * What a job can ask of a node beyond downloading, each a field a node from before it was
  * added would not know to read. Such a node would not refuse the task; it would ignore the
  * field and deliver the wrong file — the whole video for a trim, no subtitles for an embed —
  * so a node says which it understands, and a task needing one only goes to a node that does.
  */
-export type NodeFeature = 'trim' | 'subtitles' | 'instagram-session';
+export type NodeFeature = 'trim' | 'subtitles' | 'items' | 'instagram-session';
 
 /** The features a task cannot be done correctly without. */
 export function requiredFeatures(
-  task: Pick<RemoteTask, 'trim' | 'subtitles' | 'requires'>,
+  task: Pick<RemoteTask, 'trim' | 'subtitles' | 'items' | 'requires'>,
 ): NodeFeature[] {
   const required: NodeFeature[] = [...(task.requires ?? [])];
   if (task.trim) required.push('trim');
   if (task.subtitles) required.push('subtitles');
+  // A node that does not read `items` pairs the n-th key with the n-th item, which is right
+  // exactly when that is what was picked: one video, or every slide in order.
+  if (task.items?.some((item, position) => item.index !== position)) required.push('items');
   return required;
 }
 
@@ -434,7 +449,11 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
     ) {
       return Promise.reject(
         seraError('PROVIDER_UNAVAILABLE', {
-          message: `${required.includes('trim') ? 'Trimming' : 'Subtitles'} cannot be done for this source right now. The full download still works.`,
+          message: required.includes('trim')
+            ? 'Trimming cannot be done for this source right now. The full download still works.'
+            : required.includes('subtitles')
+              ? 'Subtitles cannot be done for this source right now. The full download still works.'
+              : 'Downloading only some items of this post cannot be done right now. Selecting all of them still works.',
           detail: `remote: no connected node declares ${required.join(', ')}`,
         }),
       );

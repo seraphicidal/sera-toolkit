@@ -36,6 +36,8 @@ interface RemoteTask {
   readonly url: string;
   readonly providerId: string;
   readonly planKeys?: readonly string[];
+  /** For a job: the item each plan key belongs to, in the same order. */
+  readonly items?: readonly { readonly index: number; readonly sourceId?: string }[];
   readonly filename?: string;
   /** For a job: keep only this part of the item, in seconds. */
   readonly trim?: { readonly start: number; readonly end?: number };
@@ -49,7 +51,30 @@ interface RemoteTask {
 }
 
 /** What every node of this version understands beyond a plain download. */
-export const NODE_FEATURES: readonly NodeFeature[] = ['trim', 'subtitles'];
+export const NODE_FEATURES: readonly NodeFeature[] = ['trim', 'subtitles', 'items'];
+
+/**
+ * What a job task asks for, as the runner's selections: each plan key with the item it was
+ * picked from. A task from a server that sends no `items` gets the old reading — the n-th key
+ * for the n-th item — which is what such a server meant.
+ */
+export function taskSelections(
+  task: Pick<RemoteTask, 'planKeys' | 'items'>,
+  itemCount: number,
+): JobSpec['selections'] {
+  const keys = task.planKeys ?? [];
+  return keys.map((planKey, position) => {
+    const item = task.items?.length === keys.length ? task.items[position] : undefined;
+    if (item) {
+      return {
+        itemIndex: item.index,
+        ...(item.sourceId ? { sourceId: item.sourceId } : {}),
+        planKey,
+      };
+    }
+    return { itemIndex: itemCount > position ? position : 0, planKey };
+  });
+}
 
 /**
  * What this node declares with every claim: the code's features, and `instagram-session`
@@ -338,10 +363,7 @@ export class ExtractionNode {
     );
 
     // The plan keys were minted from a resolution this node produced, so they match.
-    const selections = (task.planKeys ?? []).map((planKey, index) => ({
-      itemIndex: media.items.length > index ? index : 0,
-      planKey,
-    }));
+    const selections = taskSelections(task, media.items.length);
     if (!selections.length) throw new Error('job task carried no plan keys');
 
     // Individual files, never a ZIP. Packaging is the server's job: it is the side that

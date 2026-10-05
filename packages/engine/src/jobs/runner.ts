@@ -170,6 +170,10 @@ export class JobRunner {
           url: spec.url,
           providerId: spec.provider,
           planKeys: matched.map(({ plan }) => planKey(plan)),
+          items: matched.map(({ item }) => ({
+            index: item.index,
+            ...(item.sourceId ? { sourceId: item.sourceId } : {}),
+          })),
           ...(spec.filename ? { filename: spec.filename } : {}),
           // The node cuts the file itself: shipping the whole thing to cut it here would
           // spend its upload on what is thrown away.

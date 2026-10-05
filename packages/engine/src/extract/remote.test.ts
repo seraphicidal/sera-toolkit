@@ -280,8 +280,20 @@ describe('a task that needs more than a download', () => {
     expect(await nodes.claim('old', ['youtube'], 1, 120)).toBeDefined();
   });
 
+  it('keeps a job that picks some slides from a node that would pair keys with items in order', async () => {
+    const nodes = registry();
+    // The last of nine slides, on its own: an outdated node downloaded the first.
+    nodes.dispatchJob(job({ items: [{ index: 8, sourceId: 's9' }] })).catch(() => undefined);
+    expect(await nodes.claim('old', ['youtube'], 1, 120, 'residential', ['trim'])).toBeUndefined();
+    const task = await nodes.claim('new', ['youtube'], 1, 120, 'residential', ['items']);
+    expect(task?.items).toEqual([{ index: 8, sourceId: 's9' }]);
+  });
+
   it('names what a task needs', () => {
     expect(requiredFeatures({})).toEqual([]);
+    // Items in order mean the same to a node that does not read them.
+    expect(requiredFeatures({ items: [{ index: 0 }, { index: 1 }] })).toEqual([]);
+    expect(requiredFeatures({ items: [{ index: 0 }, { index: 2 }] })).toEqual(['items']);
     expect(
       requiredFeatures({
         trim: { start: 1 },

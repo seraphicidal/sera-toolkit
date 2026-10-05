@@ -6,7 +6,7 @@ import type { FastifyInstance } from 'fastify';
 import type { MediaInfo, ServiceInfo } from '@sera/contracts/types';
 import { loadConfig, seraError, SeraEngine, type ResolvedMedia } from '@sera/engine';
 import { buildServer } from '../apps/api/src/server.js';
-import { nodeFeatures, nodeProviders } from '../apps/extractor/src/node.js';
+import { nodeFeatures, nodeProviders, taskSelections } from '../apps/extractor/src/node.js';
 
 /**
  * Instagram photo posts, read by an extraction node that holds an Instagram session.
@@ -160,12 +160,27 @@ describe('a node', () => {
     const without = { instagram: { configured: false } } as Parameters<typeof nodeFeatures>[0];
     const withSession = { instagram: { configured: true } } as Parameters<typeof nodeFeatures>[0];
 
-    expect(nodeFeatures(without)).toEqual(['trim', 'subtitles']);
-    expect(nodeFeatures(withSession)).toEqual(['trim', 'subtitles', 'instagram-session']);
+    expect(nodeFeatures(without)).toEqual(['trim', 'subtitles', 'items']);
+    expect(nodeFeatures(withSession)).toEqual(['trim', 'subtitles', 'items', 'instagram-session']);
 
     expect(nodeProviders(['youtube'], without)).toEqual(['youtube']);
     expect(nodeProviders(['youtube'], withSession)).toEqual(['youtube', 'instagram']);
     // An empty list already means every provider.
     expect(nodeProviders([], withSession)).toEqual([]);
+  });
+
+  it('downloads the slide that was picked, not the one in the same position', () => {
+    // The last of nine slides, picked on its own, came back as the first.
+    expect(
+      taskSelections(
+        { planKeys: ['image/jpg/original'], items: [{ index: 8, sourceId: 's9' }] },
+        9,
+      ),
+    ).toEqual([{ itemIndex: 8, sourceId: 's9', planKey: 'image/jpg/original' }]);
+    // A server that sends no items meant the n-th key for the n-th item.
+    expect(taskSelections({ planKeys: ['a', 'b'] }, 9)).toEqual([
+      { itemIndex: 0, planKey: 'a' },
+      { itemIndex: 1, planKey: 'b' },
+    ]);
   });
 });

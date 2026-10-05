@@ -47,12 +47,21 @@ const dispatchSchema = z.object({
   url: z.string().url().max(2048),
   providerId: z.string().min(1).max(32),
   planKeys: z.array(z.string().min(1).max(200)).max(100).optional(),
+  items: z
+    .array(
+      z.object({
+        index: z.number().int().min(0).max(1000),
+        sourceId: z.string().min(1).max(200).optional(),
+      }),
+    )
+    .max(100)
+    .optional(),
   filename: z.string().max(200).optional(),
   networkClass: z.enum(['datacenter', 'residential', 'unknown']).optional(),
   // A trimmed job's range, already checked against the media by the job service.
   trim: z.object({ start: z.number().min(0), end: z.number().positive().optional() }).optional(),
   requires: z
-    .array(z.enum(['trim', 'subtitles', 'instagram-session']))
+    .array(z.enum(['trim', 'subtitles', 'items', 'instagram-session']))
     .max(5)
     .optional(),
   subtitles: z
