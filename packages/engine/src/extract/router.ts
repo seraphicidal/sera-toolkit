@@ -201,9 +201,12 @@ export class ExtractionRouter {
   /**
    * The same post, read by a node signed in to the platform.
    *
-   * Only for a failure that says an account is what is missing. A private post the node's
-   * account cannot see either comes back as its own answer, which is the true one; any
-   * other failure there leaves the original answer standing.
+   * For any failure that is not final. An account is not only the answer to "log in": the
+   * extractor describes an Instagram photo post as a login wall, as "no video", or as "no
+   * formats" depending on the post, and only the first used to reach the node — the others
+   * came back as the cover image. A private post the node's account cannot see either comes
+   * back as its own answer, which is the true one; any other failure there leaves the
+   * original answer standing.
    */
   private async withAccount(
     url: URL,
@@ -211,7 +214,7 @@ export class ExtractionRouter {
     failure: FailureClass,
     signal?: AbortSignal,
   ): Promise<{ media: ResolvedMedia; backend: string } | undefined> {
-    if (failure !== 'LOGIN_REQUIRED') return undefined;
+    if (isDefinitive(failure)) return undefined;
     const backend = this.deps.authenticated?.(providerId);
     if (!backend?.isHealthy()) return undefined;
     try {
