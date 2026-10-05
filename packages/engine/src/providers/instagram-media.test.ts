@@ -6,6 +6,7 @@ import {
   itemsFrom,
   mediaFromImport,
   sessionHeaders,
+  mediaIdFromShortcode,
   shortcodeFrom,
   slidesFrom,
   titleFor,
@@ -238,5 +239,18 @@ describe('mediaFromImport', () => {
     expect(mediaFromImport(post).items.map((item) => item.plans)).toEqual(
       itemsFrom(mixed, 50).map((item) => item.plans),
     );
+  });
+});
+
+describe('mediaIdFromShortcode', () => {
+  it('decodes the id a shortcode carries, as oEmbed reports it', () => {
+    // Measured: oEmbed's media_id for /p/DcOX3hWFiey/ is 3967213292204992434_528817151.
+    expect(mediaIdFromShortcode('DcOX3hWFiey')).toBe('3967213292204992434');
+    // A private post's longer shortcode starts with the same eleven characters.
+    expect(mediaIdFromShortcode('DcOX3hWFieyAbCdEf')).toBe('3967213292204992434');
+  });
+
+  it('refuses a character no shortcode has', () => {
+    expect(() => mediaIdFromShortcode('DcOX3hW.iey')).toThrow();
   });
 });
