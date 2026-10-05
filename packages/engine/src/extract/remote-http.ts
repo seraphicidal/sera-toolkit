@@ -109,10 +109,11 @@ export class RemoteOverHttp implements RemoteExtraction {
     return this.live(networkClass).length > 0;
   }
 
-  hasFeature(feature: NodeFeature, providerId?: string): boolean {
+  hasFeature(feature: NodeFeature, providerId?: string, except: readonly string[] = []): boolean {
     return this.status().some(
       (node) =>
         node.healthy &&
+        !except.includes(node.id) &&
         (node.features ?? []).includes(feature) &&
         (providerId === undefined || !node.providers.length || node.providers.includes(providerId)),
     );
