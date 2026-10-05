@@ -179,8 +179,15 @@ export class InstagramProvider extends YtdlpProvider {
         label: "Instagram's web API, with the operator's session",
         available: (ctx) => ctx.config.instagram.configured,
         // The extractor reports a photo post as an unsupported source, because it only
-        // understands video. That — and a login wall — are what a session answers.
-        answers: ['UNSUPPORTED_MEDIA', 'LOGIN_REQUIRED', 'AUTH_CONFIGURATION_ERROR'],
+        // understands video. That — and a login wall — are what a session answers. Its
+        // "No video formats found" for a photo post classifies by its wording as
+        // FORMAT_UNAVAILABLE, so that is answered too.
+        answers: [
+          'UNSUPPORTED_MEDIA',
+          'FORMAT_UNAVAILABLE',
+          'LOGIN_REQUIRED',
+          'AUTH_CONFIGURATION_ERROR',
+        ],
         run: (target, ctx) => this.viaSession(target, ctx),
       },
       {

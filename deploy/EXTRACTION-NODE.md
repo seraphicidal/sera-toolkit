@@ -126,8 +126,8 @@ source is told so at once, and the full download still works.
 
 Instagram shows photos only to a signed-in account, and the server has none. A node can hold
 one instead: give it the `sessionid` cookie of an Instagram account and photo posts and
-carousels download from it, every slide at the size it was uploaded (Instagram keeps up to
-1440 px wide). Without a node holding one, a photo post gives only the cover image Instagram
+carousels download from it, every slide at the largest size Instagram keeps (measured: up to
+3072×4096). Without a node holding one, a photo post gives only the cover image Instagram
 publishes for embeds — the first slide, reduced.
 
 The cookie stays on the node. A node with one tells the server only that it holds an
@@ -182,10 +182,10 @@ holding one (above).
 
 ## What this does not fix
 
-**Instagram photos.** Those need an account, and that is true from a home connection as
-much as from a datacentre — every anonymous endpoint redirects to a login. A node makes no
-difference. See `SERA_INSTAGRAM_SESSION_ID` in the Oracle guide, and read the warning
-there before setting it.
+**Instagram photos, on its own.** Those need an account, and that is true from a home
+connection as much as from a datacentre — every anonymous endpoint redirects to a login. A
+node's address makes no difference; the session it can hold does
+([above](#instagram-photo-posts-and-carousels)).
 
 ## The cost of running it
 

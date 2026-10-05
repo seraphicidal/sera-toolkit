@@ -310,6 +310,60 @@ describe('Instagram carousel', () => {
   });
 });
 
+describe('Instagram photo post, with a session', () => {
+  const withSession = loadConfig({
+    NODE_ENV: 'test',
+    SERA_SECRET: 'test-secret',
+    SERA_DATA_DIR: '.data/test',
+    SERA_INSTAGRAM_SESSION_ID: 'test-session',
+  });
+  const photo = {
+    items: [
+      {
+        id: '1',
+        media_type: 1,
+        image_versions2: {
+          candidates: [
+            { url: 'https://scontent.cdninstagram.com/v/t51/full.jpg', width: 1440, height: 1800 },
+            { url: 'https://scontent.cdninstagram.com/v/t51/small.jpg', width: 640, height: 800 },
+          ],
+        },
+        user: { username: 'someone' },
+      },
+    ],
+  };
+
+  it('reads the post with the session when the extractor finds no video formats', async () => {
+    // What the laptop node's log showed for a photo post: yt-dlp's "No video formats
+    // found", which classifies as FORMAT_UNAVAILABLE by its wording. The session route was
+    // skipped for it, and the node returned the 640 px cover as though it had succeeded.
+    const asked: string[] = [];
+    const context: ProviderContext = {
+      ...contextFor({}),
+      config: withSession,
+      probe: () =>
+        Promise.reject(
+          new SeraError('UNSUPPORTED_SOURCE', 'no video', {
+            detail: 'no extractable video: ERROR: [Instagram] Dd_a: No video formats found!',
+          }),
+        ),
+      fetchText: (url) => {
+        asked.push(url.pathname);
+        return Promise.resolve({ body: JSON.stringify(photo), url: url.toString() });
+      },
+      allowDegraded: true,
+    };
+
+    const media = await new InstagramProvider(withSession).resolve(
+      new URL('https://www.instagram.com/p/DdybLuqCXSN/'),
+      context,
+    );
+    expect(asked).toEqual([expect.stringMatching(/^\/api\/v1\/media\/\d+\/info\/$/)]);
+    expect(media.metadata?.source).toBe('web-api');
+    expect(media.items[0]?.width).toBe(1440);
+  });
+});
+
 /* -------------------------------------------------------------------------- */
 
 describe('X GIF post', () => {

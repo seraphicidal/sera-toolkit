@@ -1018,7 +1018,10 @@ as GIF.
 - **Ladder**:
   1. `ytdlp` (reels and video posts work anonymously).
   2. `web-api` — only when `SERA_INSTAGRAM_SESSION_ID` is set, and only answering
-     `UNSUPPORTED_MEDIA`, `LOGIN_REQUIRED` or `AUTH_CONFIGURATION_ERROR`. It computes the
+     `UNSUPPORTED_MEDIA`, `FORMAT_UNAVAILABLE`, `LOGIN_REQUIRED` or
+     `AUTH_CONFIGURATION_ERROR`. `FORMAT_UNAVAILABLE` is there because yt-dlp's "No video
+     formats found" for a photo post classifies as that by its wording; without it a node
+     holding a session skipped this rung and returned the cover. It computes the
      numeric media id from the shortcode (`mediaIdFromShortcode`: base 64 over
      `A–Z a–z 0–9 - _`, as oEmbed's `media_id` reports it — oEmbed itself answers 400 for some
      public posts), calls `/api/v1/media/<pk>/info/` with the session headers (and `keepCookies`), and
