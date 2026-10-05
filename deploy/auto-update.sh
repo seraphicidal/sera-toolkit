@@ -73,12 +73,30 @@ image_ids() {
   done
 }
 
+# Whether CI has published this commit's images and moved `latest` to them. CI pushes each
+# image under the commit's SHA, then moves both `latest` tags together; until then, `latest`
+# is the previous release's. Moving the checkout before that deployed new code beside old
+# images — a router change live in the checkout and absent from the API — three times.
+published() {
+  local rev=$1 image repo pinned latest
+  for image in $(sera config --images | sort -u); do
+    case "$image" in */sera-*:latest) ;; *) continue ;; esac
+    repo=${image%:*}
+    pinned=$(docker buildx imagetools inspect "$repo:$rev" --format '{{.Manifest.Digest}}' 2>/dev/null) || return 1
+    latest=$(docker buildx imagetools inspect "$repo:latest" --format '{{.Manifest.Digest}}' 2>/dev/null) || return 1
+    [ -n "$pinned" ] && [ "$pinned" = "$latest" ] || return 1
+  done
+}
+
 # 1. The checkout. The compose file and these scripts come from it, so a release that
 # changes them has to arrive with its images. Fast-forward only, and only when nobody has
 # edited it here; an edited checkout is an operator's, and is left alone.
 old_rev=$(git rev-parse HEAD)
 git fetch -q origin main
-if [ "$(git rev-parse origin/main)" != "$old_rev" ]; then
+target=$(git rev-parse origin/main)
+if [ "$target" != "$old_rev" ] && ! published "$target"; then
+  log "images for ${target:0:7} are not published yet; trying again next run"
+elif [ "$target" != "$old_rev" ]; then
   # File modes are not edits: a chmod (as provisioning does) must not freeze the checkout.
   if git -c core.fileMode=false diff --quiet && git -c core.fileMode=false diff --cached --quiet; then
     git merge -q --ff-only origin/main
