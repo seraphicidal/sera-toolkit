@@ -2603,7 +2603,10 @@ the same limits and hardening.
   7. Pulls, starts, waits for the API to report healthy, installs the timers
      (`install-timers.sh`), and prints next steps (including the Oracle security-list rules).
 - **`auto-update.sh`** — run by `sera-update.timer` every 15 minutes (paused by
-  `/opt/sera/.auto-update-paused`). Fast-forwards the checkout to `origin/main` when it has no
+  `/opt/sera/.auto-update-paused`). Fast-forwards the checkout to `origin/main` — only once that commit's images are
+  published and `latest` points to them (`published`: each `sera-*` image's `:<sha>` digest
+  equals its `:latest` digest, via `docker buildx imagetools`), so new code never runs
+  beside old images — when it has no
   local edits (file modes ignored: a `chmod` is not an edit), tags the running images `:sera-rollback`, runs `sera pull`, and stops if neither
   the checkout nor any image changed. Otherwise `sera up -d`, then waits up to 180 s for
   health, asked on the host through Caddy (`--resolve` to 127.0.0.1): `/health` with every
