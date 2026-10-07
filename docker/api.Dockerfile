@@ -1,19 +1,8 @@
 # syntax=docker/dockerfile:1.7
-#
-# The API and the worker ship as one image.
-#
-# They are the same program with different entrypoints — both need yt-dlp, FFmpeg and the
-# engine — so building twice would only mean two chances for the media tooling to differ
-# between the process that plans a job and the process that runs it.
 
-# ---------------------------------------------------------------------------
-# Build
-# ---------------------------------------------------------------------------
 FROM node:24.18.1-bookworm-slim AS build
 WORKDIR /app
 
-# Manifests first: this layer is what makes an install cache hit possible when only
-# source has changed.
 COPY package.json package-lock.json ./
 COPY packages/contracts/package.json packages/contracts/
 COPY packages/engine/package.json packages/engine/
@@ -34,23 +23,12 @@ RUN npm run build --workspace @sera/contracts \
  && npm run build --workspace @sera/api \
  && npm run build --workspace @sera/worker
 
-# Drop the build-only dependencies before the artefacts are copied forward.
 RUN npm prune --omit=dev --workspaces --include-workspace-root
 
-# ---------------------------------------------------------------------------
-# Runtime
-# ---------------------------------------------------------------------------
 FROM node:24.18.1-bookworm-slim AS runtime
 
-# Pinned deliberately. `npm run update-providers` bumps this together with the manifest
-# the local toolchain uses, so a deployment and a workstation run the same extractor.
 ARG YTDLP_VERSION=2026.08.19
 
-# Declared with no default on purpose. BuildKit fills TARGETARCH in for the platform
-# being built, but giving it a default of `amd64` meant the arm64 build silently kept
-# that default and installed the x86 yt-dlp — an image that builds cleanly and then
-# cannot execute its own extractor. Left empty, a missing value hits the `*)` branch
-# below and fails loudly instead.
 ARG TARGETARCH
 
 ENV NODE_ENV=production \
@@ -65,8 +43,6 @@ RUN set -eux; \
         ca-certificates \
         curl \
         tini; \
-    # yt-dlp comes from its own release rather than Debian, whose package is always
-    # months behind — and months behind is indistinguishable from broken here.
     case "${TARGETARCH}" in \
         amd64) YTDLP_ASSET=yt-dlp_linux ;; \
         arm64) YTDLP_ASSET=yt-dlp_linux_aarch64 ;; \
@@ -99,20 +75,15 @@ COPY --from=build /app/apps/api/package.json ./apps/api/
 COPY --from=build /app/apps/api/dist ./apps/api/dist
 COPY --from=build /app/apps/worker/package.json ./apps/worker/
 COPY --from=build /app/apps/worker/dist ./apps/worker/dist
-# The canary's links (apps/api/dist/canary-cli.js reads them; deploy/canary.sh runs it).
 COPY scripts/provider-cases.json ./scripts/provider-cases.json
 
-# Media work runs as an unprivileged user, and /data is the only writable path it needs.
 RUN mkdir -p /data && chown -R node:node /data /app
 USER node
 
 EXPOSE 4000
 
-# Liveness only. Readiness is /ready, which additionally proves the binaries run.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD node -e "fetch('http://127.0.0.1:'+(process.env.SERA_PORT||4000)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
-# tini reaps the yt-dlp and FFmpeg children this process spawns; without an init, a
-# cancelled job leaves zombies behind.
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["node", "apps/api/dist/index.js"]

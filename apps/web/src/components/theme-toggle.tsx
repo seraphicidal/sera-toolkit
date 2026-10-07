@@ -8,12 +8,6 @@ export type ThemePreference = 'system' | 'light' | 'dark';
 
 const STORAGE_KEY = 'sera-theme';
 
-/**
- * Applies a preference to the document.
- *
- * `system` removes the attribute entirely rather than resolving it to a value, so the
- * page keeps following the OS if it changes while the tab is open.
- */
 export function applyTheme(preference: ThemePreference): void {
   const root = document.documentElement;
   if (preference === 'system') {
@@ -43,7 +37,6 @@ export function ThemeToggle() {
     setPreference(initial);
     setReady(true);
 
-    // Keep following the OS while `system` is selected.
     const media = window.matchMedia('(prefers-color-scheme: dark)');
     const onChange = () => {
       if (document.documentElement.dataset.themePreference === 'system') applyTheme('system');
@@ -90,13 +83,6 @@ export function ThemeToggle() {
   );
 }
 
-/**
- * The inline script that sets the theme before first paint.
- *
- * Without it the page renders light, then corrects itself once React hydrates — a white
- * flash on every navigation for anyone using dark mode. It is deliberately tiny and runs
- * synchronously in `<head>`.
- */
 export const themeScript = `
 (function(){try{
   var s=localStorage.getItem('${STORAGE_KEY}');

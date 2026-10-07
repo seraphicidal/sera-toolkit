@@ -11,13 +11,6 @@ import {
   type HealthState,
 } from './health';
 
-/**
- * The header's status light.
- *
- * Its one job is to be believable: green when the service works, red when it does not,
- * and not red because a phone dropped one request while switching networks.
- */
-
 function report(status: HealthReport['status'], failing: readonly string[] = []): HealthReport {
   return {
     status,
@@ -77,7 +70,6 @@ describe('showsLight', () => {
   it('draws it once there is something to say', () => {
     expect(showsLight(run(up(report('ok'))))).toBe(true);
     expect(showsLight(run(up(report('degraded', ['queue']))))).toBe(true);
-    // Two failures and no answer at all is something to say: the server is not reachable.
     expect(showsLight(run(down, down))).toBe(true);
   });
 });

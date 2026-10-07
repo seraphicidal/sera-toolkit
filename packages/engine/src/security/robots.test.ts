@@ -36,7 +36,6 @@ describe('robots.txt', () => {
     ].join('\n');
     expect(allow(robots, '/video')).toBe(true);
     expect(allow(robots, '/admin/panel')).toBe(false);
-    // A different agent still gets the restrictive wildcard group.
     expect(allow(robots, '/video', 'other-bot')).toBe(false);
   });
 

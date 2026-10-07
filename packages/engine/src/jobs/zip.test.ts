@@ -16,11 +16,9 @@ afterAll(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-/** Reads the entry names out of a ZIP's central directory. */
 async function entryNames(path: string): Promise<string[]> {
   const buffer = await readFile(path);
   const names: string[] = [];
-  // Central directory headers start with PK\x01\x02; the name follows a 46-byte header.
   for (let i = 0; i < buffer.length - 46; i += 1) {
     if (buffer.readUInt32LE(i) !== 0x02014b50) continue;
     const nameLength = buffer.readUInt16LE(i + 28);
@@ -47,7 +45,6 @@ describe('createZip', () => {
   });
 
   it('refuses an entry name that would escape on extraction', async () => {
-    // A ZIP is the one place a crafted name becomes a path on someone else's machine.
     for (const name of ['../escape.mp4', '..\\escape.mp4', '/etc/passwd', 'a/b.mp4', '..']) {
       await expect(
         createZip({

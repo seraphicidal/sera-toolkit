@@ -2,16 +2,6 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { canaryCases, runCanary } from './canary.js';
 
-/**
- * Runs the canary and prints its results as JSON on stdout.
- *
- * Meant to run inside the API container, where it can reach the API on loopback:
- *
- *   docker exec sera-api-1 node apps/api/dist/canary-cli.js [--only=youtube-shorts,vimeo]
- *
- * deploy/canary.sh does exactly that from the daily timer, and keeps the history. The
- * links come from scripts/provider-cases.json — the cases with a `canary` field.
- */
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const value = (flag: string) =>

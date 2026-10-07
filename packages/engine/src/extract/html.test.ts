@@ -83,7 +83,6 @@ describe('discoverMedia', () => {
 
   it('classifies by the extension when one is present', () => {
     const result = page('', '<video src="/a.mp3"></video>');
-    // The element says video; the file says otherwise, and the file wins.
     expect(result.media[0]?.kind).toBe('audio');
   });
 

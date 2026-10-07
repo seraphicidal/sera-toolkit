@@ -1,19 +1,4 @@
 #!/data/data/com.termux/files/usr/bin/bash
-# SERA.toolkit — set up an extraction node on an Android phone, in Termux.
-#
-# Run inside Termux (installed from F-Droid or GitHub, not the Play Store build):
-#
-#   curl -fsSLo setup.sh https://raw.githubusercontent.com/seraphicidal/sera-toolkit/main/deploy/node-android/setup.sh
-#   bash setup.sh
-#
-# Downloaded first rather than piped into bash: a package upgrade can stop to ask a question,
-# and with the script on stdin the answer would be read from the script itself.
-#
-# Safe to run again: it updates what is there. It installs Node, Python, FFmpeg and git;
-# clones (or fast-forwards) the repository into ~/sera-toolkit; builds only the node; fetches
-# the yt-dlp pinned on main (checksum-verified); writes ~/sera-toolkit/.env.node.local if
-# there is none; and installs a Termux:Boot script so the node starts with the phone.
-# deploy/EXTRACTION-NODE-ANDROID.md is the guide.
 set -euo pipefail
 
 REPO_URL="${SERA_REPO:-https://github.com/seraphicidal/sera-toolkit.git}"
@@ -29,12 +14,7 @@ if [ -z "${PREFIX:-}" ] || [ ! -d "$PREFIX" ]; then
 fi
 
 log "Upgrading Termux and installing packages"
-# A full upgrade, not just `pkg update`: Termux does not support partial upgrades. Installing
-# or configuring one package against older system libraries leaves it unable to link — seen
-# as ffmpeg's libplacebo failing to find a libc++ symbol on a phone 73 packages behind.
 pkg upgrade -y
-# termux-api is the command-line side of the Termux:API app, used only for the optional
-# Wi-Fi and charging conditions.
 pkg install -y nodejs-lts python ffmpeg git termux-api
 
 node_major=$(node -p 'process.versions.node.split(".")[0]')
@@ -51,8 +31,6 @@ else
 fi
 cd "$DIR"
 
-# Only what the node needs: the contracts, the engine and the extractor, not the web app's
-# few hundred megabytes. --ignore-scripts because nothing here needs a native build.
 log "Installing dependencies and building the node"
 npm ci --ignore-scripts --no-audit --no-fund \
   -w @sera/contracts -w @sera/engine -w @sera/extractor --include-workspace-root

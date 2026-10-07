@@ -8,14 +8,6 @@ import { loadConfig, seraError, SeraEngine, type ResolvedMedia } from '@sera/eng
 import { buildServer } from '../apps/api/src/server.js';
 import { nodeFeatures, nodeProviders } from '../apps/extractor/src/node.js';
 
-/**
- * Instagram photo posts, read by an extraction node that holds an Instagram session.
- *
- * The server has no session and cannot read a photo post; a node whose operator gave it one
- * declares `instagram-session`, and the post goes to whichever such node is online. The
- * session never leaves the node: the task carries only the requirement.
- */
-
 const TOKEN = 'instagram-node-token-0123456789';
 const POST = 'https://www.instagram.com/p/DcOX3hWFiey/';
 
@@ -42,7 +34,6 @@ const slide = (index: number) => ({
   ],
 });
 
-/** What a node with a session makes of the post: a two-photo carousel at full size. */
 const carousel: ResolvedMedia = {
   provider: 'instagram',
   providerLabel: 'Instagram',
@@ -69,7 +60,6 @@ beforeAll(async () => {
       SERA_EXTRACTION_NODE_TOKEN: TOKEN,
       SERA_EXTRACTION_CLAIM_HOLD_SECONDS: '1',
     }),
-    // What the extractor says of a photo post: there is no video in it.
     probe: () =>
       Promise.reject(seraError('UNSUPPORTED_SOURCE', { detail: 'There is no video in this post' })),
   });
@@ -98,8 +88,6 @@ const instagramInfo = async () =>
 
 describe('without a node holding a session', () => {
   it('says in /api/info that photo posts need an account', async () => {
-    // (Resolving one here would fall through to the cover image Instagram publishes for
-    // embeds, fetched from the real Instagram, so it is not exercised offline.)
     const info = await instagramInfo();
     expect(info.capabilities?.image).toBe(false);
     expect(info.capabilities?.authRequiredFor).toEqual(['photo posts', 'carousels']);
@@ -108,7 +96,6 @@ describe('without a node holding a session', () => {
 
 describe('with one', () => {
   it('reads the post there, and only a node that declared the session is asked', async () => {
-    // Two nodes; only the phone holds a session.
     engine.extractionNodes.register('laptop', ['youtube', 'instagram'], 1, 'residential', [
       'trim',
       'subtitles',
@@ -126,7 +113,6 @@ describe('with one', () => {
 
     const visitor = app.inject({ method: 'POST', url: '/api/media/info', payload: { url: POST } });
 
-    // The laptop asks and is given nothing: it could not read the post.
     expect((await claim('laptop', ['trim', 'subtitles'])).statusCode).toBe(204);
 
     let task: { id: string; providerId: string; requires?: string[] } | undefined;
@@ -137,7 +123,6 @@ describe('with one', () => {
     expect(task, 'the phone was never handed the post').toBeDefined();
     expect(task!.providerId).toBe('instagram');
     expect(task!.requires).toEqual(['instagram-session']);
-    // The requirement travels; no credential does.
     expect(JSON.stringify(task)).not.toMatch(/session.?id/i);
 
     await app.inject({
@@ -165,7 +150,6 @@ describe('a node', () => {
 
     expect(nodeProviders(['youtube'], without)).toEqual(['youtube']);
     expect(nodeProviders(['youtube'], withSession)).toEqual(['youtube', 'instagram']);
-    // An empty list already means every provider.
     expect(nodeProviders([], withSession)).toEqual([]);
   });
 });

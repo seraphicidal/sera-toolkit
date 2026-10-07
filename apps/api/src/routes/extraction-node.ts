@@ -8,40 +8,14 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { buildFilename, seraError, SeraError, type SeraEngine } from '@sera/engine';
 import { z } from 'zod';
 
-/**
- * The endpoints an extraction node on another network talks to.
- *
- * A node is a machine SERA's operator controls, on a connection the platforms do not
- * refuse. It dials out, asks for work, does it, and reports back. Nothing listens on the
- * node and nothing routable reaches it, which is what keeps a residential machine from
- * becoming an open proxy no matter what happens to the credential.
- *
- * These are not public API. They are mounted only when a token is configured, they are
- * excluded from the client rate limiter (a node polling every 25 seconds is not a
- * visitor), and every one of them requires the token.
- */
-
 const claimSchema = z.object({
   nodeId: z.string().min(1).max(64),
   providers: z.array(z.string().min(1).max(32)).max(50),
   capacity: z.coerce.number().int().min(1).max(8).default(1),
-  // A node says what kind of connection it is on. The default is the reason nodes
-  // exist; an operator running a second cloud node says so and is routed accordingly.
   networkClass: z.enum(['datacenter', 'residential', 'unknown']).default('residential'),
-  // What it understands beyond a plain download (`NodeFeature`). A node from before this
-  // field sends nothing, and is then never handed a trim or subtitles it would ignore.
   features: z.array(z.string().min(1).max(32)).max(20).default([]),
 });
 
-/**
- * A task another SERA process wants a node to run.
- *
- * The worker is the caller. A node holds one connection to one process — here, the API —
- * so on a deployment where the worker is a separate container it cannot see the node at
- * all. Left alone that produced a YouTube link which resolved through the node and then
- * failed at the download step with the datacentre block, because the process doing the
- * downloading did not know a node existed.
- */
 const dispatchSchema = z.object({
   kind: z.enum(['resolve', 'job']),
   url: z.string().url().max(2048),
@@ -49,7 +23,6 @@ const dispatchSchema = z.object({
   planKeys: z.array(z.string().min(1).max(200)).max(100).optional(),
   filename: z.string().max(200).optional(),
   networkClass: z.enum(['datacenter', 'residential', 'unknown']).optional(),
-  // A trimmed job's range, already checked against the media by the job service.
   trim: z.object({ start: z.number().min(0), end: z.number().positive().optional() }).optional(),
   requires: z
     .array(z.enum(['trim', 'subtitles', 'instagram-session']))
@@ -78,26 +51,8 @@ const failedSchema = z.object({
   detail: z.string().max(2000).optional(),
 });
 
-/**
- * The largest resolution a node may send back.
- *
- * The server's 64 KB body limit is sized for what a visitor sends — a link and some ids —
- * and a resolution is far bigger: about 4 KB per YouTube video with every format, so a
- * 17-video playlist measured 74 KB and was refused. The node, believing it had answered,
- * stopped reporting, and the task went round the lease loop until the visitor gave up.
- * This route is behind the node token, so the larger limit is not open to the public:
- * 4 MiB covers the 200-item ceiling on SERA_MAX_ITEMS_PER_JOB several times over.
- */
 const RESOLVED_BODY_LIMIT = 4 * 1024 * 1024;
 
-/**
- * Stops a stream the moment it passes a size, rather than after.
- *
- * Checking the file once it is written means the disk has already been spent — and on a
- * host with a few gigabytes free that is the whole attack. Fastify's own `bodyLimit`
- * does not apply here, because these uploads are handed through as a raw stream
- * precisely so a large file never has to be buffered.
- */
 function limitTo(maxBytes: number): Transform {
   let seen = 0;
   return new Transform({
@@ -112,7 +67,6 @@ function limitTo(maxBytes: number): Transform {
   });
 }
 
-/** Compared in constant time: a token check that leaks timing is a token check. */
 function tokenMatches(presented: string, expected: string): boolean {
   const a = Buffer.from(presented);
   const b = Buffer.from(expected);
@@ -120,7 +74,6 @@ function tokenMatches(presented: string, expected: string): boolean {
   return timingSafeEqual(a, b);
 }
 
-/** What a dispatched task is doing, for the process that asked for it. */
 interface Dispatched {
   state: 'pending' | 'done' | 'failed';
   progress?: { percent: number; step: string };
@@ -135,14 +88,6 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
   const { config, logger, extractionNodes } = engine;
   if (!config.extractionNodes.enabled) return;
 
-  /**
-   * Tasks another process is waiting on.
-   *
-   * Held here rather than in Redis because a dispatch only outlives the request that
-   * asked for it: the caller polls, and a caller that has gone away is a task nobody
-   * wants. Entries are dropped a minute after they settle, which is long enough for a
-   * poll to collect the answer and short enough that nothing accumulates.
-   */
   const dispatched = new Map<string, Dispatched>();
   const DISPATCH_KEEP_MS = 60_000;
 
@@ -154,33 +99,20 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
   }, 30_000);
   sweep.unref();
 
-  // Encapsulated, so the raw-body parser these need does not change how the public API
-  // treats a request body.
   // eslint-disable-next-line @typescript-eslint/require-await -- Fastify plugins are async by contract
   void rootApp.register(async (app) => {
-    app.addContentTypeParser(
-      'application/octet-stream',
-      // Handed through untouched: an uploaded file is streamed to disk, never buffered.
-      (_request, payload, done) => done(null, payload),
+    app.addContentTypeParser('application/octet-stream', (_request, payload, done) =>
+      done(null, payload),
     );
 
-    /** Every route here is token-gated; nothing below runs without it. */
     const authenticate = (request: FastifyRequest, reply: FastifyReply): boolean => {
       const header = request.headers.authorization ?? '';
       const presented = header.startsWith('Bearer ') ? header.slice(7) : '';
       if (presented && tokenMatches(presented, config.extractionNodes.token)) return true;
-      // No detail: an unauthenticated caller learns only that it was refused.
       void reply.status(401).send({ error: { code: 'NOT_FOUND', message: 'Not found.' } });
       return false;
     };
 
-    /**
-     * Asks for work, and waits.
-     *
-     * The wait is deliberate: it is the heartbeat as well as the queue. A node that is
-     * asking is a node that is alive, so nothing separate has to ping, and a task reaches
-     * a waiting node immediately rather than on the next poll.
-     */
     app.post(
       '/internal/extraction/claim',
       { config: { rateLimit: false } },
@@ -209,11 +141,6 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
       },
     );
 
-    /**
-     * Progress, and the answer to the only question a node needs to ask back: has the
-     * visitor gone away? A node that cannot find out keeps a home connection busy
-     * downloading something nobody is waiting for.
-     */
     app.post<{ Params: { taskId: string } }>(
       '/internal/extraction/:taskId/progress',
       { config: { rateLimit: false } },
@@ -225,7 +152,6 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
       },
     );
 
-    /** A finished resolution, in the same shape the local providers produce. */
     app.post<{ Params: { taskId: string } }>(
       '/internal/extraction/:taskId/resolved',
       { config: { rateLimit: false }, bodyLimit: RESOLVED_BODY_LIMIT },
@@ -246,12 +172,10 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
           request.params.taskId,
           media as Parameters<typeof extractionNodes.completeResolve>[1],
         );
-        // A node reconnecting after a restart may finish work nobody is waiting for.
         return reply.send({ accepted });
       },
     );
 
-    /** A failure, carrying the class the node saw rather than a generic one. */
     app.post<{ Params: { taskId: string } }>(
       '/internal/extraction/:taskId/failed',
       { config: { rateLimit: false } },
@@ -271,14 +195,6 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
       },
     );
 
-    /**
-     * One finished file, streamed straight to disk.
-     *
-     * Bytes go to a directory named for the task and nothing else touches it, so a node
-     * cannot write over a job's workspace or anything a visitor can reach. The name is
-     * sanitized with the same function the download path uses — a node is trusted to do
-     * extraction, not to pick paths.
-     */
     app.post<{ Params: { taskId: string }; Querystring: { name?: string; mime?: string } }>(
       '/internal/extraction/:taskId/file',
       { config: { rateLimit: false } },
@@ -290,22 +206,15 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
           throw seraError('NOT_FOUND', { detail: 'node: malformed task id' });
         }
         if (extractionNodes.isCancelled(taskId)) {
-          // Nobody is waiting for this any more; do not spend disk on it.
           return reply.status(409).send({ accepted: false, cancelled: true });
         }
 
-        // The same sanitizer the download path uses: a node is trusted to extract, not
-        // to choose where bytes land.
         const requested = request.query.name ?? 'media.bin';
         const dot = requested.lastIndexOf('.');
         const name = buildFilename(
           dot > 0 ? requested.slice(0, dot) : requested,
           dot > 0 ? requested.slice(dot + 1) : 'bin',
         );
-        // A directory of its own at the top of the data directory, so the reaper that
-        // deletes expired job workspaces by age deletes an abandoned upload the same
-        // way. Nested under a shared `remote/` parent it could not: one busy node keeps
-        // the parent's mtime fresh, and the orphans underneath it never age out.
         const directory = join(config.dataDir, `remote-${taskId}`);
         await mkdir(directory, { recursive: true });
         const path = join(directory, name);
@@ -332,7 +241,6 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
       },
     );
 
-    /** Every file is in; settle the job with them, in the order they arrived. */
     app.post<{ Params: { taskId: string } }>(
       '/internal/extraction/:taskId/complete',
       { config: { rateLimit: false } },
@@ -342,17 +250,11 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
       },
     );
 
-    /**
-     * The node list, for a process that cannot see the registry itself.
-     *
-     * Read by the worker's router when it decides whether a fallback exists at all.
-     */
     app.get('/internal/extraction/nodes', { config: { rateLimit: false } }, (request, reply) => {
       if (!authenticate(request, reply)) return reply;
       return reply.send({ nodes: extractionNodes.status() });
     });
 
-    /** Starts a task and answers with its id; the caller polls for the rest. */
     app.post(
       '/internal/extraction/dispatch',
       { config: { rateLimit: false } },
@@ -428,7 +330,6 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
       },
     );
 
-    /** The caller gave up, so the node should too. */
     app.delete<{ Params: { taskId: string } }>(
       '/internal/extraction/dispatch/:taskId',
       { config: { rateLimit: false } },

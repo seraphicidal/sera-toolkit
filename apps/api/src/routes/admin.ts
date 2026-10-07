@@ -4,14 +4,6 @@ import type { SeraEngine } from '@sera/engine';
 import { totalUsage, USAGE_RETENTION_DAYS } from '@sera/engine';
 import { matchesToken } from '../plugins/client.js';
 
-/**
- * The operator's endpoints.
- *
- * Mounted only when `SERA_ADMIN_TOKEN` is set, and every one of them requires it as a
- * bearer token. Without the token configured the paths do not exist; with a wrong one the
- * caller learns only that it was refused.
- */
-
 const usageQuerySchema = z.object({
   days: z.coerce.number().int().min(1).max(USAGE_RETENTION_DAYS).default(7),
 });
@@ -20,13 +12,8 @@ export function registerAdminRoutes(app: FastifyInstance, engine: SeraEngine): v
   const { config } = engine;
   if (!config.adminToken) return;
 
-  /**
-   * Usage per source per day: resolves and downloads, success and failure by error code,
-   * and bytes delivered — newest day first, with totals. `sudo sera stats` prints it.
-   */
   app.get(
     '/api/admin/usage',
-    // A token guessed a request at a time is not guessed at all; this keeps it that way.
     { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
     async (request, reply) => {
       const header = request.headers.authorization ?? '';

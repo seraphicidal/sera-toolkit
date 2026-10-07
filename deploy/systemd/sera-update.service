@@ -1,4 +1,3 @@
-# Installed by deploy/install-timers.sh. Started by sera-update.timer.
 [Unit]
 Description=SERA: deploy newly published images, rolling back if the site is unhealthy
 Wants=network-online.target

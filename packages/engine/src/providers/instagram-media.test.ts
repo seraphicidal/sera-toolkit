@@ -14,14 +14,6 @@ import {
 } from './instagram-media.js';
 import { planKey } from './types.js';
 
-/**
- * The shapes Instagram's web API returns, trimmed from real responses.
- *
- * `media_type` is 1 for an image, 2 for a video and 8 for a carousel, and a carousel may
- * mix the first two — which is the case that breaks every implementation that assumes a
- * post has one kind.
- */
-
 const image = (id: string, width: number, url: string): InstagramNode => ({
   id,
   media_type: 1,
@@ -49,10 +41,8 @@ describe('Instagram media normalization', () => {
     const items = itemsFrom(image('a', 1440, 'https://cdn/a.jpg'), 50);
     expect(items).toHaveLength(1);
     expect(items[0]?.kind).toBe('image');
-    // Candidates are widest-first; the narrow one is a thumbnail, not the media.
     expect(items[0]?.plans[0]?.fetch).toEqual({ via: 'direct', url: 'https://cdn/a.jpg' });
     expect(items[0]?.width).toBe(1440);
-    // Nothing to extract audio from.
     expect(items[0]?.plans.map((p) => p.kind)).toEqual(['image']);
   });
 
@@ -68,7 +58,6 @@ describe('Instagram media normalization', () => {
     };
     const items = itemsFrom(carousel, 50);
     expect(items).toHaveLength(4);
-    // The order is the post's order; a slideshow that shuffles is a broken slideshow.
     expect(items.map((item) => item.plans[0]?.fetch)).toEqual([
       { via: 'direct', url: 'https://cdn/1.jpg' },
       { via: 'direct', url: 'https://cdn/2.jpg' },
@@ -79,7 +68,6 @@ describe('Instagram media normalization', () => {
   });
 
   it('handles a carousel that mixes photographs and video', () => {
-    // The case that breaks anything assuming a post has one kind throughout.
     const mixed: InstagramNode = {
       media_type: 8,
       carousel_media: [
@@ -91,7 +79,6 @@ describe('Instagram media normalization', () => {
     };
     const items = itemsFrom(mixed, 50);
     expect(items.map((item) => item.kind)).toEqual(['image', 'video', 'image', 'video']);
-    // Each slide is offered what its own kind supports, and nothing else.
     expect(items[0]?.plans.map((p) => p.kind)).toEqual(['image']);
     expect(items[1]?.plans.map((p) => p.kind)).toEqual(['video', 'audio']);
     expect(items[1]?.duration).toBe(12.5);
@@ -120,7 +107,6 @@ describe('Instagram media normalization', () => {
     };
     const items = itemsFrom(partial, 50);
     expect(items).toHaveLength(1);
-    // And the surviving item is still numbered from zero.
     expect(items[0]?.index).toBe(0);
   });
 
@@ -141,13 +127,9 @@ describe('sessionHeaders', () => {
     const headers = sessionHeaders('a-session-value');
     expect(headers.cookie).toBe('sessionid=a-session-value');
     expect(headers['x-ig-app-id']).toBe('936619743392459');
-    // No Authorization header, no bearer, nothing that would end up in a proxy log line
-    // under a name something else might decide to record.
     expect(Object.keys(headers).sort()).toEqual(['cookie', 'x-ig-app-id', 'x-requested-with']);
   });
 });
-
-/* ------------------------------------------------------------ visitor import */
 
 describe('the hosts an imported post may name', () => {
   it('admits Instagram’s CDN over HTTPS', () => {
@@ -222,8 +204,6 @@ describe('mediaFromImport', () => {
   };
 
   it('rebuilds the same plans from the same entries, after a trip through a token', () => {
-    // The job sees entries that went through JSON, a queue and JSON again. Nothing about
-    // the result may depend on which side of that trip built it.
     const atImport = mediaFromImport(post);
     const atJob = mediaFromImport(JSON.parse(JSON.stringify(post)) as typeof post);
     expect(atJob).toEqual(atImport);
@@ -244,9 +224,7 @@ describe('mediaFromImport', () => {
 
 describe('mediaIdFromShortcode', () => {
   it('decodes the id a shortcode carries, as oEmbed reports it', () => {
-    // Measured: oEmbed's media_id for /p/DcOX3hWFiey/ is 3967213292204992434_528817151.
     expect(mediaIdFromShortcode('DcOX3hWFiey')).toBe('3967213292204992434');
-    // A private post's longer shortcode starts with the same eleven characters.
     expect(mediaIdFromShortcode('DcOX3hWFieyAbCdEf')).toBe('3967213292204992434');
   });
 

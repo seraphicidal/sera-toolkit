@@ -5,26 +5,14 @@ import { ZipFile } from 'yazl';
 import { seraError } from '../errors.js';
 import { assertSafeFilename } from '../util/filename.js';
 
-/**
- * Bundles a job's outputs into one archive.
- *
- * Entry names are re-validated here even though they were sanitized when the files were
- * written. A ZIP is the one format where a crafted entry name (`../../autorun`) becomes
- * a path on someone else's machine when they extract it, so the check belongs at the
- * point the archive is built, not only at the point the file was named.
- */
-
 export interface ZipEntry {
-  /** Absolute path to the file on disk. */
   readonly path: string;
-  /** Name inside the archive. Must be a bare filename. */
   readonly name: string;
 }
 
 export interface CreateZipRequest {
   readonly entries: readonly ZipEntry[];
   readonly destination: string;
-  /** Reports 0-100 as entries are added. */
   readonly onProgress?: (percent: number, currentFile: number, totalFiles: number) => void;
   readonly signal?: AbortSignal;
 }
@@ -46,8 +34,6 @@ export async function createZip(request: CreateZipRequest): Promise<{ sizeBytes:
     if (request.signal?.aborted) throw seraError('CANCELLED');
 
     const name = assertSafeFilename(entry.name);
-    // Two items in one post can legitimately produce the same name; a ZIP with duplicate
-    // entries extracts unpredictably, so collisions are resolved before they are written.
     const unique = dedupe(name, taken);
 
     const info = await stat(entry.path).catch(() => undefined);
@@ -70,10 +56,6 @@ export async function createZip(request: CreateZipRequest): Promise<{ sizeBytes:
   return { sizeBytes: info.size };
 }
 
-/**
- * Media containers are already compressed; deflating them again costs CPU and saves
- * nothing, so they are stored and everything else is deflated.
- */
 function shouldCompress(name: string): boolean {
   const extension = name.split('.').pop()?.toLowerCase() ?? '';
   const alreadyCompressed = new Set([

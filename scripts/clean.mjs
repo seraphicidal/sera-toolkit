@@ -1,10 +1,4 @@
 #!/usr/bin/env node
-/**
- * Removes build output and local runtime state.
- *
- * `.tools` is left alone by default: re-downloading FFmpeg is 160 MB, and "clean" should
- * not mean "wait five minutes". Pass --all to remove it too.
- */
 
 import { rmSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';

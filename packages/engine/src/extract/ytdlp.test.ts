@@ -2,12 +2,6 @@ import { describe, expect, it } from 'vitest';
 import { classifyYtdlpFailure } from './ytdlp.js';
 import { num, str } from './ytdlp-types.js';
 
-/**
- * Error classification is matched on the extractor's own wording, which changes. The
- * tests below pin the messages that were current when each mapping was written, and the
- * last case pins the thing that matters most: an unrecognised failure degrades to
- * "this source needs updating" rather than a 500.
- */
 describe('classifyYtdlpFailure', () => {
   const cases: [string, string][] = [
     [
@@ -24,12 +18,10 @@ describe('classifyYtdlpFailure', () => {
       'ERROR: [generic] Sign in to confirm you are not a bot. Use --cookies-from-browser',
       'SOURCE_BLOCKED',
     ],
-    // YouTube's own wording, with the typographic apostrophe it actually emits.
     [
       'ERROR: [youtube] Xz3UMZvhgeY: Sign in to confirm you’re not a bot. Use --cookies-from-browser or --cookies for the authentication.',
       'SOURCE_BLOCKED',
     ],
-    // A genuine login wall still reads as one.
     [
       'ERROR: [vimeo] 123: The web client only works when logged-in. Use --cookies',
       'LOGIN_REQUIRED',
@@ -63,9 +55,6 @@ describe('classifyYtdlpFailure', () => {
   });
 
   it('tells a blocked server apart from a login wall', () => {
-    // Verified against the live deployment: this exact link resolves with twelve formats
-    // from a residential connection and returns the bot challenge from a datacentre one.
-    // Saying "this media requires an account" sends the visitor after the wrong problem.
     const blocked = classifyYtdlpFailure(
       'ERROR: [youtube] abc: Sign in to confirm you’re not a bot.',
       1,
@@ -73,12 +62,10 @@ describe('classifyYtdlpFailure', () => {
     expect(blocked.code).toBe('SOURCE_BLOCKED');
     expect(blocked.message).toBe('This source is blocking this server, not the link.');
     expect(blocked.hint).toMatch(/datacentre/i);
-    // Retrying from the same address does the same thing.
     expect(blocked.retryable).toBe(false);
   });
 
   it('degrades an unrecognised failure to a provider problem, not a crash', () => {
-    // The wording will change; the behaviour must not.
     const error = classifyYtdlpFailure('ERROR: something nobody has seen before', 1);
     expect(error.code).toBe('PROVIDER_UNAVAILABLE');
     expect(error.httpStatus).toBe(503);
@@ -100,7 +87,6 @@ describe('classifyYtdlpFailure', () => {
 
 describe('field coercion', () => {
   it('treats the NA placeholder as absent', () => {
-    // yt-dlp renders a missing template field as the literal string "NA".
     expect(num('NA')).toBeUndefined();
     expect(str('NA')).toBeUndefined();
   });

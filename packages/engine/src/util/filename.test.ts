@@ -21,8 +21,6 @@ describe('sanitizeStem', () => {
     expect(sanitizeStem('../../etc/passwd')).toBe('etc passwd');
     expect(sanitizeStem('..\\..\\windows\\system32')).toBe('windows system32');
     expect(sanitizeStem('/absolute/path')).toBe('absolute path');
-    // The drive letter survives as an ordinary character; the colon and slashes, which
-    // are what would make it a path, do not.
     expect(sanitizeStem('C:\\Users\\me')).toBe('C Users me');
   });
 
@@ -33,7 +31,6 @@ describe('sanitizeStem', () => {
   });
 
   it('removes characters that could disguise an extension', () => {
-    // A right-to-left override can make "exe.txt" render as "txt.exe".
     expect(sanitizeStem('report\u202Egpj.exe')).toBe('reportgpj.exe');
     expect(sanitizeStem('zero\u200Bwidth')).toBe('zerowidth');
   });
@@ -162,7 +159,6 @@ describe('contentDispositionValue', () => {
   it('cannot be used to inject a header quote', () => {
     const value = contentDispositionValue('evil".mp4');
     expect(value).toMatch(/filename="evil_\.mp4"/);
-    // Exactly one quoted filename parameter, so no second directive can be smuggled in.
     expect(value.match(/"/g)).toHaveLength(2);
   });
 });

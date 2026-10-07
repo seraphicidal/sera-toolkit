@@ -8,18 +8,8 @@ import {
   videoBaseFromUrl,
 } from './reddit-embed.js';
 
-/**
- * Reading a post from what Reddit publishes for embedding.
- *
- * Reddit refuses hosted address ranges on every anonymous route to the data — measured
- * from the live deployment, `.json`, `api.reddit.com` and `old.reddit.com` are all 403.
- * The embed is not, because it is what Reddit hands any site quoting a post. These fixtures
- * are the shapes that host actually serves.
- */
-
 const POST = new URL('https://www.reddit.com/r/aww/comments/1w9mm3q/x/');
 
-/** The element the embed page carries its post data in, escaped as it arrives. */
 const screenview = (post: Record<string, unknown>, subreddit = 'aww') =>
   `<shreddit-screenview-data data="${JSON.stringify({ post, subreddit: { name: subreddit } })
     .replace(/&/g, '&amp;')
@@ -44,7 +34,6 @@ const galleryPage = `<html><body>
 
 const oembed = JSON.stringify({ title: 'A very good dog', author_name: 'yasinozmeen' });
 
-/** Serves each URL from a table, the way the guarded client would. */
 function serving(pages: Record<string, string>) {
   const seen: string[] = [];
   const fetchText = (target: URL) => {
@@ -87,9 +76,6 @@ describe('what the embed page carries', () => {
   });
 
   it('takes the image and leaves the resized copy of it', () => {
-    // `preview.redd.it` is a variant of an image already listed — and it is the one
-    // Reddit host that answers 403 from a datacentre, so offering it would be a button
-    // that fails.
     expect(imagesFrom(imagePage)).toEqual(['https://i.redd.it/ilf8uq7992oh1.jpeg']);
   });
 
@@ -124,8 +110,6 @@ describe('reading a post', () => {
   });
 
   it('sends hosted video to the manifest, not to the file', async () => {
-    // The progressive MP4 is the one thing on v.redd.it a datacentre is refused, and the
-    // manifest is also the only route carrying the audio Reddit stores separately.
     const { fetchText } = serving(bothHosts(videoPage));
     const media = await readViaEmbed(POST, fetchText, 50);
 
@@ -135,7 +119,6 @@ describe('reading a post', () => {
   });
 
   it('still resolves when oEmbed will not answer', async () => {
-    // A nicer title is worth one request and not worth the download.
     const { fetchText } = serving({ 'https://embed.reddit.com/': imagePage });
     const media = await readViaEmbed(POST, fetchText, 50);
 
@@ -158,19 +141,12 @@ describe('reading a post', () => {
 });
 
 describe('resolving the same media twice', () => {
-  /**
-   * The invariant the job pipeline depends on. A handle carries `resolved.url`, and for
-   * hosted video that is the manifest — so at download time this provider is asked to
-   * read a `v.redd.it` URL, which is not a post and has no embed. It used to answer "no
-   * post id", and the job died at the last step reporting that the media was gone.
-   */
   it('reads a v.redd.it URL without needing the post', async () => {
     const { fetchText, seen } = serving({});
     const media = await readViaEmbed(new URL('https://v.redd.it/p4rkjzjtr2oh1'), fetchText, 50);
 
     expect(media.items[0]?.kind).toBe('video');
     expect(media.url).toBe('https://v.redd.it/p4rkjzjtr2oh1/HLSPlaylist.m3u8');
-    // And without a single request, since the URL already says everything.
     expect(seen).toEqual([]);
   });
 

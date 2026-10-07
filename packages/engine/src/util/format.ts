@@ -1,8 +1,5 @@
-/** Presentation helpers shared by the engine and, through the contracts, by the UI. */
-
 const UNITS = ['B', 'KB', 'MB', 'GB', 'TB'] as const;
 
-/** `1536` -> `1.5 KB`. Uses SI-style 1024 steps, matching what download UIs show. */
 export function formatBytes(bytes: number, fractionDigits?: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return '';
   let value = bytes;
@@ -15,7 +12,6 @@ export function formatBytes(bytes: number, fractionDigits?: number): string {
   return `${value.toFixed(digits)} ${UNITS[unit]}`;
 }
 
-/** `154` -> `2:34`; `3725` -> `1:02:05`. */
 export function formatDuration(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return '';
   const total = Math.round(seconds);
@@ -26,10 +22,8 @@ export function formatDuration(seconds: number): string {
   return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
 }
 
-/** Maps a pixel height onto the label people actually use for it. */
 export function qualityLabel(height: number | undefined, width?: number): string {
   if (!height || height <= 0) return 'Source';
-  // Vertical video reports its long edge as height; label by the short edge instead.
   const shortEdge = width && width < height ? width : height;
   const steps = [
     [4320, '8K'],
@@ -48,7 +42,6 @@ export function qualityLabel(height: number | undefined, width?: number): string
   return `${shortEdge}p`;
 }
 
-/** Human names for the codec strings providers report. */
 export function codecLabel(codec: string | undefined): string | undefined {
   if (!codec || codec === 'none') return undefined;
   const c = codec.toLowerCase();
@@ -66,7 +59,6 @@ export function codecLabel(codec: string | undefined): string | undefined {
   return codec.split('.')[0]?.toUpperCase();
 }
 
-/** Truncates to `max` characters on a word boundary where possible. */
 export function truncate(text: string, max: number): string {
   if (text.length <= max) return text;
   const cut = text.slice(0, max);
@@ -74,13 +66,6 @@ export function truncate(text: string, max: number): string {
   return `${(lastSpace > max * 0.6 ? cut.slice(0, lastSpace) : cut).trimEnd()}…`;
 }
 
-/**
- * Treats a blank string as absent.
- *
- * Platform metadata is full of fields that are present but empty — a display name nobody
- * set, an alt text left blank — and `??` keeps those, producing a title that is a
- * zero-width nothing. This makes the intent explicit at the call site.
- */
 export function nonEmpty(value: string | undefined | null): string | undefined {
   const trimmed = value?.trim();
   if (!trimmed) return undefined;

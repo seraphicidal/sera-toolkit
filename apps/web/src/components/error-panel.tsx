@@ -9,14 +9,6 @@ export interface ErrorAction {
   readonly primary?: boolean;
 }
 
-/**
- * A failure, explained.
- *
- * One sentence about what happened, one about what to do, and the actions that actually
- * apply — retry is only offered when retrying could plausibly work, because a "Try
- * again" button on a private post just wastes someone's time twice. Nothing technical
- * reaches this component; the server keeps that.
- */
 export function ErrorPanel({
   error,
   actions,
@@ -38,8 +30,6 @@ export function ErrorPanel({
           {error.hint && (
             <p className="mt-1 text-[0.8125rem] text-[var(--color-ink-muted)]">{error.hint}</p>
           )}
-          {/* The code, small, so a bug report can name the exact failure — especially on a phone
-              with no devtools. */}
           <p className="mt-1.5 font-mono text-[0.6875rem] tracking-wide text-[var(--color-ink-faint)]">
             {error.code}
           </p>

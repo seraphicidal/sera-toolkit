@@ -13,14 +13,6 @@ const KIND_ICON = {
   unknown: VideoIcon,
 } as const;
 
-/**
- * Confirmation that SERA found the right thing.
- *
- * Its whole job is to let someone recognise their link before committing to a download,
- * so the thumbnail is large, the title is not truncated to one line, and the provider is
- * named. Everything else — view counts, descriptions, ids — is left out; it is not what
- * anyone is checking for.
- */
 export function MediaPreview({ info }: { readonly info: MediaInfo }) {
   const [thumbnailFailed, setThumbnailFailed] = useState(false);
   const primary = info.items[0];
@@ -47,9 +39,6 @@ export function MediaPreview({ info }: { readonly info: MediaInfo }) {
             'size-20 sm:size-24',
           )}
         >
-          {/* A plain img, not next/image: the source is a proxied API path whose
-              dimensions are unknown, so the optimizer would add a round trip and no
-              benefit. */}
           {showThumbnail ? (
             <img
               src={info.thumbnail}

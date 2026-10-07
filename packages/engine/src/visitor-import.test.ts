@@ -11,18 +11,9 @@ import {
 import { MediaResolver } from './resolver.js';
 import { signToken } from './util/tokens.js';
 
-/**
- * The server's half of visitor import, with no network anywhere in it.
- *
- * A post arrives from a browser the server cannot see into, so everything here is about what
- * a hostile payload can and cannot make the server do: which URLs it will sign, for how long,
- * and whether anything it signed can be edited, or spent against a different post.
- */
-
 const POST = 'https://www.instagram.com/p/DcOX3hWFiey/';
 const hex = (epochSeconds: number) => Math.floor(epochSeconds).toString(16);
 
-/** A URL in the shape Instagram's CDN signs, expiring `inSeconds` after `now`. */
 function cdn(name: string, now: number, inSeconds = 7 * 86_400): string {
   return (
     `https://scontent-vie1-1.cdninstagram.com/v/t51.82787-15/${name}.jpg` +
@@ -89,7 +80,6 @@ describe('an imported post', () => {
       ['Original'],
       ['Original'],
     ]);
-    // Thumbnails reach the browser through the proxy, like every other resolution's.
     expect(info.items[0]!.thumbnail).toMatch(/^\/api\/thumb\//);
   });
 
@@ -144,7 +134,6 @@ describe('what an import will not sign', () => {
   ])('media on %s', (_, url) => {
     const error = refusal(() => resolverWith().importSubmitted(post(cdn('a', now), url)));
     expect(error.code).toBe('BLOCKED_ADDRESS');
-    // The log is told which entry, and never what it said.
     expect(error.detail).toBe('import: url 1 is not on the media hosts');
   });
 
@@ -256,7 +245,6 @@ describe('the token an import is signed into', () => {
 
     expect(hashOf(first.id)).not.toBe(hashOf(other.id));
     expect(hashOf(first.id)).toBe(hashOf(same.id));
-    // And never the resolution the same link gets when it is analyzed the ordinary way.
     const { u, p } = resolver.verifyInfoId(first.id);
     expect(hashOf(first.id)).not.toBe(resolver.resolutionHash(u, p));
   });

@@ -9,8 +9,6 @@ export const metadata: Metadata = {
     'What SERA.toolkit supports, what it keeps, and what you are responsible for when you use it.',
 };
 
-// The supported-source list is read from the running API, so this page describes the
-// deployment the visitor is actually using rather than a list that drifts out of date.
 export const revalidate = 60;
 
 function formatGigabytes(bytes: number): string {
@@ -24,8 +22,6 @@ export default async function AboutPage() {
   const service = await loadServiceInfo();
   const providers = service?.providers ?? [];
   const degraded = providers.filter((provider) => provider.status !== 'ok');
-  // Some sources only work in part from a given server. Saying which, once, beats
-  // letting every visitor discover it a link at a time.
   const partial = providers.filter((provider) => provider.capabilities?.authRequiredFor?.length);
 
   return (
@@ -238,7 +234,6 @@ function Limit({ label, value }: { readonly label: string; readonly value: strin
   );
 }
 
-/** Names a dependency without linking out: the page makes no third-party requests. */
 function ExternalNote({ children }: { readonly children: React.ReactNode }) {
   return <span className="font-medium text-[var(--color-ink)]">{children}</span>;
 }

@@ -3,21 +3,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { bookmarkletSource, buildBookmarklet } from '@/lib/bookmarklet';
 
-/**
- * The draggable "SERA: Import post" link, a copy button, and the exact code it carries.
- *
- * A bookmarklet installs by being dragged to the bookmarks bar on a computer — and React 19
- * strips a `javascript:` href written in JSX, so it is set on the anchor through a ref after
- * mount. On a phone there is no bar to drag to, so the copy button is the way in: it puts the
- * whole `javascript:` string on the clipboard to paste into a new bookmark's address. The
- * origin comes from where this page is served, so a self-hosted SERA gets a bookmarklet that
- * points at itself. Clicking the link here does nothing useful — it only runs on instagram.com
- * — so a click is swallowed with a nudge.
- *
- * The "What this runs" panel shows the same string the link and the clipboard carry, verbatim,
- * because this is code that will run on instagram.com with the visitor's session: reading
- * exactly what you install, and confirming it fetches nothing and evaluates nothing, is the point.
- */
 export function BookmarkletLink() {
   const ref = useRef<HTMLAnchorElement>(null);
   const manualRef = useRef<HTMLTextAreaElement>(null);
@@ -35,8 +20,6 @@ export function BookmarkletLink() {
     setSource(bookmarkletSource(origin));
   }, []);
 
-  // When both copy paths fail, the manual box appears with the code already selected, so a
-  // long-press → Copy is all that's left to do.
   useEffect(() => {
     if (manual && manualRef.current) {
       manualRef.current.focus();
@@ -55,8 +38,6 @@ export function BookmarkletLink() {
       await navigator.clipboard.writeText(href);
       done();
     } catch {
-      // Some browsers refuse the async clipboard outside a stronger gesture; the old
-      // execCommand path still works from a click, and is what mobile Safari falls back to.
       try {
         const ta = document.createElement('textarea');
         ta.value = href;
@@ -70,7 +51,6 @@ export function BookmarkletLink() {
         if (ok) done();
         else setManual(true);
       } catch {
-        // Nothing automatic worked: hand the visitor the code to copy by hand.
         setManual(true);
       }
     }

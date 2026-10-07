@@ -13,30 +13,15 @@ import type {
 } from './types.js';
 import { ensureRecommendations } from '../normalize/plans.js';
 
-/**
- * A link that points straight at a media file.
- *
- * The provider only claims URLs whose path already ends in a media extension. Without
- * that gate it would claim every URL on the internet, turn the service into an open web
- * proxy, and bury genuine "this source isn't supported" answers under confusing
- * download failures. A HEAD request then confirms the server agrees about the type
- * before any option is offered.
- */
 export class DirectFileProvider implements MediaProvider {
   readonly id = 'direct';
   readonly label = 'Direct file';
   readonly hosts: readonly string[] = [];
   readonly priority = 900;
 
-  /**
-   * Whatever the server hands over. Audio can be pulled out of a video file and a GIF
-   * turned into one, but a lone file is never a carousel.
-   */
   readonly capabilities: ProviderCapabilities = declare({
     image: true,
     gif: true,
-    // The URL is whatever the visitor typed. A node exists to get past a platform that
-    // refuses datacentres, not to fetch arbitrary addresses from a home connection.
     residentialFallback: false,
   });
 
@@ -91,8 +76,6 @@ export class DirectFileProvider implements MediaProvider {
       },
     ];
 
-    // Only offer conversions the source can actually satisfy: extracting audio from a
-    // JPEG, or making a GIF of a two-hour file, would be an option that always fails.
     if (kind === 'video') {
       plans.push(
         audioPlan('mp3', 'MP3', 320, head.url),
@@ -170,17 +153,7 @@ const IMAGE_EXTS = new Set(['jpg', 'jpeg', 'png', 'webp', 'avif', 'bmp', 'tif', 
 const AUDIO_EXTS = new Set(['mp3', 'm4a', 'aac', 'opus', 'ogg', 'oga', 'wav', 'flac', 'wma']);
 const VIDEO_EXTS = new Set(['mp4', 'm4v', 'mov', 'webm', 'mkv', 'avi', 'flv', 'ts', 'm3u8', 'mpd']);
 
-/**
- * Decides what a file is, trusting the server's `Content-Type` over the extension.
- *
- * A `.mp4` served as `text/html` is a redirect page or an error, not a video, and
- * treating it as one produces a download of a 404 page.
- */
 export function classify(contentType: string, extension: string): MediaKind {
-  // The extension only decides when the server said nothing, exactly as below. Without
-  // that guard a file-description page — commons.wikimedia.org/wiki/File:x.gif, served as
-  // text/html — was classified as a GIF, and the pipeline handed the visitor 150 KB of
-  // markup named .gif.
   if (contentType === 'image/gif' || (!contentType && extension === 'gif')) return 'gif';
   if (contentType.startsWith('image/') || (!contentType && IMAGE_EXTS.has(extension)))
     return 'image';
@@ -189,13 +162,11 @@ export function classify(contentType: string, extension: string): MediaKind {
   if (contentType.startsWith('audio/') || (!contentType && AUDIO_EXTS.has(extension)))
     return 'audio';
 
-  // Generic binary types are common on object storage; fall back to the extension.
   if (contentType === 'application/octet-stream' || contentType === 'binary/octet-stream') {
     if (VIDEO_EXTS.has(extension)) return 'video';
     if (AUDIO_EXTS.has(extension)) return 'audio';
     if (IMAGE_EXTS.has(extension)) return 'image';
   }
-  // Streaming manifests announce themselves with their own types.
   if (contentType.includes('mpegurl') || contentType.includes('dash+xml')) return 'video';
   return 'unknown';
 }

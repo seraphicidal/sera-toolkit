@@ -33,7 +33,6 @@ import { UrlForm } from './url-form';
 
 type Phase = 'idle' | 'analyzing' | 'ready' | 'submitting' | 'running' | 'done';
 
-/** The starting kind, selection and quality for a resolution, chosen the same way everywhere. */
 function seedFrom(info: MediaInfo): {
   kind: SelectableKind;
   selectedIds: Set<string>;
@@ -44,18 +43,6 @@ function seedFrom(info: MediaInfo): {
   return { kind, selectedIds, label: qualityLabels(info, kind, selectedIds)[0] };
 }
 
-/**
- * The whole interaction, in one component.
- *
- * It is a small state machine rather than a router: paste, analyze, choose, download.
- * Keeping it in one place is what makes the transitions honest — every phase knows what
- * the previous one produced, so the screen can never show a stale preview beside a fresh
- * error, and pressing Escape or changing the link always returns to a coherent state.
- *
- * `initialInfo` is the one entry that skips the paste-and-analyze step: a post the visitor's
- * own browser already read, handed to /import. There is no link to type in that mode, so the
- * form is gone and "Start over" returns to the post rather than to an empty page.
- */
 export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo } = {}) {
   const importMode = initialInfo !== undefined;
   const [url, setUrl] = useState('');
@@ -85,8 +72,6 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
   const analyzeAbort = useRef<AbortController | undefined>(undefined);
   const { job } = useJob(jobId);
 
-  /* ---------------------------------------------------------------- */
-
   const reset = useCallback(() => {
     analyzeAbort.current?.abort();
     setError(undefined);
@@ -99,8 +84,6 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
     setSubtitlesOnly(false);
     setPackaging('auto');
     setShowAdvanced(false);
-    // Import mode has nowhere to go back to but the post the browser read: reseed it rather
-    // than leaving a blank page with no way to type a link.
     if (initialInfo) {
       const seeded = seedFrom(initialInfo);
       setInfo(initialInfo);
@@ -154,8 +137,6 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
     }
   }, []);
 
-  // A link shared to SERA arrives as /#url=… (see lib/share.ts) and is read straight away.
-  // The fragment is cleared first, so a reload or Back does not analyse it a second time.
   useEffect(() => {
     if (importMode) return;
     const shared = urlFromFragment(window.location.hash);
@@ -165,7 +146,6 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
     void analyze(shared);
   }, [importMode, analyze]);
 
-  /** "Download again" on an expired entry: the original link, read afresh. */
   const again = useCallback(
     (link: string) => {
       setUrl(link);
@@ -175,7 +155,6 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
     [analyze],
   );
 
-  // Keep the quality choice valid when the format changes.
   useEffect(() => {
     if (!info) return;
     const labels = qualityLabels(info, kind, selectedIds);
@@ -196,9 +175,6 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
       ? info.items.find((item) => selectedIds.has(item.id))
       : undefined;
 
-  // Subtitles: one item that has tracks, as video or audio. A track is never added to a
-  // trimmed download (the server would refuse it), so a trim typed first hides the choice,
-  // and a track chosen first hides the trim.
   const subtitles = subtitleChoices(
     singleItem,
     singleItem?.options.find((option) => option.id === selection?.optionIds[0]),
@@ -210,8 +186,6 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
     subtitlesOnly,
   );
 
-  // Trimming applies to one video or audio item; for anything else the fields are hidden and
-  // whatever was typed in them is ignored.
   const trimItem =
     singleItem && (kind === 'video' || kind === 'audio') && !subtitlesRequested
       ? singleItem
@@ -255,12 +229,10 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
     }
   }, [info, selection, packaging, filename, trim, subtitlesRequested]);
 
-  // Follow the job to its conclusion.
   useEffect(() => {
     if (!job) return;
     if (job.state === 'ready') {
       setPhase('done');
-      // Remembered in this browser only; see lib/history.ts.
       if (job.result && info) {
         addToHistory({
           jobId: job.id,
@@ -288,7 +260,6 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
     setPhase('ready');
   }, [jobId]);
 
-  // Escape backs out of whatever is on screen, one step at a time.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key !== 'Escape') return;
@@ -298,8 +269,6 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [phase, cancel, reset]);
-
-  /* ---------------------------------------------------------------- */
 
   const busy = phase === 'analyzing';
   const working = phase === 'running' || phase === 'submitting';
@@ -319,8 +288,6 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
         },
       });
     }
-    // The one refusal a different route answers: Instagram serves photos only to a signed-in
-    // browser, and the visitor has one. /import is where that route is explained and begun.
     if (!importMode && error.code === 'PROVIDER_AUTH_REQUIRED') {
       actions.push({
         label: 'Download from your browser',
@@ -467,8 +434,6 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
   );
 }
 
-/* -------------------------------------------------------------------------- */
-
 function AdvancedOptions({
   open,
   onToggle,
@@ -486,7 +451,6 @@ function AdvancedOptions({
   readonly packaging: PackagingMode;
   readonly onPackagingChange: (value: PackagingMode) => void;
   readonly multiple: boolean;
-  /** Present only when the selection is one video or audio item. */
   readonly trim?: {
     readonly start: string;
     readonly end: string;
@@ -578,10 +542,6 @@ const FIELD_LABEL =
 const FIELD_INPUT =
   'tabular w-full rounded-xl border border-[var(--color-line)] bg-[var(--color-canvas)] px-3.5 py-2.5 text-[0.875rem] text-[var(--color-ink)] transition-colors outline-none placeholder:text-[var(--color-ink-faint)] focus:border-[var(--color-accent)] aria-[invalid=true]:border-[var(--color-danger)]';
 
-/**
- * A subtitle track: the language, then how it comes — embedded in the video as a track the
- * player can switch on, or as an SRT or VTT file beside it or on its own.
- */
 function SubtitleFields({
   choices,
   track,
@@ -665,7 +625,6 @@ function SubtitleFields({
   );
 }
 
-/** Start and end times, with what they keep or why they cannot be used. */
 function TrimFields({
   start,
   end,

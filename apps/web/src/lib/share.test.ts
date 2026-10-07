@@ -1,13 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { firstHttpUrl, homeWithUrl, isInstalledApp, sharedUrl, urlFromFragment } from './share';
 
-/**
- * What a phone's share sheet hands to `/share`.
- *
- * The samples are the shapes real apps send: a browser fills `url`, YouTube and TikTok put
- * the link at the end of a sentence in `text`, and some apps put it in `title`.
- */
-
 describe('sharedUrl', () => {
   it('takes the url field when the sharing app filled it', () => {
     expect(sharedUrl({ url: 'https://example.com/a', text: 'https://example.com/b' })).toBe(

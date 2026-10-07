@@ -1,20 +1,5 @@
 name: Update yt-dlp
 
-# Provider support is mostly yt-dlp's, and sites change faster than this repository does.
-# Once a day this looks for a new yt-dlp release and, when there is one, takes it the
-# whole way: a pull request that moves both pins (still checksum-verified at every
-# install), the full CI on that branch, a live smoke test against real sites, and then the
-# merge and the published images. The Oracle server picks the images up on its own
-# (deploy/auto-update.sh) and nodes refresh their own copy (`tools:fetch --pin-from=main`).
-#
-# To pause it: set the repository variable YTDLP_AUTO_UPDATE to `off`
-# (gh variable set YTDLP_AUTO_UPDATE --body off), or disable the workflow
-# (gh workflow disable update-ytdlp.yml). deploy/ORACLE.md lists the other two switches.
-#
-# Everything is done with the workflow's own token, which has two consequences worth
-# knowing. Pushes and merges made with it do not trigger other workflows, so CI is started
-# explicitly with a dispatch, on the branch and then on main. And the repository has to
-# allow Actions to create pull requests (Settings → Actions → General).
 on:
   schedule:
     - cron: '17 5 * * *'
@@ -62,8 +47,6 @@ jobs:
             echo "yt-dlp $before → $after"
           fi
 
-      # The branch is rewritten on every attempt, so a release that failed yesterday is
-      # tried again from the current main rather than from a stale base.
       - name: Push the branch and open the pull request
         if: steps.bump.outputs.changed == 'true'
         env:
@@ -91,8 +74,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ffmpeg
 
-      # The new pin, fetched and checked against yt-dlp's published checksums the same way
-      # every install of it is.
       - name: Fetch the new yt-dlp
         if: steps.bump.outputs.changed == 'true'
         run: |
@@ -103,11 +84,6 @@ jobs:
         if: steps.bump.outputs.changed == 'true'
         run: npm run build
 
-      # Real sites, through the real engine, with the new binary. Only providers that answer
-      # a datacentre the same way they answer a home connection (deploy/PROVIDERS.md), all
-      # of them yt-dlp's, each taken through to bytes. YouTube is not among them: GitHub's
-      # runners are refused like any datacentre, and the laptop node checks it in production.
-      # One retry, so a site having a bad minute does not hold the update for a day.
       - name: Live smoke test
         if: steps.bump.outputs.changed == 'true'
         run: |
@@ -115,8 +91,6 @@ jobs:
           npm run check:providers -- --download "${cases[@]}" ||
             { sleep 60; npm run check:providers -- --download "${cases[@]}"; }
 
-      # The full CI, on the branch. A dispatch is the one event the workflow token is
-      # allowed to start, and its checks attach to the commit, so they show on the PR.
       - name: Run CI on the branch
         if: steps.bump.outputs.changed == 'true'
         env:
@@ -139,8 +113,6 @@ jobs:
           BRANCH: ${{ steps.bump.outputs.branch }}
         run: gh pr merge "$BRANCH" --rebase --delete-branch
 
-      # The merge was made with the workflow token, so it does not trigger CI on main by
-      # itself, and CI on main is what publishes the images.
       - name: Publish the images
         if: steps.bump.outputs.changed == 'true'
         run: gh workflow run ci.yml --ref main

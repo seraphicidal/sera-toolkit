@@ -15,18 +15,8 @@ import {
   type UsableFormat,
 } from './formats.js';
 
-/**
- * Builds the list of things a user can ask for, from one yt-dlp entry.
- *
- * The guiding rule is that every row must mean something different. A second row is
- * worth adding only when it changes the resolution, the container, or the bitrate in a
- * way the person would notice — anything else is menu noise dressed up as choice.
- */
-
 export interface PlanBuildOptions {
-  /** Above this, a video is not offered as a GIF; the output would be unusable anyway. */
   readonly maxGifDurationSeconds?: number;
-  /** Ceiling from configuration; larger renditions are dropped rather than offered. */
   readonly maxFilesizeBytes?: number;
 }
 
@@ -43,7 +33,6 @@ const IMAGE_EXTENSIONS = new Set([
 ]);
 const AUDIO_EXTENSIONS = new Set(['mp3', 'm4a', 'aac', 'opus', 'ogg', 'oga', 'wav', 'flac', 'wma']);
 
-/** Classifies an entry, which is what decides the whole shape of its option list. */
 export function kindOf(info: YtdlpInfo): MediaKind {
   const ext = (str(info.ext) ?? '').toLowerCase();
   if (ext === 'gif') return 'gif';
@@ -54,7 +43,6 @@ export function kindOf(info: YtdlpInfo): MediaKind {
   if (formats.length) {
     const { videoOnly, progressive, audioOnly } = splitFormats(formats);
     if (videoOnly.length || progressive.length) {
-      // A "video" with a single frame and no audio is a still image behind a video URL.
       const onlyImages = formats.every((f) => IMAGE_EXTENSIONS.has(f.ext));
       return onlyImages ? 'image' : 'video';
     }
@@ -77,10 +65,6 @@ function joinDetail(...parts: (string | undefined)[]): string | undefined {
   const kept = parts.filter((p): p is string => Boolean(p));
   return kept.length ? kept.join(' · ') : undefined;
 }
-
-/* -------------------------------------------------------------------------- */
-/*  Video                                                                     */
-/* -------------------------------------------------------------------------- */
 
 interface VideoPlanInput {
   readonly video: UsableFormat;
@@ -119,7 +103,6 @@ function makeVideoPlan(input: VideoPlanInput): DownloadPlan {
     ...((audio?.acodec ?? video.acodec) ? { audioCodec: (audio?.acodec ?? video.acodec)! } : {}),
     ...(total !== undefined ? { filesizeBytes: total } : {}),
     ...(total !== undefined && approximate ? { filesizeIsApproximate: true } : {}),
-    // Merging two streams is a container operation, not a re-encode.
     requiresConversion: false,
     recommended: input.recommended,
     fetch: { via: 'ytdlp', selector, ...(audio ? { merge: container } : {}) },
@@ -134,8 +117,6 @@ export function buildVideoPlans(
   const { videoOnly, audioOnly, progressive } = splitFormats(formats);
   const plans: DownloadPlan[] = [];
 
-  // Renditions that already carry audio are preferred at a given height: one stream,
-  // no merge step, and nothing to get wrong.
   const progressiveByHeight = new Map<number, UsableFormat>();
   for (const format of progressive) {
     const height = format.height;
@@ -181,7 +162,6 @@ export function buildVideoPlans(
   for (const video of heights) {
     const height = video.height ?? 0;
     const progressiveMatch = progressiveByHeight.get(height);
-    // Use the muxed rendition only when it is not markedly worse than the split pair.
     if (progressiveMatch && (progressiveMatch.tbr ?? 0) >= (video.tbr ?? 0) * 0.8) {
       emit(progressiveMatch, undefined);
       continue;
@@ -190,7 +170,6 @@ export function buildVideoPlans(
     emit(video, bestAudio(audioOnly, preferred));
   }
 
-  // Sources that only ever publish muxed streams (most of TikTok, X and Reddit).
   if (!plans.length) {
     for (const format of [...progressiveByHeight.values()].sort(
       (a, b) => (b.height ?? 0) - (a.height ?? 0),
@@ -202,13 +181,6 @@ export function buildVideoPlans(
   return plans;
 }
 
-/**
- * Adds a container alternative for the best rendition.
- *
- * Only losslessly reachable containers are offered. MOV in particular is a pure remux of
- * MP4-compatible streams, so it costs nothing to provide and saves anyone on a video
- * editor a round trip.
- */
 export function buildAlternateContainerPlans(best: DownloadPlan | undefined): DownloadPlan[] {
   if (best?.kind !== 'video' || best.fetch.via !== 'ytdlp') return [];
   const plans: DownloadPlan[] = [];
@@ -217,8 +189,6 @@ export function buildAlternateContainerPlans(best: DownloadPlan | undefined): Do
     plans.push({
       ...best,
       container: 'mov',
-      // The container is named in the label, not only the detail: a quality dropdown
-      // listing "1080p" twice is worse than no alternative at all.
       label: `${best.label} (MOV)`,
       detail: joinDetail('MOV', codecLabel(best.videoCodec), 'remux')!,
       recommended: false,
@@ -229,23 +199,11 @@ export function buildAlternateContainerPlans(best: DownloadPlan | undefined): Do
   return plans;
 }
 
-/* -------------------------------------------------------------------------- */
-/*  Audio                                                                     */
-/* -------------------------------------------------------------------------- */
-
-/**
- * Audio targets, each with the source it would rather be built from.
- *
- * The preference matters: asking for M4A when the best-bitrate stream happens to be
- * Opus would transcode for no reason, when the same page also publishes AAC that could
- * simply be copied. Each target therefore picks its own source rather than sharing one.
- */
 const AUDIO_TARGETS: {
   container: ContainerFormat;
   format: string;
   label: string;
   prefer: 'mp4' | 'webm' | 'any';
-  /** Narrows yt-dlp's selection to the codec this target can copy. */
   selectorPrefix?: string;
 }[] = [
   { container: 'mp3', format: 'mp3', label: 'MP3', prefer: 'any' },
@@ -291,12 +249,9 @@ export function buildAudioPlans(
       (target.container === 'opus' && sourceCodec.startsWith('opus')) ||
       (target.container === 'mp3' && sourceCodec.startsWith('mp3'));
 
-    // Falls back to a muxed stream, because plenty of sources publish no audio-only
-    // rendition at all; when the target can copy, its codec is asked for first.
     const base = audioOnly.length ? 'bestaudio/best' : 'best';
     const selector = canCopy && target.selectorPrefix ? `${target.selectorPrefix}/${base}` : base;
 
-    // Never advertise a bitrate the source cannot actually supply.
     const bitrate = isLossless || canCopy ? undefined : audioBitrateChoices(sourceAbr)[0];
 
     const estimatedBytes = isLossless
@@ -324,8 +279,6 @@ export function buildAudioPlans(
               : isLossless
                 ? 'Lossless'
                 : undefined,
-          // The source codec is only worth naming when it is what the user will get.
-          // "WAV · Lossless · AAC" reads as a contradiction, because it is one.
           canCopy ? codecLabel(source.acodec) : undefined,
           sizeDetail(estimatedBytes, true),
         ) ?? target.label,
@@ -348,10 +301,6 @@ export function buildAudioPlans(
 
   return plans;
 }
-
-/* -------------------------------------------------------------------------- */
-/*  Images and GIFs                                                           */
-/* -------------------------------------------------------------------------- */
 
 export function buildImagePlans(info: YtdlpInfo, directUrl: string | undefined): DownloadPlan[] {
   const ext = (str(info.ext) ?? 'jpg').toLowerCase();
@@ -384,12 +333,6 @@ export function buildImagePlans(info: YtdlpInfo, directUrl: string | undefined):
   ];
 }
 
-/**
- * Options for animated media.
- *
- * Most platforms store what users call a GIF as a silent short MP4, so the honest
- * presentation offers the real video first and treats the actual GIF as a conversion.
- */
 export function buildGifPlans(
   sourceIsRealGif: boolean,
   videoPlans: readonly DownloadPlan[],
@@ -454,7 +397,6 @@ export function buildGifPlans(
   return plans;
 }
 
-/** Marks exactly one plan per kind as the default, preferring the first of each. */
 export function applyRecommendations(plans: readonly DownloadPlan[]): DownloadPlan[] {
   const claimed = new Set<string>();
   return plans.map((plan) => {
@@ -466,7 +408,6 @@ export function applyRecommendations(plans: readonly DownloadPlan[]): DownloadPl
   });
 }
 
-/** Guarantees each kind has a default even when no plan claimed one. */
 export function ensureRecommendations(plans: readonly DownloadPlan[]): DownloadPlan[] {
   const withFlags = applyRecommendations(plans);
   const kinds = new Set(withFlags.map((p) => p.kind));

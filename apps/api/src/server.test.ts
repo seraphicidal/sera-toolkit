@@ -8,14 +8,6 @@ import type { FastifyInstance } from 'fastify';
 import { loadConfig, SeraEngine } from '@sera/engine';
 import { buildServer } from './server.js';
 
-/**
- * What the server writes about a request.
- *
- * Fastify logs every request it serves, URL included, unless told not to — and a URL here
- * can carry the link someone is downloading. Its own lines are switched off and replaced by
- * one that names the route, not the path. This watches the log at its most verbose level.
- */
-
 const lines: Record<string, unknown>[] = [];
 let app: FastifyInstance;
 let dataDir: string;

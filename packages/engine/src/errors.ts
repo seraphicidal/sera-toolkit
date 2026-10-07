@@ -1,18 +1,10 @@
 import type { ErrorCode, JobError } from '@sera/contracts/types';
 
-/**
- * The single error type that crosses module boundaries inside the engine.
- *
- * Every failure the user can see is one of these. The `cause` carries the technical
- * detail for the server log; only `code`, `message` and `hint` are ever serialized to a
- * client, which is what keeps stack traces and provider internals off the wire.
- */
 export class SeraError extends Error {
   readonly code: ErrorCode;
   readonly hint?: string;
   readonly retryable: boolean;
   readonly httpStatus: number;
-  /** Free-form technical context for structured logs. Never sent to clients. */
   readonly detail?: string;
 
   constructor(
@@ -35,7 +27,6 @@ export class SeraError extends Error {
     this.detail = options.detail;
   }
 
-  /** The client-safe projection. */
   toJobError(): JobError {
     const error: { code: ErrorCode; message: string; hint?: string; retryable: boolean } = {
       code: this.code,
@@ -72,10 +63,7 @@ const DEFAULT_STATUS: Record<ErrorCode, number> = {
   GEO_RESTRICTED: 451,
   AGE_RESTRICTED: 403,
   LOGIN_REQUIRED: 403,
-  // Not 403: the refusal is upstream's, about this server, not about the request.
   SOURCE_BLOCKED: 502,
-  // 501, not 403: the request is fine and the media may well be public — this
-  // installation simply has not been given what the source now asks for.
   PROVIDER_AUTH_REQUIRED: 501,
   PROVIDER_CONFIGURATION_ERROR: 500,
   ROBOTS_DISALLOWED: 403,
@@ -96,10 +84,6 @@ const DEFAULT_STATUS: Record<ErrorCode, number> = {
   INTERNAL: 500,
 };
 
-/**
- * The exact wording users see. Kept in one place so the tone stays consistent and so
- * nothing accidentally leaks a provider name or an internal identifier into a message.
- */
 export const MESSAGES: Record<ErrorCode, string> = {
   INVALID_URL: "That doesn't look like a valid link.",
   UNSUPPORTED_SOURCE: "This source isn't currently supported.",
@@ -129,7 +113,6 @@ export const MESSAGES: Record<ErrorCode, string> = {
   INTERNAL: 'Something went wrong on our side.',
 };
 
-/** Suggested next steps, surfaced under the message in the UI. */
 export const HINTS: Partial<Record<ErrorCode, string>> = {
   UNSUPPORTED_SOURCE: 'Try a direct link to the media file itself.',
   PRIVATE_CONTENT: 'Only public posts can be processed.',
@@ -145,7 +128,6 @@ export const HINTS: Partial<Record<ErrorCode, string>> = {
   ROBOTS_DISALLOWED: 'Try a direct link to the media file itself.',
 };
 
-/** Constructs a `SeraError` with the canonical message and hint for its code. */
 export function seraError(
   code: ErrorCode,
   options: { message?: string; hint?: string; detail?: string; cause?: unknown } = {},

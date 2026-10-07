@@ -1,37 +1,10 @@
-# TLS termination for a public SERA deployment.
-#
-# Caddy obtains and renews a real Let's Encrypt certificate on its own. SERA_DOMAIN can be
-# a domain you own, or — if you have only a bare IP — an sslip.io name, which resolves
-# any `1-2-3-4.sslip.io` to 1.2.3.4 with no account and no registration. That is enough
-# for Let's Encrypt to issue, so a public HTTPS deployment needs no domain purchase.
-
 {
-	# Global options that only apply sometimes. Provisioning writes email.caddy here when
-	# SERA_TLS_EMAIL is set, so ACME renewal notices have somewhere to go; with no email
-	# the glob matches nothing and Caddy registers an anonymous ACME account, which is
-	# fine.
-	#
-	# The obvious spelling — `email {$SERA_TLS_EMAIL:...}` — does not work. Caddy applies
-	# the default only when the variable is *unset*, and Compose always passes it, so an
-	# unconfigured deployment got a bare `email` directive and Caddy refused the whole
-	# config. A conditional line has to be a conditional file.
 	import /etc/caddy/globals/*.caddy
 }
 
 {$SERA_DOMAIN} {
 	encode zstd gzip
 
-	# The extraction-node protocol, straight to the API rather than through the web app.
-	#
-	# These are reachable from the internet on purpose, and the name says "internal"
-	# because that is what they are *for*, not where they live: a node runs on a
-	# connection nothing can route to, so it has to dial out, which means the endpoint it
-	# dials has to answer. Every route behind this prefix requires the shared token, and
-	# without one configured the API does not mount them at all — so on a deployment with
-	# no node this proxies to a 404 either way.
-	#
-	# The generous timeouts are the upload: a node hands back a finished file that can be
-	# gigabytes, and this is the hop it crosses.
 	handle /internal/extraction/* {
 		reverse_proxy api:4000 {
 			transport http {
@@ -42,17 +15,12 @@
 		}
 	}
 
-	# Everything else goes to the Next server, which proxies /api to the API container.
-	# One origin, so the browser never makes a cross-site request and the app's own CSP
-	# can forbid outbound connections entirely.
 	handle {
 		reverse_proxy web:3000 {
-			# Media downloads are long-lived responses; the defaults would cut them off.
 			transport http {
 				read_timeout 30m
 				write_timeout 30m
 			}
-			# SSE progress must not be buffered, or the bar sits still until the job ends.
 			flush_interval -1
 		}
 	}
@@ -62,15 +30,12 @@
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "no-referrer"
 		X-Frame-Options "DENY"
-		# Caddy announces itself by default; there is no reason to tell anyone.
 		-Server
 	}
 
 	log {
 		output stdout
 		format console
-		# Bodies and query strings can carry the URL someone pasted, so only the method,
-		# path and status are recorded.
 		level INFO
 	}
 }

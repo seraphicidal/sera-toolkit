@@ -12,18 +12,6 @@ import { MediaResolver } from '../resolver.js';
 import { JobRunner } from './runner.js';
 import type { ExtractionNodeRegistry, RemoteFile } from '../extract/remote.js';
 
-/**
- * The invariant that the whole node architecture rests on.
- *
- * Several platforms sign a media URL to the address that requested it. Measured on
- * YouTube: the same `googlevideo` URL answers 206 from a home connection and 403 from a
- * server minutes later. So a resolution taken on one network and a download taken on
- * another do not compose, and a runner that splits them produces a job that fails at the
- * last step for reasons nothing upstream can explain.
- *
- * This pins the rule: whichever backend produced the plans carries out the job.
- */
-
 const run = promisify(execFile);
 
 let dataDir: string;
@@ -36,7 +24,6 @@ const config = loadConfig({
   SERA_DATA_DIR: '.data/test',
 });
 
-/** A resolution, optionally stamped with the backend that produced it. */
 function media(backend?: string): ResolvedMedia {
   return {
     provider: 'youtube',
@@ -60,9 +47,6 @@ function media(backend?: string): ResolvedMedia {
         ],
       },
     ],
-    // The typed field, not an entry in `metadata`. It was in `metadata` once, under a
-    // name the YouTube provider was also using for a diagnostic — so every YouTube job
-    // was dispatched to a node that did not exist and sat there until it timed out.
     ...(backend ? { remoteBackend: backend } : {}),
   };
 }
@@ -77,7 +61,6 @@ function runnerFor(
     logger: silentLogger(),
     resolver: {
       resolveCanonical: () => Promise.resolve(resolved),
-      // A local fetch would go through here; recording it is how the test notices.
       dispatcher: undefined,
     } as never,
     workspaces,
@@ -102,8 +85,6 @@ describe('a job follows the backend that resolved it', () => {
     const remote: Partial<ExtractionNodeRegistry> = {
       dispatchJob: async (task): Promise<readonly RemoteFile[]> => {
         dispatched.push({ planKeys: task.planKeys, url: task.url });
-        // A real file, because the runner validates its output with ffprobe and a
-        // stand-in of eight bytes would only prove that validation runs.
         const path = join(dataDir, 'from-node.mp4');
         await run(config.ffmpegPath, [
           '-v',
@@ -133,21 +114,12 @@ describe('a job follows the backend that resolved it', () => {
       () => undefined,
     );
 
-    // The job went to the node, carrying the plan key the visitor picked.
     expect(dispatched).toHaveLength(1);
     expect(dispatched[0]?.planKeys).toEqual(['video/mp4/1080p']);
     expect(result.filename).toBe('from-node.mp4');
   });
 
   it("cannot be talked into it by a provider's own diagnostics", async () => {
-    // The bug this pins. The YouTube provider recorded which path it took as
-    // `metadata.extractionBackend`, and the runner read a key of that name to decide a
-    // job belonged on another machine. Every YouTube job was dispatched to a node that
-    // did not exist and sat there until the task timed out — with the state stuck on
-    // "Downloading" and nothing in the log to say why.
-    //
-    // The routing answer is now a typed field the resolver alone sets, so a provider
-    // cannot reach it however it names its metadata.
     const resolver = new MediaResolver({
       config: { ...config, dataDir },
       logger: silentLogger(),
@@ -179,13 +151,10 @@ describe('a job follows the backend that resolved it', () => {
     );
 
     expect(resolved.remoteBackend).toBeUndefined();
-    // The diagnostic is still recorded — under a name that is not the routing field.
     expect(resolved.metadata?.extractionPath).toBe('direct');
   });
 
   it('never dispatches remotely for a resolution the local network produced', async () => {
-    // The other half of the rule. A local resolution has local URLs; sending the job
-    // elsewhere would spend a scarce connection and, for a signed URL, fail anyway.
     let dispatchedRemotely = false;
     const remote: Partial<ExtractionNodeRegistry> = {
       dispatchJob: () => {
@@ -195,8 +164,6 @@ describe('a job follows the backend that resolved it', () => {
     };
 
     const { runner } = runnerFor(media(), remote);
-    // The local path will fail here — there is no extractor in this test — but what
-    // matters is where it tried, not whether it succeeded.
     await runner
       .run(
         {
@@ -214,7 +181,6 @@ describe('a job follows the backend that resolved it', () => {
   });
 
   it('does not dispatch remotely when no node is configured', async () => {
-    // With no registry the runner has nowhere to send it and must not pretend otherwise.
     const { runner } = runnerFor(media('residential'));
     await expect(
       runner.run(

@@ -10,14 +10,6 @@ import {
   resolveSelection,
 } from './selection';
 
-/**
- * The rules that decide what a click actually downloads.
- *
- * This is the frontend's only real logic, and the place a mistake would be invisible:
- * every failure mode here produces a plausible-looking interface that quietly fetches
- * the wrong thing.
- */
-
 function option(
   partial: Partial<DownloadOption> & Pick<DownloadOption, 'id' | 'kind' | 'label'>,
 ): DownloadOption {
@@ -144,7 +136,6 @@ describe('optionForItem', () => {
   });
 
   it('falls back to the item’s own default when the kind does not apply', () => {
-    // This is what lets one control drive a post of mixed videos and photos.
     expect(optionForItem(imageItem, 'audio', 'MP3')?.id).toBe('img');
     expect(optionForItem(imageItem, 'video', '1080p')?.id).toBe('img');
   });
@@ -188,7 +179,6 @@ describe('resolveSelection', () => {
       'audio',
       'WAV',
     );
-    // The video yields WAV; the photo cannot, so it yields itself.
     expect(result.optionIds).toEqual(['wav', 'img']);
     expect(result.totalBytes).toBe(95);
   });
@@ -204,7 +194,6 @@ describe('resolveSelection', () => {
   });
 
   it('reports no total when any chosen option has no known size', () => {
-    // Better to show nothing than to show a total that is quietly missing a file.
     const unsized = item('i3', 3, 'video', [
       option({ id: 'u', kind: 'video', label: '1080p', recommended: true }),
     ]);

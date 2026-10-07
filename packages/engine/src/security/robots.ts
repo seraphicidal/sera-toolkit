@@ -1,22 +1,7 @@
-/**
- * A minimal robots.txt evaluator.
- *
- * SERA only ever fetches the one page a person pasted, so it is not a crawler in the
- * sense robots.txt was written for. Honouring an explicit `Disallow` is still the right
- * default: a site that has said it does not want automated fetches of a path should not
- * have to say it twice.
- */
-
 export interface RobotsRules {
-  /** Rules that apply to the given agent, most specific group first. */
   readonly groups: readonly { readonly allow: string[]; readonly disallow: string[] }[];
 }
 
-/**
- * Parses robots.txt, keeping only the group that applies to `userAgent`.
- *
- * A named group wins over `*`, matching the convention every major crawler follows.
- */
 export function parseRobots(text: string, userAgent: string): RobotsRules {
   const agent = userAgent.toLowerCase();
   const groups: { agents: string[]; allow: string[]; disallow: string[] }[] = [];
@@ -33,7 +18,6 @@ export function parseRobots(text: string, userAgent: string): RobotsRules {
     const value = line.slice(separator + 1).trim();
 
     if (field === 'user-agent') {
-      // Consecutive User-agent lines share one group of rules.
       if (!current || !lastLineWasAgent) {
         current = { agents: [], allow: [], disallow: [] };
         groups.push(current);
@@ -55,7 +39,6 @@ export function parseRobots(text: string, userAgent: string): RobotsRules {
   return { groups: applicable.map(({ allow, disallow }) => ({ allow, disallow })) };
 }
 
-/** Turns a robots path pattern into a matcher, supporting `*` and a trailing `$`. */
 function matches(pattern: string, path: string): number {
   if (pattern === '') return -1;
   const anchored = pattern.endsWith('$');
@@ -74,12 +57,6 @@ function matches(pattern: string, path: string): number {
   return regex.test(path) ? body.length : -1;
 }
 
-/**
- * Whether `path` may be fetched.
- *
- * The longest matching rule wins, and `Allow` beats `Disallow` at equal length — the
- * behaviour Google documents and most sites are written against.
- */
 export function isAllowed(rules: RobotsRules, path: string): boolean {
   let bestAllow = -1;
   let bestDisallow = -1;
@@ -87,7 +64,6 @@ export function isAllowed(rules: RobotsRules, path: string): boolean {
   for (const group of rules.groups) {
     for (const pattern of group.allow) bestAllow = Math.max(bestAllow, matches(pattern, path));
     for (const pattern of group.disallow) {
-      // An empty Disallow means "allow everything" and must not be treated as a match.
       if (pattern === '') continue;
       bestDisallow = Math.max(bestDisallow, matches(pattern, path));
     }

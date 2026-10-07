@@ -15,15 +15,6 @@ import {
 } from './helpers/fixtures.js';
 import { MediaServer } from './helpers/media-server.js';
 
-/**
- * The whole product, exercised for real.
- *
- * Nothing here is mocked below the HTTP boundary: FFmpeg runs, files are written to a
- * real workspace, the ZIP is a real archive, and every produced file is read back with
- * ffprobe. A test that stubbed the download would pass while the thing users actually do
- * stayed broken, which is precisely the failure this suite exists to prevent.
- */
-
 let engine: SeraEngine;
 let app: FastifyInstance;
 let origin: MediaServer;
@@ -65,7 +56,6 @@ beforeAll(async () => {
     LOG_LEVEL: 'silent',
     SERA_SECRET: 'end-to-end-test-secret',
     SERA_DATA_DIR: dataDir,
-    // The origin is on loopback, which the address guard blocks by design.
     SERA_ALLOW_PRIVATE_ADDRESSES: 'true',
     SERA_FFMPEG_PATH: ffmpegPath,
     SERA_FFPROBE_PATH: ffprobePath,
@@ -88,10 +78,6 @@ afterAll(async () => {
   await rm(dataDir, { recursive: true, force: true }).catch(() => undefined);
 });
 
-/* -------------------------------------------------------------------------- */
-/*  Helpers                                                                   */
-/* -------------------------------------------------------------------------- */
-
 async function resolveUrl(url: string): Promise<MediaInfo> {
   const response = await app.inject({ method: 'POST', url: '/api/media/info', payload: { url } });
   expect(response.statusCode, response.body).toBe(200);
@@ -109,7 +95,6 @@ function pick(info: MediaInfo, kind: string, label?: string): DownloadOption {
   );
 }
 
-/** Submits a job and waits for it to reach a terminal state. */
 async function runJob(payload: Record<string, unknown>): Promise<Job> {
   const created = await app.inject({ method: 'POST', url: '/api/jobs', payload });
   expect(created.statusCode, created.body).toBe(202);
@@ -126,7 +111,6 @@ async function runJob(payload: Record<string, unknown>): Promise<Job> {
   }
 }
 
-/** Downloads a job result into a temp file and probes it. */
 async function fetchResult(job: Job): Promise<{ bytes: Buffer; filename: string }> {
   const response = await app.inject({ method: 'GET', url: job.result!.downloadPath });
   expect(response.statusCode, response.body.slice(0, 200)).toBe(200);
@@ -141,10 +125,6 @@ async function writeTemp(bytes: Buffer, name: string): Promise<string> {
   return path;
 }
 
-/* -------------------------------------------------------------------------- */
-/*  Resolution                                                                */
-/* -------------------------------------------------------------------------- */
-
 describe('resolving a direct media link', () => {
   it('describes a video and offers real options', async () => {
     const info = await resolveUrl(origin.url('/clip.mp4'));
@@ -158,7 +138,6 @@ describe('resolving a direct media link', () => {
     expect(kinds).toContain('video');
     expect(kinds).toContain('audio');
 
-    // Exactly one default per kind, so the UI never has to choose.
     for (const kind of kinds) {
       const defaults = info.items[0]!.options.filter((o) => o.kind === kind && o.recommended);
       expect(defaults, kind).toHaveLength(1);
@@ -168,7 +147,6 @@ describe('resolving a direct media link', () => {
   it('proxies the thumbnail rather than exposing the origin URL', async () => {
     const info = await resolveUrl(origin.url('/article'));
     expect(info.thumbnail).toMatch(/^\/api\/thumb\//);
-    // No third-party URL reaches the client.
     expect(JSON.stringify(info)).not.toContain('/photo.jpg');
   });
 
@@ -228,10 +206,6 @@ describe('resolving a generic page', () => {
   });
 });
 
-/* -------------------------------------------------------------------------- */
-/*  Downloads                                                                 */
-/* -------------------------------------------------------------------------- */
-
 describe('video download', () => {
   it('delivers a playable file with both streams intact', async () => {
     const info = await resolveUrl(origin.url('/clip.mp4'));
@@ -270,7 +244,6 @@ describe('video download', () => {
       filename: '../../etc/passwd',
     });
     expect(job.state).toBe('ready');
-    // The traversal is gone; what remains is an ordinary name.
     expect(job.result!.filename).toBe('etc passwd.mp4');
   });
 });
@@ -310,7 +283,7 @@ describe('audio extraction', () => {
   it('refuses to extract audio from a silent video instead of shipping an empty file', async () => {
     const info = await resolveUrl(origin.url('/silent.mp4'));
     const audio = info.items[0]!.options.find((option) => option.kind === 'audio');
-    if (!audio) return; // no audio option offered at all, which is also correct
+    if (!audio) return;
 
     const job = await runJob({ infoId: info.id, optionIds: [audio.id] });
     expect(job.state).toBe('failed');
@@ -330,7 +303,7 @@ describe('image download', () => {
     expect(job.state, JSON.stringify(job.error)).toBe('ready');
 
     const { bytes } = await fetchResult(job);
-    expect(bytes.subarray(0, 3)).toEqual(Buffer.from([0xff, 0xd8, 0xff])); // JPEG magic
+    expect(bytes.subarray(0, 3)).toEqual(Buffer.from([0xff, 0xd8, 0xff]));
     expect(job.result!.mimeType).toBe('image/jpeg');
   });
 });
@@ -363,10 +336,6 @@ describe('GIF handling', () => {
   });
 });
 
-/* -------------------------------------------------------------------------- */
-/*  Multiple files and packaging                                              */
-/* -------------------------------------------------------------------------- */
-
 describe('multi-file jobs', () => {
   it('packages several selections into a ZIP and lists them individually', async () => {
     const info = await resolveUrl(origin.url('/clip.mp4'));
@@ -380,7 +349,7 @@ describe('multi-file jobs', () => {
     expect(job.result!.files).toHaveLength(2);
 
     const { bytes } = await fetchResult(job);
-    expect(bytes.subarray(0, 2).toString('latin1')).toBe('PK'); // ZIP magic
+    expect(bytes.subarray(0, 2).toString('latin1')).toBe('PK');
     expect(job.progress.totalFiles).toBe(2);
   });
 
@@ -419,10 +388,6 @@ describe('multi-file jobs', () => {
     expect(job.result!.isArchive).toBe(true);
   });
 });
-
-/* -------------------------------------------------------------------------- */
-/*  Progress                                                                  */
-/* -------------------------------------------------------------------------- */
 
 describe('progress reporting', () => {
   it('streams state changes and ends with a done event', async () => {

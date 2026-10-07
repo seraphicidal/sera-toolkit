@@ -10,14 +10,6 @@ import {
   type HistoryEntry,
 } from './history';
 
-/**
- * Recent downloads in `localStorage`.
- *
- * What matters is that it never gets in the way: storage that is missing, full, forbidden or
- * holding junk has to read as an empty history, and nothing stored can become an href to
- * somewhere other than this site's API.
- */
-
 function memoryStore(initial: Record<string, string> = {}) {
   const data = new Map(Object.entries(initial));
   return {

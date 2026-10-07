@@ -1,5 +1,3 @@
-# Installed by deploy/install-timers.sh. Pause with
-# `sudo systemctl disable --now sera-update.timer`, or touch /opt/sera/.auto-update-paused.
 [Unit]
 Description=SERA: look for newly published images every 15 minutes
 

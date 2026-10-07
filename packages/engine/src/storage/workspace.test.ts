@@ -5,13 +5,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { silentLogger } from '../logging.js';
 import { mimeTypeFor, WorkspaceManager } from './workspace.js';
 
-/**
- * Retention is the privacy promise, so the reaper gets its own tests.
- *
- * The failure mode it guards against is silent: media that should have been deleted
- * simply accumulates, and nothing surfaces until the disk fills or someone looks.
- */
-
 let root: string;
 let manager: WorkspaceManager;
 
@@ -28,7 +21,6 @@ afterEach(async () => {
 
 const jobId = (n: number) => n.toString(16).padStart(32, '0');
 
-/** Backdates a workspace so the reaper sees it as old. */
 async function age(id: string, secondsAgo: number): Promise<void> {
   const when = new Date(Date.now() - secondsAgo * 1000);
   await utimes(join(root, id), when, when);
@@ -63,8 +55,6 @@ describe('reaper', () => {
   });
 
   it('removes a workspace whose job crashed mid-download', async () => {
-    // The reaper deletes by directory age and never consults the job store, so a lost
-    // or crashed job cannot leave media behind indefinitely.
     const workspace = await manager.create(jobId(4));
     await mkdir(join(workspace.scratchDir, 'sel-0'), { recursive: true });
     await writeFile(join(workspace.scratchDir, 'sel-0', 'media.mp4.part'), Buffer.alloc(2048));

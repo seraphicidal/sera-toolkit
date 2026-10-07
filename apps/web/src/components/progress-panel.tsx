@@ -4,14 +4,6 @@ import type { Job } from '@sera/contracts/types';
 import { SpinnerIcon } from './icons';
 import { cx, formatBytes, formatEta, formatSpeed } from '@/lib/format';
 
-/**
- * What is happening, in numbers.
- *
- * A percentage on its own tells someone almost nothing about whether to keep waiting.
- * Speed and ETA are what answer that, so they are given equal weight and set in tabular
- * figures so the row does not twitch as the digits change. When the server stops
- * reporting a number the slot collapses rather than showing a stale one.
- */
 export function ProgressPanel({
   job,
   onCancel,
@@ -88,7 +80,6 @@ export function ProgressPanel({
         </button>
       </div>
 
-      {/* Announced to screen readers on each step change, not on each percentage tick. */}
       <p className="sr-only" role="status" aria-live="polite">
         {job.step}
       </p>

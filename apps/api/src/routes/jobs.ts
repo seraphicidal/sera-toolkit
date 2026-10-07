@@ -7,7 +7,6 @@ import { contentDispositionValue, mimeTypeFor, seraError, SeraError } from '@ser
 import { abuseGuardFor } from '../plugins/client.js';
 import { clientAbortSignal } from '../plugins/disconnect.js';
 
-/** Job ids are hex; rejecting anything else keeps malformed input away from the store. */
 const JOB_ID = /^[a-f0-9]{16,64}$/;
 
 function assertJobId(id: string): string {
@@ -35,8 +34,6 @@ export function registerJobRoutes(app: FastifyInstance, engine: SeraEngine): voi
         abuse.recordSuccess();
         return await reply.status(202).header('cache-control', 'no-store').send(job);
       } catch (error) {
-        // Forged or expired handles are exactly the pattern worth cooling down; a
-        // legitimately failed job is not.
         abuse.recordFailure(error instanceof SeraError ? error.code : undefined);
         throw error;
       }
@@ -54,13 +51,6 @@ export function registerJobRoutes(app: FastifyInstance, engine: SeraEngine): voi
     return reply.status(cancelled ? 200 : 409).send({ cancelled });
   });
 
-  /**
-   * Progress stream.
-   *
-   * Server-sent events rather than a socket: progress is one-way, SSE reconnects on its
-   * own, and it survives the proxies people put in front of a self-hosted service. The
-   * periodic `ping` keeps those proxies from closing an idle stream mid-download.
-   */
   app.get<{ Params: { id: string } }>('/api/jobs/:id/events', async (request, reply) => {
     const id = assertJobId(request.params.id);
     const signal = clientAbortSignal(request, reply);
@@ -69,10 +59,8 @@ export function registerJobRoutes(app: FastifyInstance, engine: SeraEngine): voi
       'content-type': 'text/event-stream; charset=utf-8',
       'cache-control': 'no-cache, no-transform',
       connection: 'keep-alive',
-      // Tells nginx not to buffer, which would otherwise hold every event until the end.
       'x-accel-buffering': 'no',
     });
-    // Reconnect delay for the browser's own EventSource retry.
     reply.raw.write('retry: 3000\n\n');
 
     try {
@@ -89,7 +77,6 @@ export function registerJobRoutes(app: FastifyInstance, engine: SeraEngine): voi
     return reply;
   });
 
-  /** The primary result: the file, or the archive when there is more than one. */
   app.get<{ Params: { id: string } }>('/api/jobs/:id/download', async (request, reply) => {
     const id = assertJobId(request.params.id);
     const manifest = await engine.workspaces.readManifest(id);
@@ -97,7 +84,6 @@ export function registerJobRoutes(app: FastifyInstance, engine: SeraEngine): voi
     return sendFile(engine, reply, id, manifest.primary, !request.canary);
   });
 
-  /** One file from a multi-item job, so a carousel can be saved piece by piece. */
   app.get<{ Params: { id: string; name: string } }>(
     '/api/jobs/:id/files/:name',
     async (request, reply) => {
@@ -106,8 +92,6 @@ export function registerJobRoutes(app: FastifyInstance, engine: SeraEngine): voi
       if (!manifest) throw seraError('NOT_FOUND', { message: 'That download has expired.' });
 
       const name = decodeURIComponent(request.params.name);
-      // The manifest is the allowlist: a name that is not in it is not served, whatever
-      // it resolves to on disk.
       if (!manifest.files.some((file) => file.name === name)) throw seraError('NOT_FOUND');
       return sendFile(engine, reply, id, name, !request.canary);
     },
@@ -124,7 +108,6 @@ async function sendFile(
   const path = await engine.workspaces.resolveFile(jobId, filename);
   const info = await stat(path);
 
-  // Bytes delivered, counted once the whole file has gone out, against the job's source.
   if (counted) {
     reply.raw.once('finish', () => {
       void engine.jobs.get(jobId).then((job) =>
@@ -137,15 +120,12 @@ async function sendFile(
     });
   }
 
-  return (
-    reply
-      .header('content-type', mimeTypeFor(filename))
-      .header('content-length', info.size)
-      .header('content-disposition', contentDispositionValue(filename))
-      .header('cache-control', 'private, no-store')
-      .header('x-content-type-options', 'nosniff')
-      // The response is a download, never something a browser should render in place.
-      .header('content-security-policy', "default-src 'none'; sandbox")
-      .send(createReadStream(path))
-  );
+  return reply
+    .header('content-type', mimeTypeFor(filename))
+    .header('content-length', info.size)
+    .header('content-disposition', contentDispositionValue(filename))
+    .header('cache-control', 'private, no-store')
+    .header('x-content-type-options', 'nosniff')
+    .header('content-security-policy', "default-src 'none'; sandbox")
+    .send(createReadStream(path));
 }

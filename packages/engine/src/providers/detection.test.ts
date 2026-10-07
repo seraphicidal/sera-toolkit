@@ -64,8 +64,6 @@ describe('provider detection', () => {
   });
 
   it('falls back to the generic provider for an unknown page', () => {
-    // Deliberate: without the extension gate the direct provider would claim these and
-    // turn the service into an open proxy.
     expect(detect('https://example.com/some/article')).toBe('generic');
     expect(detect('https://news.example.org/2026/story')).toBe('generic');
     expect(detect('https://example.com/download.php?id=5')).toBe('generic');
@@ -80,7 +78,6 @@ describe('provider detection', () => {
   it('recognises an unlisted fediverse server by its status path', () => {
     expect(detect('https://some-instance.example/@alice/109876543210')).toBe('mastodon');
     expect(detect('https://some-instance.example/users/alice/statuses/1234')).toBe('mastodon');
-    // A path that is not a status must not be claimed.
     expect(detect('https://some-instance.example/@alice')).toBe('generic');
   });
 
@@ -123,11 +120,6 @@ describe('normalization', () => {
   });
 
   it('sends Vimeo to the embed player, which is the form that still answers', () => {
-    // The watch page tells an anonymous client to log in — measured on yt-dlp
-    // 2026.08.19 from a residential connection, so it is not about the address. The
-    // embed is the same video as any other site's embed receives it, and returns the
-    // full format list. This used to run the other way round, converting a link that
-    // worked into the one form that does not.
     expect(canonical('https://vimeo.com/76979871')).toBe('https://player.vimeo.com/video/76979871');
     expect(canonical('https://player.vimeo.com/video/76979871')).toBe(
       'https://player.vimeo.com/video/76979871',
@@ -138,8 +130,6 @@ describe('normalization', () => {
   });
 
   it('carries an unlisted Vimeo permission hash onto the embed', () => {
-    // Without it the embed answers "private", which is true of the embed and not of the
-    // link the visitor pasted.
     expect(canonical('https://vimeo.com/76979871/abc123def4')).toBe(
       'https://player.vimeo.com/video/76979871?h=abc123def4',
     );
@@ -155,9 +145,6 @@ describe('normalization', () => {
   });
 
   it('spells a TikTok slideshow the way the extractor accepts', () => {
-    // The app hands out `/photo/<id>`; yt-dlp 2026.08.19 answers "Unsupported URL" to
-    // that path and resolves the identical id under `/video/`. One post, two spellings,
-    // and the link a visitor pasted was being refused over which one they had.
     expect(canonical('https://www.tiktok.com/@someone/photo/7681695065927912735')).toBe(
       'https://www.tiktok.com/@someone/video/7681695065927912735',
     );
@@ -193,7 +180,6 @@ describe('registry', () => {
     expect(local.statusOf('instagram')).toBe('ok');
     local.markDegraded('instagram', 'extractor changed');
     expect(local.statusOf('instagram')).toBe('degraded');
-    // Everything else is unaffected.
     expect(local.statusOf('youtube')).toBe('ok');
     local.markHealthy('instagram');
     expect(local.statusOf('instagram')).toBe('ok');

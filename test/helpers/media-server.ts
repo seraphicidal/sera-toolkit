@@ -3,31 +3,18 @@ import { stat } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
-/**
- * A local origin the pipeline can actually download from.
- *
- * The end-to-end tests need a real HTTP server rather than a mocked fetch, because the
- * things most likely to break — redirects, content types, byte caps, streaming to disk —
- * only exist at the transport layer.
- */
-
 export interface MediaServerRoute {
-  /** Absolute path to a file to serve. */
   readonly file?: string;
-  /** Literal body, for HTML pages and error cases. */
   readonly body?: string;
   readonly contentType?: string;
   readonly status?: number;
-  /** Location header for a redirect. */
   readonly redirectTo?: string;
-  /** Lies about the length, to exercise the mid-stream cap. */
   readonly declaredLength?: number;
 }
 
 export class MediaServer {
   private server: Server | undefined;
   private port = 0;
-  /** Requests received, so tests can assert what was and was not fetched. */
   readonly requests: string[] = [];
 
   constructor(private readonly routes: Record<string, MediaServerRoute>) {}

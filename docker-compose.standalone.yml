@@ -1,13 +1,3 @@
-# SERA.toolkit — single-container deployment.
-#
-# The same image, without Redis: the API runs its own worker in-process. This is the
-# right shape for a personal or small-team instance, where a queue between two containers
-# is infrastructure without a purpose. Move to docker-compose.yml when downloads need to
-# run on more than one machine.
-#
-#   cp .env.example .env   # then set SERA_SECRET
-#   docker compose -f docker-compose.standalone.yml up --build
-
 name: sera-toolkit-standalone
 
 services:
@@ -40,7 +30,6 @@ services:
     environment:
       NODE_ENV: production
       SERA_SECRET: ${SERA_SECRET:?set SERA_SECRET in .env — see .env.example}
-      # In-process queue and worker: no Redis, no second container.
       SERA_QUEUE_DRIVER: memory
       SERA_WORKER_CONCURRENCY: ${SERA_WORKER_CONCURRENCY:-2}
       SERA_DATA_DIR: /data

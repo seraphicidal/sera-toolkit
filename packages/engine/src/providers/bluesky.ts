@@ -8,27 +8,12 @@ import type { DownloadPlan, ProviderContext, ResolvedItem, ResolvedMedia } from 
 import { YtdlpProvider } from './ytdlp-base.js';
 import { declare } from './capabilities.js';
 
-/**
- * Bluesky posts.
- *
- * A post URL is `/profile/<handle-or-did>/post/<rkey>`.
- *
- * Video posts go through yt-dlp, which gives several renditions. Photo posts do not:
- * yt-dlp's Bluesky extractor answers "No video could be found in this post", and a post
- * carrying four photographs is a perfectly ordinary thing to want. The page's own
- * `og:image` tags list them, but only at thumbnail size, so those are read from the
- * AppView API instead — the same public, unauthenticated endpoint the Bluesky web client
- * uses for public posts. Each image becomes its own selectable item.
- */
 export class BlueskyProvider extends YtdlpProvider {
   readonly id = 'bluesky';
   readonly label = 'Bluesky';
   readonly hosts = ['bsky.app', 'bsky.social'];
   override readonly priority = 30;
 
-  /**
-   * Photographs through the AppView API, video through the extractor.
-   */
   override readonly capabilities: ProviderCapabilities = declare({
     image: true,
     carousel: true,
@@ -42,14 +27,6 @@ export class BlueskyProvider extends YtdlpProvider {
     return true;
   }
 
-  /**
-   * The extractor, then the AT Protocol.
-   *
-   * yt-dlp owns video, which it renders in several qualities the API does not. The API
-   * owns photographs, which the extractor does not see at all — so the second rung
-   * answers exactly one thing, "there was nothing here I could extract", and a private
-   * account or a deleted post stops the ladder rather than being asked twice.
-   */
   protected override strategies(
     _url: URL,
     _context: ProviderContext,
@@ -83,8 +60,6 @@ export class BlueskyProvider extends YtdlpProvider {
       const did = actor.startsWith('did:') ? actor : await this.resolveHandle(actor, context);
       post = await this.readPost(did, rkey, context);
     } catch {
-      // The API is a convenience, not a contract. If it will not answer, the extractor's
-      // own verdict is what the user hears.
       throw original;
     }
 
@@ -95,10 +70,6 @@ export class BlueskyProvider extends YtdlpProvider {
     const text = typeof post.record?.text === 'string' ? post.record.text.trim() : '';
     const title = text ? truncate(text, 200) : `Post by ${author ?? 'Bluesky user'}`;
 
-    // The CDN's URLs end in `@jpeg` and it serves WebP, so the extension is no guide.
-    // One HEAD settles it for the whole post: every image in a post comes from the same
-    // CDN through the same pipeline, and asking once is cheaper than asking twenty times
-    // for a carousel. If it will not answer, the download still corrects the file itself.
     const container = await this.containerOf(images[0]!.fullsize, context);
 
     const items: ResolvedItem[] = images
@@ -126,12 +97,9 @@ export class BlueskyProvider extends YtdlpProvider {
         ];
 
         return {
-          // The CDN path ends in the blob's content hash, which is stable — so a
-          // selection survives the post gaining or losing an image before download.
           sourceId: image.fullsize.split('/').pop() ?? String(index),
           index,
           kind: 'image' as const,
-          // Alt text is the only real per-image name a post carries.
           title: image.alt?.trim() ? truncate(image.alt.trim(), 120) : `Image ${index + 1}`,
           thumbnailUrl: image.thumb ?? image.fullsize,
           ...(image.aspectRatio?.width ? { width: image.aspectRatio.width } : {}),
@@ -211,10 +179,6 @@ interface BlueskyPost {
   readonly embed?: BlueskyEmbed;
 }
 
-/**
- * Images live in one of two places: directly on the embed, or under `media` when the post
- * also quotes another post.
- */
 function imagesIn(post: BlueskyPost): readonly BlueskyImage[] {
   const candidates = post.embed?.images ?? post.embed?.media?.images ?? [];
   return candidates.filter(

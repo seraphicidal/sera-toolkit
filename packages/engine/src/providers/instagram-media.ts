@@ -6,22 +6,6 @@ import { hostMatchesAny } from '../security/url.js';
 import { nonEmpty, truncate } from '../util/format.js';
 import type { DownloadPlan, ResolvedItem, ResolvedMedia } from './types.js';
 
-/**
- * Instagram's own web API, as two different parties read it.
- *
- * The operator's route reads a post here, with a session the operator supplied for their
- * own server; it runs only when one is configured, and without one nothing here runs and
- * photo posts are refused with an explanation. The visitor's route holds no session on this
- * side at all: the visitor's browser, already signed in to Instagram, reads the one post it
- * is showing and hands SERA the answer. Both arrive in the same shape and go through the
- * same functions below, so a photograph comes out the same whichever way it came in.
- *
- * The shape is the one gallery-dl and yt-dlp both normalize: `items[0]` with a
- * `media_type` (1 image, 2 video, 8 carousel), `carousel_media` for the slides, and
- * `image_versions2.candidates` / `video_versions` sorted widest-first on each.
- */
-
-/** The public web client's app id. instagram.com sends this on every one of these calls. */
 const APP_ID = '936619743392459';
 
 export interface InstagramCandidate {
@@ -32,9 +16,7 @@ export interface InstagramCandidate {
 
 export interface InstagramNode {
   readonly id?: string;
-  /** The post's shortcode, as it appears in the post's URL. */
   readonly code?: string;
-  /** 1 image, 2 video, 8 carousel. */
   readonly media_type?: number;
   readonly carousel_media?: readonly InstagramNode[];
   readonly image_versions2?: { readonly candidates?: readonly InstagramCandidate[] };
@@ -45,15 +27,6 @@ export interface InstagramNode {
   readonly caption?: { readonly text?: string };
 }
 
-/**
- * What Instagram publishes about a post to anyone embedding it.
- *
- * The one endpoint still answering without a session. Measured against public posts on
- * 2026-09-08: it returns the caption, the account, the numeric media id, and a signed
- * thumbnail on the CDN — 640×564 for a photo post, 640×1136 for a Reel, both real JPEGs
- * of about 60 KB. The signature is on the size, so asking for a bigger one is a 403;
- * 640 is what Instagram publishes and therefore what this can honestly offer.
- */
 export interface InstagramOembed {
   readonly title?: string;
   readonly author_name?: string;
@@ -76,13 +49,6 @@ export async function oembedFor(
 
 const SHORTCODE_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
 
-/**
- * The numeric media id (`pk`) a post's shortcode encodes: its first eleven characters are
- * the id in base 64 over `A–Z a–z 0–9 - _`. Computed rather than asked of oEmbed, which
- * answers 400 for some public posts — measured, a four-photo carousel whose media endpoint
- * served it to a session — and so made the session route fail before it started. Agrees
- * with oEmbed's `media_id` wherever oEmbed answers.
- */
 export function mediaIdFromShortcode(shortcode: string): string {
   let id = 0n;
   for (const character of shortcode.slice(0, 11)) {
@@ -93,15 +59,6 @@ export function mediaIdFromShortcode(shortcode: string): string {
   return id.toString();
 }
 
-/**
- * The published cover image as a one-item resolution.
- *
- * Deliberately labelled for what it is. A carousel's cover is its first slide and a
- * Reel's is a frame, so calling either "the post" would be a lie the picker then repeats
- * — the option says "Cover image" and the metadata records that this was a fallback, so
- * a report can tell the difference between a post that worked and a post that was
- * salvaged.
- */
 export function coverItemFrom(oembed: InstagramOembed): ResolvedItem | undefined {
   const url = nonEmpty(oembed.thumbnail_url);
   if (!url) return undefined;
@@ -141,12 +98,10 @@ export function coverItemFrom(oembed: InstagramOembed): ResolvedItem | undefined
   };
 }
 
-/** Headers instagram.com's own web client sends. The session is one of them. */
 export function sessionHeaders(sessionId: string): Record<string, string> {
   return {
     'x-ig-app-id': APP_ID,
     'x-requested-with': 'XMLHttpRequest',
-    // Sent as a cookie because that is where Instagram looks for it. Never logged.
     cookie: `sessionid=${sessionId}`,
   };
 }
@@ -167,44 +122,22 @@ function containerFor(url: string, fallback: ContainerFormat): ContainerFormat {
   return fallback;
 }
 
-/* -------------------------------------------------------------------------- */
-/*  Slides                                                                    */
-/* -------------------------------------------------------------------------- */
-
-/**
- * One photograph or video, reduced to what fetching it needs.
- *
- * For the operator's route this is an intermediate step. For a post a visitor's browser
- * read, it is what the server signs into the resolution token, because a job made from that
- * post cannot read it again — nothing on this side can. Single-letter keys for that reason:
- * a carousel carries twenty of these to the browser and back.
- */
 export interface ImportedEntry {
-  /** Instagram's id for the slide. Option tokens name it. */
   readonly s: string;
   readonly kind: 'image' | 'video';
-  /** The widest rendition, on Instagram's CDN. */
   readonly url: string;
   readonly w?: number;
   readonly h?: number;
   readonly container: ContainerFormat;
-  /** Seconds, for a video, so the duration ceiling still applies at job time. */
   readonly d?: number;
 }
 
-/** A slide as read: what a job needs, and what only the person choosing sees. */
 export interface InstagramSlide {
   readonly entry: ImportedEntry;
   readonly title: string;
   readonly thumbnailUrl?: string;
 }
 
-/**
- * One node — a whole post, or one slide of a carousel — as a slide.
- *
- * The candidates are sorted widest first, so the first is the original upload. `position` is
- * the slide's place in the post before empty slides are dropped.
- */
 function slideFrom(node: InstagramNode, position: number): InstagramSlide | undefined {
   const video = widest(node.video_versions);
   const image = widest(node.image_versions2?.candidates);
@@ -242,17 +175,10 @@ function slideFrom(node: InstagramNode, position: number): InstagramSlide | unde
   };
 }
 
-/** How many slides a post has, counting any that turn out to hold nothing. */
 export function slideCount(node: InstagramNode): number {
   return node.media_type === 8 && node.carousel_media?.length ? node.carousel_media.length : 1;
 }
 
-/**
- * Every slide of a post, in the order Instagram lists them.
- *
- * A carousel can mix photographs and video, so nothing here assumes one kind — the
- * decision is made per slide, which is what makes a mixed post come out right.
- */
 export function slidesFrom(node: InstagramNode, limit: number): InstagramSlide[] {
   const nodes = node.media_type === 8 && node.carousel_media?.length ? node.carousel_media : [node];
   return nodes
@@ -261,13 +187,6 @@ export function slidesFrom(node: InstagramNode, limit: number): InstagramSlide[]
     .filter((slide): slide is InstagramSlide => slide !== undefined);
 }
 
-/**
- * What one slide offers, and the only place that is decided.
- *
- * A pure function of the entry. That is what lets a job rebuild exactly the options a
- * visitor chose from without asking Instagram again: the same entry in, the same plan keys
- * out. A photograph is offered as itself and nothing else; a video also gets its audio.
- */
 export function itemFromEntry(entry: ImportedEntry, index: number): ResolvedItem {
   const dimensions = {
     ...(entry.w ? { width: entry.w } : {}),
@@ -317,7 +236,6 @@ export function itemFromEntry(entry: ImportedEntry, index: number): ResolvedItem
   };
 }
 
-/** Every slide of a post as SERA items, titled and with thumbnails, for the operator's route. */
 export function itemsFrom(node: InstagramNode, limit: number): ResolvedItem[] {
   return slidesFrom(node, limit).map((slide, index) => ({
     ...itemFromEntry(slide.entry, index),
@@ -335,7 +253,6 @@ export function titleFor(node: InstagramNode): { title: string; author?: string 
   };
 }
 
-/** The account's page, when the username is one Instagram could have issued. */
 export function authorUrlFor(node: InstagramNode): string | undefined {
   const username = node.user?.username;
   return username && /^[A-Za-z0-9._]{1,30}$/.test(username)
@@ -343,32 +260,17 @@ export function authorUrlFor(node: InstagramNode): string | undefined {
     : undefined;
 }
 
-/** The shortcode, from any of the paths Instagram serves a post at. */
 export function shortcodeFrom(url: URL): string | undefined {
   return /\/(?:p|reel|reels|tv)\/([A-Za-z0-9_-]+)/.exec(url.pathname)?.[1];
 }
 
-/* -------------------------------------------------------------------------- */
-/*  A post the visitor's browser read                                         */
-/* -------------------------------------------------------------------------- */
-
-/** An imported post as the server approved it: everything a job needs, and nothing else. */
 export interface ImportedPost {
-  /** The post's canonical URL. */
   readonly url: string;
   readonly title: string;
   readonly author?: string;
   readonly entries: readonly ImportedEntry[];
 }
 
-/**
- * The resolution an imported post stands for.
- *
- * Pure — no clock, no network, nothing random — and called twice: when the post arrives, to
- * build the options the visitor chooses from, and when the job runs, to find the plans those
- * options name. The same signed entries in, the same plan keys out, which is what makes a job
- * that cannot re-resolve safe to match against.
- */
 export function mediaFromImport(post: ImportedPost): ResolvedMedia {
   const items = post.entries.map((entry, index) => itemFromEntry(entry, index));
   return {
@@ -383,22 +285,11 @@ export function mediaFromImport(post: ImportedPost): ResolvedMedia {
   };
 }
 
-/**
- * Where an imported post's media may be fetched from.
- *
- * The check that turns "a browser sent this" into "SERA will fetch this". Whatever a payload
- * says, the only URLs admitted are HTTPS on Instagram's own CDN hosts, with no port and no
- * credentials — so the most a forged payload can do is have SERA fetch something from
- * Instagram's CDN that its sender already held a signed link to.
- */
 export interface MediaHostPolicy {
-  /** Registrable domains; their subdomains match too. */
   readonly hosts: readonly string[];
-  /** HTTPS on the default port. Only a test against a loopback origin turns this off. */
   readonly requireHttps: boolean;
 }
 
-/** Photographs come from `scontent-*.cdninstagram.com`; video can also come from `*.fbcdn.net`. */
 export const INSTAGRAM_MEDIA_HOSTS: MediaHostPolicy = {
   hosts: ['cdninstagram.com', 'fbcdn.net'],
   requireHttps: true,
@@ -420,24 +311,16 @@ export function isAllowedMediaUrl(value: string | URL, policy: MediaHostPolicy):
   return hostMatchesAny(url.hostname, policy.hosts);
 }
 
-/** Throws unless every URL is one `policy` admits. The API counts the refusal as abuse. */
 export function assertCdnHosts(urls: readonly string[], policy: MediaHostPolicy): void {
   const refused = urls.findIndex((url) => !isAllowedMediaUrl(url, policy));
   if (refused === -1) return;
   throw seraError('BLOCKED_ADDRESS', {
     message: 'That post pointed at media somewhere other than Instagram.',
     hint: 'Send the post again from instagram.com.',
-    // Which one, not what it said: this detail reaches the log, and the URL must not.
     detail: `import: url ${refused} is not on the media hosts`,
   });
 }
 
-/**
- * When Instagram's CDN stops honouring a URL, in epoch seconds.
- *
- * Every signed media URL carries it as `oe`, in hex, and the signature covers it — measured:
- * changing `oe` turns a 200 into a 403. Undefined when a URL has none.
- */
 export function cdnExpiry(url: string): number | undefined {
   let oe: string | null;
   try {
@@ -448,7 +331,6 @@ export function cdnExpiry(url: string): number | undefined {
   return oe && /^[0-9a-f]{1,12}$/i.test(oe) ? Number.parseInt(oe, 16) : undefined;
 }
 
-/** What an imported post says once the links Instagram signed into it have run out. */
 export function importExpired(detail: string): SeraError {
   return seraError('EXPIRED', {
     message: 'The links Instagram gave your browser for this post have expired.',
@@ -457,7 +339,6 @@ export function importExpired(detail: string): SeraError {
   });
 }
 
-/** What a job says when Instagram's CDN refuses one of those links outright. */
 export function importRefused(detail: string): SeraError {
   return seraError('EXPIRED', {
     message: 'Instagram refused the links your browser sent for this post.',
@@ -468,12 +349,6 @@ export function importRefused(detail: string): SeraError {
 
 const IMPORT_CONTAINERS: ReadonlySet<string> = new Set(['jpg', 'png', 'webp', 'mp4']);
 
-/**
- * Whether a value is a list of entries this server could have signed.
- *
- * A token's signature already says it came from here. This is what keeps one minted by an
- * older build, or by a bug, from reaching the runner in a shape the runner does not expect.
- */
 export function isImportedEntries(value: unknown): value is readonly ImportedEntry[] {
   return (
     Array.isArray(value) &&

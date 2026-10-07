@@ -22,17 +22,6 @@ import { ExtractionNode } from '../apps/extractor/src/node.js';
 import { ensureFixtures, ffmpegPath, ffprobePath, probeFile } from './helpers/fixtures.js';
 import { MediaServer } from './helpers/media-server.js';
 
-/**
- * A multi-file job, the whole way through a node.
- *
- * The protocol test talks to the routes by hand and the live test runs the built node, but
- * neither sends a job with more than one file — and that is the shape that broke: the node
- * zipped its own output, uploaded the ZIP and every loose file, and the server zipped all of
- * it again. Here the node is the real `ExtractionNode` with the real runner, over a real
- * socket. Only its resolution is fixed, to a two-video playlist served from loopback, so the
- * downloads happen without the internet.
- */
-
 const TOKEN = 'node-job-token-0123456789abcdef';
 const PLAYLIST = 'https://www.youtube.com/playlist?list=PLsera0000000000000000000000000000';
 
@@ -44,10 +33,6 @@ let running: Promise<void>;
 let apiDir: string;
 let nodeDir: string;
 
-/**
- * Videos added after the two real ones, each with a full ladder of formats, so a test can
- * make the resolution as large as a real playlist's: about 4 KB a video, like YouTube's.
- */
 let padding = 0;
 
 function paddedItem(index: number) {
@@ -68,7 +53,6 @@ function paddedItem(index: number) {
   };
 }
 
-/** What the node's own network makes of the playlist: two videos, one file each. */
 function playlist(): ResolvedMedia {
   const video = (index: number, path: string) => ({
     index,
@@ -113,8 +97,6 @@ beforeAll(async () => {
 
   const tools = { SERA_FFMPEG_PATH: ffmpegPath, SERA_FFPROBE_PATH: ffprobePath };
 
-  // The server: every extraction of its own is refused the way a datacentre is, which is
-  // the only condition under which it hands a job to a node.
   engine = await SeraEngine.create({
     config: loadConfig({
       NODE_ENV: 'test',
@@ -136,12 +118,10 @@ beforeAll(async () => {
   const address = app.server.address();
   const port = typeof address === 'object' && address ? address.port : 0;
 
-  // The node, assembled the way its entry point assembles it.
   const config = loadConfig({
     NODE_ENV: 'test',
     LOG_LEVEL: 'silent',
     SERA_DATA_DIR: nodeDir,
-    // The origin is on loopback, which the address guard blocks by design.
     SERA_ALLOW_PRIVATE_ADDRESSES: 'true',
     ...tools,
   });
@@ -171,8 +151,6 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  // The node first: its claim is held open by the server, and a server closing under a
-  // held claim waits for it. Stopped, the node finishes the claim it has and exits.
   node?.stop();
   await running?.catch(() => undefined);
   await app?.close();
@@ -182,10 +160,8 @@ afterAll(async () => {
   await rm(nodeDir, { recursive: true, force: true }).catch(() => undefined);
 });
 
-/** Reads the entry names out of a ZIP's central directory. */
 function entryNames(buffer: Buffer): string[] {
   const names: string[] = [];
-  // Central directory headers start with PK\x01\x02; the name follows a 46-byte header.
   for (let i = 0; i < buffer.length - 46; i += 1) {
     if (buffer.readUInt32LE(i) !== 0x02014b50) continue;
     const nameLength = buffer.readUInt16LE(i + 28);
@@ -233,13 +209,11 @@ describe('a multi-file job on an extraction node', () => {
     const job = await runJob({ infoId: info.id, optionIds });
     expect(job.state, JSON.stringify(job.error)).toBe('ready');
 
-    // The listing is the two videos — no archive among the files.
     const result = job.result!;
     expect(result.isArchive).toBe(true);
     expect(result.files?.map((file) => file.name)).toHaveLength(2);
     expect(result.files?.every((file) => file.name.endsWith('.mp4'))).toBe(true);
 
-    // And the archive holds exactly those two, not a ZIP inside a ZIP.
     const download = await app.inject({ method: 'GET', url: result.downloadPath });
     expect(download.statusCode).toBe(200);
     const names = entryNames(download.rawPayload);
@@ -288,8 +262,6 @@ describe('subtitles on an extraction node', () => {
     const info = resolved.json<MediaInfo>();
     expect(info.items[0]!.subtitles).toEqual([{ lang: 'en', label: 'English', auto: false }]);
 
-    // The fixture is a direct file, which yt-dlp cannot embed into: the node refuses, and it
-    // can only refuse if the subtitles crossed the dispatch with the job.
     const job = await runJob({
       infoId: info.id,
       optionIds: [info.items[0]!.options[0]!.id],
@@ -303,7 +275,6 @@ describe('subtitles on an extraction node', () => {
 describe('a large resolution from an extraction node', () => {
   it('is accepted, where the 64 KB limit for visitors refused it', async () => {
     await waitForNode();
-    // 40 more videos: a resolution well past 64 KB, as a 17-video YouTube playlist was (74 KB).
     padding = 40;
     try {
       expect(Buffer.byteLength(JSON.stringify({ media: playlist() }))).toBeGreaterThan(64 * 1024);
@@ -311,7 +282,6 @@ describe('a large resolution from an extraction node', () => {
       const response = await app.inject({
         method: 'POST',
         url: '/api/media/info',
-        // A playlist of its own, so the server's resolve cache cannot answer for it.
         payload: { url: `${PLAYLIST}large` },
       });
       expect(response.statusCode, response.body.slice(0, 300)).toBe(200);
@@ -324,9 +294,6 @@ describe('a large resolution from an extraction node', () => {
 
 describe('a node whose result is refused', () => {
   it('reports the task as failed instead of falling silent', async () => {
-    // A stand-in control plane: one resolve task, a refusal of its result, and a record of
-    // what the node says next. The real server no longer refuses a large resolution; this
-    // is the node's half, for whatever refusal comes next.
     const failures: unknown[] = [];
     let handedOut = false;
     const server: Server = createServer((request, response) => {

@@ -4,39 +4,14 @@ import type { Logger } from '../logging.js';
 import type { ResolvedMedia } from '../providers/types.js';
 import { classifyFailure, isDefinitive, isEgressProblem, type FailureClass } from './failure.js';
 
-/**
- * The kind of connection an extraction runs on.
- *
- * This is the only property of a backend the routing decisions actually turn on. `local`
- * versus `remote` says who owns the machine; this says whether the platform on the other
- * end is likely to answer it, which is the question.
- *
- * `unknown` is the honest default and means "do not reorder anything on my account" — an
- * operator running SERA on a home connection has a primary backend that is not a
- * datacentre, and a matrix measured on Oracle must not quietly demote it.
- */
 export type NetworkClass = 'datacenter' | 'residential' | 'unknown';
 
-/**
- * Where an extraction actually runs.
- *
- * SERA has one network by default and that network is a datacentre, which several
- * platforms refuse on sight. Measured on this deployment: YouTube answers the *player*
- * request with a bot challenge from Oracle and resolves normally from a residential
- * connection, and its signed media URLs are bound to the address that asked for them —
- * the same URL returns 206 at home and 403 on the server. So a second network cannot be
- * bolted on at the download step alone; a backend either does the whole job or none of it.
- */
 export interface ExtractionBackend {
-  /** Stable name, used in diagnostics and in the health endpoint. */
   readonly id: string;
-  /** `local` is this worker. `remote` is an authorized node on another network. */
   readonly kind: 'local' | 'remote';
   readonly networkClass: NetworkClass;
-  /** Providers this backend is willing to run. Empty means all of them. */
   readonly providers: readonly string[];
 
-  /** Whether it is worth sending work to right now. */
   isHealthy(): boolean;
 
   resolve(url: URL, providerId: string, signal?: AbortSignal): Promise<ResolvedMedia>;
@@ -46,44 +21,17 @@ export interface ExtractionOutcome {
   readonly media: ResolvedMedia;
   readonly backend: string;
   readonly networkClass: NetworkClass;
-  /**
-   * Whether the backend that answered was a node on another network.
-   *
-   * Not the same question as `fallbackUsed`, which asks whether the first choice
-   * failed. A node can be the first choice — that is what a provider declaring no
-   * datacentre extraction asks for — and the download still has to follow it.
-   */
   readonly remote: boolean;
   readonly fallbackUsed: boolean;
-  /** How many backends were tried, including the one that answered. */
   readonly attempts: number;
-  /** Why the first backend was abandoned, when one was. */
   readonly firstFailure?: FailureClass;
 }
 
 export interface RouterDependencies {
   readonly primary: ExtractionBackend;
   readonly logger: Logger;
-  /** Consulted at call time, so a node that connects later is picked up without a restart. */
   readonly fallbacks: () => readonly ExtractionBackend[];
-  /**
-   * What the provider says it can do and where. Undefined for a provider the registry
-   * does not know, which is treated as the conservative answer: local only.
-   */
   readonly capabilitiesOf: (providerId: string) => ProviderCapabilities | undefined;
-  /**
-   * The provider asked again, this time allowed to return a lesser representation.
-   *
-   * The bottom rung of the ladder, and it has to be here rather than inside a provider.
-   * Instagram publishes a cover image for a post that needs a session to read properly;
-   * if that rung ran where the provider runs it, a post that an extraction node could
-   * have returned in full would come back as one image instead, because the node is
-   * only consulted once the local attempt has failed. Last means last.
-   */
-  /**
-   * A backend holding an account for this provider, when one is connected: asked once
-   * every other backend has said the media needs one, before the lesser representation.
-   */
   readonly authenticated?: (providerId: string) => ExtractionBackend | undefined;
   readonly lastResort?: (
     url: URL,
@@ -92,24 +40,9 @@ export interface RouterDependencies {
   ) => Promise<ResolvedMedia>;
 }
 
-/**
- * Chooses backends, in order, and knows when to stop choosing.
- *
- * Two things decide, and both have to agree. The failure class says whether the attempt
- * was refused for a reason an address could change; the provider's capability matrix says
- * whether a different address is the sort of thing that helps *this* platform. A bot
- * challenge on YouTube earns another network. The same class from the generic provider
- * does not, because its URL is whatever the visitor typed and a home connection is not
- * there to fetch arbitrary addresses.
- *
- * The rule that matters is still the negative one. A private video, a deleted post and an
- * unsupported link are identical from every connection; sending those to a scarce node
- * would spend someone's bandwidth to arrive at the same answer more slowly.
- */
 export class ExtractionRouter {
   constructor(private readonly deps: RouterDependencies) {}
 
-  /** Backends that could take work right now, for the health endpoint. */
   describe(): {
     id: string;
     kind: string;
@@ -126,16 +59,6 @@ export class ExtractionRouter {
     }));
   }
 
-  /**
-   * The backends to try, in the order to try them.
-   *
-   * Reordering happens for one measured reason: a provider that declares no datacentre
-   * extraction, on a deployment that has declared itself a datacentre, with a node
-   * already connected. YouTube from Oracle is refused on every player client yt-dlp
-   * offers, so paying for that refusal before asking the node is a delay with a known
-   * outcome. Every other case keeps the primary first — including when the operator has
-   * not said what their network is, because a guess must never cost someone a download.
-   */
   private plan(providerId: string): ExtractionBackend[] {
     const { primary } = this.deps;
     const capabilities = this.deps.capabilitiesOf(providerId);
@@ -158,15 +81,6 @@ export class ExtractionRouter {
     return preferRemote ? [...remote, primary] : [primary, ...remote];
   }
 
-  /**
-   * Whether the next backend in the chain deserves the attempt.
-   *
-   * Two reasons, and no others. An address-shaped refusal is worth retrying somewhere
-   * with a different address. And a remote node that answered with a network error may
-   * simply have gone away mid-request, which is the deployment's problem rather than the
-   * visitor's — one attempt closer to home is cheap and is the difference between a
-   * download and an error nobody could have acted on.
-   */
   private shouldEscalate(
     failure: FailureClass,
     from: ExtractionBackend,
@@ -179,15 +93,6 @@ export class ExtractionRouter {
     return false;
   }
 
-  /**
-   * One last ask, for something rather than nothing.
-   *
-   * Only after every backend has refused, and never for a failure that is the same from
-   * everywhere: a private post has no lesser public representation, and offering one
-   * would mean inventing it. A failure here is swallowed on purpose — the answer the
-   * visitor gets is the real one from the real route, not whatever went wrong while
-   * looking for a consolation.
-   */
   private async lastResort(
     url: URL,
     providerId: string,
@@ -198,16 +103,6 @@ export class ExtractionRouter {
     return this.deps.lastResort(url, providerId, signal).catch(() => undefined);
   }
 
-  /**
-   * The same post, read by a node signed in to the platform.
-   *
-   * For any failure that is not final. An account is not only the answer to "log in": the
-   * extractor describes an Instagram photo post as a login wall, as "no video", or as "no
-   * formats" depending on the post, and only the first used to reach the node — the others
-   * came back as the cover image. A private post the node's account cannot see either comes
-   * back as its own answer, which is the true one; any other failure there leaves the
-   * original answer standing.
-   */
   private async withAccount(
     url: URL,
     providerId: string,
@@ -330,8 +225,6 @@ export class ExtractionRouter {
             },
             'extraction failed with no useful alternative',
           );
-          // The first answer is the one to give: it describes the path the deployment
-          // is configured to take, not the last thing that happened to be tried.
           throw SeraError.from(firstError ?? error);
         }
 
@@ -348,8 +241,6 @@ export class ExtractionRouter {
       }
     }
 
-    // Unreachable: the chain always contains the primary, and every path above returns
-    // or throws. Kept explicit so a future edit to `plan` cannot silently return nothing.
     throw SeraError.from(firstError ?? new Error('no extraction backend was available'));
   }
 }

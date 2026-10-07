@@ -35,8 +35,6 @@ describe('signToken / verifyToken', () => {
   });
 
   it('refuses a token whose payload was edited', () => {
-    // The whole point: a client must not be able to redirect the pipeline at a URL the
-    // resolver never approved.
     const token = signToken<Payload>({ u: 'https://good.example/x', p: 'youtube' }, secret, 3600);
     const [body, signature] = token.split('.');
     const forged = Buffer.from(
@@ -66,7 +64,6 @@ describe('signToken / verifyToken', () => {
   });
 
   it('does not parse the payload of an unsigned token', () => {
-    // Signature first, so hostile JSON never reaches JSON.parse.
     const body = Buffer.from('{"u":', 'utf8').toString('base64url');
     expect(codeOf(() => verifyToken(`${body}.AAAA`, secret))).toBe('EXPIRED');
   });

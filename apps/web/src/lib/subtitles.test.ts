@@ -2,12 +2,6 @@ import { describe, expect, it } from 'vitest';
 import type { DownloadOption, MediaItem } from '@sera/contracts/types';
 import { subtitleChoices, subtitleRequest, trackValue } from './subtitles';
 
-/**
- * The subtitle choice: offered only when the item has tracks, embedding only where the
- * container can hold a track, and a request that never asks for something the server
- * would refuse.
- */
-
 const item = {
   subtitles: [
     { lang: 'en', label: 'English', auto: false },

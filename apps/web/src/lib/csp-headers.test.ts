@@ -1,16 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import nextConfig from '../../next.config';
 
-/**
- * The one place a security header is relaxed, and the guard that it stays one place.
- *
- * `/import` is served `Cross-Origin-Opener-Policy: unsafe-none` so a bookmarklet-opened popup
- * keeps its `window.opener` and the handshake can run — verified in a real browser to be the
- * only policy that works. This asserts the relaxation is scoped to exactly `/import`, changes
- * only that one header, and leaves every other security header (and every other path) untouched.
- * If someone widens the `source` to `/import/:path*` or drops a header, this fails.
- */
-
 interface HeaderRule {
   readonly source: string;
   readonly headers: readonly { readonly key: string; readonly value: string }[];
@@ -26,7 +16,6 @@ const value = (rule: HeaderRule, key: string) => rule.headers.find((h) => h.key 
 describe('the /import COOP exception', () => {
   it('is scoped to exactly /import, and nothing broader', async () => {
     const importRules = (await rules()).filter((r) => r.source.includes('/import'));
-    // Not /import*, not /import/:path*, not /importer — the exact path only.
     expect(importRules.map((r) => r.source)).toEqual(['/import']);
   });
 
@@ -39,7 +28,6 @@ describe('the /import COOP exception', () => {
   it('leaves the site-wide security headers in force, including the default same-origin COOP', async () => {
     const site = (await rules()).find((r) => r.source === '/:path*')!;
     expect(site).toBeDefined();
-    // The full set the whole site gets, /import included, before the one override.
     for (const key of [
       'content-security-policy',
       'referrer-policy',
@@ -55,8 +43,6 @@ describe('the /import COOP exception', () => {
   });
 
   it('applies the override after the site rule, so the later rule wins for that key', async () => {
-    // Next merges matching rules and the last one wins per key; order is what makes the
-    // override effective rather than shadowed.
     const all = await rules();
     const site = all.findIndex((r) => r.source === '/:path*');
     const imp = all.findIndex((r) => r.source === '/import');
@@ -65,11 +51,6 @@ describe('the /import COOP exception', () => {
   });
 });
 
-/**
- * The installable app adds a manifest, icons and a share target. None of it gets a header
- * of its own: it is all same-origin, so the strict site-wide policy already allows it, and
- * a relaxation added "to make the PWA work" would be one nobody needed.
- */
 describe('the installable app under the site-wide policy', () => {
   const directive = (csp: string, name: string) =>
     csp
@@ -86,7 +67,6 @@ describe('the installable app under the site-wide policy', () => {
       (await rules()).find((r) => r.source === '/:path*')!,
       'content-security-policy',
     )!;
-    // No manifest-src or worker-src of its own: both fall back to default-src 'self'.
     expect(directive(csp, 'default-src')).toBe("default-src 'self'");
     expect(directive(csp, 'manifest-src')).toBeUndefined();
     expect(directive(csp, 'img-src')).toBe("img-src 'self' data: blob:");
@@ -116,7 +96,6 @@ describe('the installable app under the site-wide policy', () => {
 
 describe('the /api rewrite', () => {
   it('waits long enough for a slow resolve, rather than answering 500 after 30 s', () => {
-    // A playlist read by an extraction node can take more than Next's 30 s default.
     expect(nextConfig.experimental?.proxyTimeout).toBeGreaterThanOrEqual(120_000);
   });
 });

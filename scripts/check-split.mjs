@@ -1,18 +1,4 @@
 #!/usr/bin/env node
-/**
- * The topology the deployment actually runs: API and worker in separate processes.
- *
- * A node holds one connection to one process. Every other check here runs both halves in
- * one, which is why this failure was invisible until it reached production — twice. The
- * API logged the node connecting and the worker, a container away, logged
- * `fallbackAvailable: false` and failed the download with the datacentre block.
- *
- * So this stands up the real API with the real node dialled into it, then asks the
- * question a *separate* process asks: is there a node, and will it do a job for me. The
- * client under test is the same `RemoteOverHttp` the worker uses.
- *
- *   npm run build && node scripts/check-split.mjs
- */
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm, stat } from 'node:fs/promises';
@@ -77,7 +63,6 @@ const child = spawn(process.execPath, [resolve(REPO, 'apps/extractor/dist/index.
 const wait = (ms) => new Promise((done) => setTimeout(done, ms));
 
 try {
-  // The node dials in, exactly as it would against the deployment.
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline && !engine.extractionNodes.status().some((n) => n.healthy)) {
     await wait(400);
@@ -88,11 +73,6 @@ try {
     engine.extractionNodes.status()[0]?.id ?? '(none)',
   );
 
-  /* ---- and now the part the worker does, from outside that process ---- */
-  // Cold, the way a worker container is when its first job arrives: nobody has asked
-  // this client anything yet. A cache that only refreshes on being asked answers the
-  // first question with "no nodes" — which is the first job after a boot, and the first
-  // job after a node connects to a worker that has been idle.
   const asWorker = new RemoteOverHttp(apiUrl, TOKEN, createLogger({ level: 'silent' }), 2000, 500);
   await wait(1000);
 

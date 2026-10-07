@@ -8,17 +8,6 @@ import {
 } from '@sera/engine';
 import { ExtractionNode } from './node.js';
 
-/**
- * Starts an extraction node from the environment. What a node is, and why it exists, is
- * in `node.ts`.
- *
- *   SERA_API_URL=https://your-deployment
- *   SERA_EXTRACTION_NODE_TOKEN=<the same secret the API has>
- *   SERA_NODE_ID=laptop          (optional; default residential, one per machine)
- *   SERA_NODE_PROVIDERS=youtube  (optional; empty means every provider)
- *   SERA_NODE_NETWORK_CLASS=residential  (optional; datacenter for a second cloud node)
- */
-
 async function main(): Promise<void> {
   const config = loadConfig();
   const logger = createLogger({
@@ -62,7 +51,6 @@ async function main(): Promise<void> {
   await node.run();
 }
 
-// The same last word as the API and the worker, so a failed start reads alike in every log.
 main().catch((error: unknown) => {
   console.error(error instanceof Error ? (error.stack ?? error.message) : error);
   process.exit(1);

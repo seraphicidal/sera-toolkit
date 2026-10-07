@@ -3,15 +3,9 @@ import { describe, expect, it } from 'vitest';
 import { seraError } from '../errors.js';
 import { classifyFailure, FAILURE_BY_CODE, isEgressProblem } from './failure.js';
 
-/**
- * Every routing decision rests on this. Wrong in one direction it spends a scarce
- * residential connection re-asking about a deleted video; wrong in the other it tells
- * someone a public video is unavailable when a different network would have had it.
- */
 describe('classifyFailure', () => {
   it('recognises the two failures a different network could fix', () => {
     expect(classifyFailure(seraError('SOURCE_BLOCKED'))).toBe('DATACENTER_BLOCKED');
-    // Wording outranks the code: extractors report a bot challenge as a login problem.
     expect(
       classifyFailure(
         seraError('LOGIN_REQUIRED', { detail: "Sign in to confirm you're not a bot" }),
@@ -23,8 +17,6 @@ describe('classifyFailure', () => {
   });
 
   it('separates a refused media URL from a refused page', () => {
-    // The signed-URL case. Not fixed by another network — fixed by downloading where the
-    // resolve happened, which is a different instruction entirely.
     const refused = classifyFailure(
       seraError('NETWORK_ERROR', { detail: 'unable to download video data: HTTP Error 403' }),
     );
@@ -33,8 +25,6 @@ describe('classifyFailure', () => {
   });
 
   it('separates a login wall from a misconfigured server', () => {
-    // These read alike and need opposite responses: one is the visitor's answer, the
-    // other is the operator's bug.
     expect(
       classifyFailure(
         seraError('LOGIN_REQUIRED', { detail: 'The web client only works when logged-in' }),
@@ -49,9 +39,6 @@ describe('classifyFailure', () => {
   it('separates gone from private from geo-blocked', () => {
     expect(classifyFailure(seraError('MEDIA_UNAVAILABLE'))).toBe('DELETED_CONTENT');
     expect(classifyFailure(seraError('PRIVATE_CONTENT'))).toBe('PRIVATE_CONTENT');
-    // Its own class, not folded into private: the routing is the same but what a
-    // visitor should be told is not, and a report that says "private" about an
-    // age-gated video sends someone looking for a permission problem that isn't there.
     expect(classifyFailure(seraError('AGE_RESTRICTED'))).toBe('AGE_RESTRICTED');
     expect(classifyFailure(seraError('GEO_RESTRICTED'))).toBe('GEO_BLOCKED');
     expect(
@@ -78,8 +65,6 @@ describe('classifyFailure', () => {
   });
 
   it('degrades an unknown failure to an extractor bug, not a network one', () => {
-    // The safe direction: an unrecognised failure must not send work to a home
-    // connection on the chance that it helps.
     expect(classifyFailure(new Error('something nobody has seen'))).toBe('EXTRACTOR_BUG');
     expect(isEgressProblem(classifyFailure(new Error('x')))).toBe(false);
   });
@@ -111,12 +96,6 @@ describe('routing predicates', () => {
 });
 
 describe('the taxonomy against the error codes it has to cover', () => {
-  /**
-   * The code list, read out of the contract rather than restated here — so a code added
-   * there and forgotten in the map fails this test instead of silently classifying as an
-   * extractor bug. That is how a Twitch channel URL, correctly refused because the
-   * stream is still running, came to be logged as a bug in SERA.
-   */
   const contract = readFileSync(
     new URL('../../../contracts/src/types.ts', import.meta.url),
     'utf8',
@@ -140,9 +119,6 @@ describe('the taxonomy against the error codes it has to cover', () => {
   });
 
   it('sends only one code to another network', () => {
-    // Everything else that reaches an egress class gets there by its wording, which is
-    // the deliberate exception: extractors report a bot challenge under whatever code
-    // they like.
     const egress = codes.filter((code) =>
       isEgressProblem(classifyFailure(seraError(code as Parameters<typeof seraError>[0]))),
     );
@@ -162,8 +138,6 @@ describe('the taxonomy against the error codes it has to cover', () => {
   });
 
   it('keeps "the server is full" separate from "the source refused us"', () => {
-    // They share the one property that matters for routing — waiting is the answer —
-    // and nothing else, so the detail says which.
     const full = classifyFailure(seraError('QUEUE_FULL'));
     expect(full).toBe('RATE_LIMITED');
     expect(isEgressProblem(full)).toBe(false);

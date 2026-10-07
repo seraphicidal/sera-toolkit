@@ -4,35 +4,6 @@ import { ensureRecommendations } from '../normalize/plans.js';
 import { nonEmpty, truncate } from '../util/format.js';
 import type { ResolvedItem, ResolvedMedia } from './types.js';
 
-/**
- * A Reddit post, read the way any site embedding it reads one.
- *
- * Reddit refuses hosted address ranges — measured from this deployment, every anonymous
- * route to the *data* answers 403: `www.reddit.com/…/.json`, `api.reddit.com`,
- * `old.reddit.com`, the bare comments JSON. That is Reddit's documented position for
- * servers and this does not argue with it.
- *
- * What is *not* refused is the embed. `embed.reddit.com`, `www.reddit.com/oembed` and the
- * `.rss` feed all answer 200 from the same blocked address, because they are what Reddit
- * publishes for anyone quoting a post on their own site — the same thing a WordPress
- * plugin or a news article receives. So does `i.redd.it`, and so do the `v.redd.it`
- * streaming manifests; only the progressive MP4 is refused.
- *
- * That is enough to read a public post completely, with no account and no application
- * registration:
- *
- * - **oEmbed** gives the title and the author.
- * - **The embed page** carries a `<shreddit-screenview-data>` element whose `data`
- *   attribute is JSON: the post's type and its media URL. Galleries list each image.
- * - **Video** goes through `HLSPlaylist.m3u8`, which yt-dlp resolves — measured at 1280p
- *   with audio, from the blocked address.
- *
- * The OAuth path stays and stays first when it is configured: it is the supported API,
- * it sees more, and an operator who registered an app should get what they paid attention
- * for. This is what happens when nobody has.
- */
-
-/** Reddit's own agent rules ask for something that names the app and its version. */
 export const REDDIT_EMBED_AGENT = 'SERA.toolkit (+https://github.com/seraphicidal/sera-toolkit)';
 
 interface ScreenviewData {
@@ -50,7 +21,6 @@ interface Oembed {
   readonly author_name?: string;
 }
 
-/** HTML attribute escaping, reversed. The blob arrives inside a double-quoted attribute. */
 function unescapeAttribute(value: string): string {
   return value
     .replace(/&quot;/g, '"')
@@ -61,7 +31,6 @@ function unescapeAttribute(value: string): string {
     .replace(/&amp;/g, '&');
 }
 
-/** The embed host serves the same path as the canonical one. */
 export function embedUrlFor(url: URL): URL {
   const embed = new URL(url.toString());
   embed.hostname = 'embed.reddit.com';
@@ -79,33 +48,18 @@ export function screenviewFrom(html: string): ScreenviewData | undefined {
   }
 }
 
-/**
- * Every image the page names, in the order it names them.
- *
- * Document order is the gallery's order — the same reason the carousel providers keep
- * theirs. `preview.redd.it` is deliberately excluded: it is a resized variant of an
- * image already listed, and it is the one host of Reddit's that answers 403 here anyway.
- */
 export function imagesFrom(html: string): string[] {
   return [
     ...new Set([...html.matchAll(/https:\/\/i\.redd\.it\/[A-Za-z0-9._-]+/g)].map((m) => m[0])),
   ];
 }
 
-/**
- * The `v.redd.it` base, when the URL *is* one.
- *
- * Both the bare form and any of the manifests hanging off it, so the same function
- * answers whether the pipeline is holding the link a visitor pasted or the one this
- * provider handed back.
- */
 export function videoBaseFromUrl(url: URL): string | undefined {
   if (url.hostname.toLowerCase().replace(/^www\./, '') !== 'v.redd.it') return undefined;
   const id = url.pathname.split('/').find(Boolean);
   return id && /^[A-Za-z0-9]+$/.test(id) ? `https://v.redd.it/${id}` : undefined;
 }
 
-/** The hosted-video id, from which the manifests hang. */
 export function videoBaseFrom(html: string): string | undefined {
   return [
     ...new Set([...html.matchAll(/https:\/\/v\.redd\.it\/[A-Za-z0-9]+/g)].map((m) => m[0])),
@@ -142,13 +96,6 @@ function imageItem(url: string, index: number): ResolvedItem {
   };
 }
 
-/**
- * The video item, pointed at the manifest rather than the file.
- *
- * The progressive MP4 is the one thing on `v.redd.it` this host is refused, and the
- * manifest is also the only route that carries the audio Reddit stores as a separate
- * stream. So both reasons point the same way.
- */
 function videoItem(base: string): ResolvedItem {
   return {
     sourceId: base.split('/').pop() ?? 'video',
@@ -184,12 +131,6 @@ function videoItem(base: string): ResolvedItem {
   };
 }
 
-/**
- * Reads a post from what Reddit publishes for embedding.
- *
- * `fetchText` is the engine's guarded client, so this inherits the address checks, the
- * redirect rules and the size ceiling that everything else here gets.
- */
 export async function readViaEmbed(
   url: URL,
   fetchText: (
@@ -201,14 +142,6 @@ export async function readViaEmbed(
 ): Promise<ResolvedMedia> {
   const headers = { 'user-agent': REDDIT_EMBED_AGENT };
 
-  // A resolution has to survive being resolved again.
-  //
-  // The handle a job carries holds `resolved.url`, and for hosted video that is the
-  // manifest rather than the post — it has to be, because the post page is refused to
-  // this address and the progressive file is too. So at download time the pipeline asks
-  // this provider to read a `v.redd.it` URL, which is not a post and has no embed. It
-  // used to answer "no post id" and the job died at the last step with a message about
-  // the media being gone, which was true of nothing.
   const direct = videoBaseFromUrl(url);
   if (direct) {
     return {
@@ -232,8 +165,6 @@ export async function readViaEmbed(
 
   if (videoBase) {
     items = [videoItem(videoBase)];
-    // The runner hands this to the extractor, and for hosted video it has to be the
-    // manifest: the post page is refused to this host and the file is too.
     extractFrom = `${videoBase}/HLSPlaylist.m3u8`;
   } else if (images.length) {
     items = images.slice(0, limit).map((image, index) => imageItem(image, index));
@@ -244,9 +175,6 @@ export async function readViaEmbed(
     });
   }
 
-  // Title and author come from oEmbed, which is a small JSON document rather than the
-  // 350 KB script shell the embed page is. A failure here costs a nicer name, not the
-  // download, so it is not allowed to fail the resolution.
   const oembedUrl = new URL('https://www.reddit.com/oembed');
   oembedUrl.searchParams.set('url', url.toString());
   const oembed = await fetchText(oembedUrl, 256 * 1024, { headers })

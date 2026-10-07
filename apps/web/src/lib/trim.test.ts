@@ -1,11 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { endPlaceholder, summarizeTrim } from './trim';
 
-/**
- * The trim fields' summary: nothing until a time is typed, the server's own reason when a
- * time is wrong, and otherwise how much is kept and roughly how big it will be.
- */
-
 describe('summarizeTrim', () => {
   it('is nothing until a time is typed', () => {
     expect(summarizeTrim('', '', 600, 60_000_000)).toEqual({ state: 'none' });

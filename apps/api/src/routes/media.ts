@@ -5,14 +5,8 @@ import { header, safeFetch, seraError, SeraError } from '@sera/engine';
 import { abuseGuardFor } from '../plugins/client.js';
 import { clientAbortSignal } from '../plugins/disconnect.js';
 
-/** Thumbnails are small; anything larger is not a preview image. */
 const MAX_THUMBNAIL_BYTES = 4 * 1024 * 1024;
 
-/**
- * Ceiling for a post a visitor's browser sends. Trimmed the way the bookmarklet trims it, a
- * post is a few kilobytes a slide; this is a full carousel with room to spare, and far short
- * of a body worth sending to exhaust memory. Anything larger is refused before it is parsed.
- */
 const MAX_IMPORT_BODY_BYTES = 512 * 1024;
 
 const IMAGE_TYPES = new Set([
@@ -25,13 +19,6 @@ const IMAGE_TYPES = new Set([
 ]);
 
 export function registerMediaRoutes(app: FastifyInstance, engine: SeraEngine): void {
-  /**
-   * Resolve a link.
-   *
-   * This is the only endpoint the homepage needs. Everything platform-specific happens
-   * behind it, and the response is the same shape whether the link was a YouTube video,
-   * a five-image carousel, or a bare MP4 on someone's server.
-   */
   app.post(
     '/api/media/info',
     {
@@ -43,13 +30,10 @@ export function registerMediaRoutes(app: FastifyInstance, engine: SeraEngine): v
       },
     },
     async (request, reply) => {
-      // Clients that keep failing are cooled down before any extractor work is spent
-      // on them. Checked ahead of parsing so a flood of malformed bodies costs nothing.
       const abuse = abuseGuardFor(engine, request);
       abuse.assertAllowed();
 
       const body = resolveRequestSchema.parse(request.body);
-      // A visitor who navigates away should not leave a probe running.
       const signal = clientAbortSignal(request, reply);
 
       try {
@@ -59,11 +43,8 @@ export function registerMediaRoutes(app: FastifyInstance, engine: SeraEngine): v
           void engine.usage.record({ source: info.provider, kind: 'resolve', ok: true });
         return await reply.header('cache-control', 'no-store').send(info);
       } catch (error) {
-        // A client giving up mid-probe is not abuse, and neither is a private or
-        // deleted post; only the codes that suggest probing count.
         if (!signal.aborted) {
           abuse.recordFailure(error instanceof SeraError ? error.code : undefined);
-          // Counted by source and code only; the link itself is never kept.
           if (!request.canary) {
             void engine.usage.record({
               source: engine.resolver.sourceOf(body.url),
@@ -78,14 +59,6 @@ export function registerMediaRoutes(app: FastifyInstance, engine: SeraEngine): v
     },
   );
 
-  /**
-   * Accept a post the visitor's own browser read.
-   *
-   * How Instagram photographs reach a server that holds no Instagram session. The visitor's
-   * browser, signed in already, reads the one post it is showing and hands it to the /import
-   * page, which sends it here, same-origin. What arrives is untrusted and treated that way:
-   * the resolver admits only media on Instagram's CDN and signs what it admitted.
-   */
   app.post(
     '/api/media/import',
     {
@@ -108,8 +81,6 @@ export function registerMediaRoutes(app: FastifyInstance, engine: SeraEngine): v
         void engine.usage.record({ source: info.provider, kind: 'resolve', ok: true });
         return await reply.header('cache-control', 'no-store').send(info);
       } catch (error) {
-        // Media named off Instagram's hosts counts: nothing Instagram serves produces that,
-        // so it is someone finding out what this endpoint will fetch.
         abuse.recordFailure(error instanceof SeraError ? error.code : undefined);
         void engine.usage.record({
           source: 'instagram',
@@ -122,13 +93,6 @@ export function registerMediaRoutes(app: FastifyInstance, engine: SeraEngine): v
     },
   );
 
-  /**
-   * Proxy a thumbnail.
-   *
-   * The browser never talks to the platform's CDN directly. That keeps the visitor's
-   * address and headers away from the site they pasted a link from, and because the
-   * token is signed, the endpoint cannot be repurposed as a general image proxy.
-   */
   app.get<{ Params: { token: string } }>('/api/thumb/:token', async (request, reply) => {
     const source = engine.resolver.verifyThumbnailToken(request.params.token);
 
@@ -142,8 +106,6 @@ export function registerMediaRoutes(app: FastifyInstance, engine: SeraEngine): v
 
     const contentType =
       (header(response.headers, 'content-type') ?? '').split(';')[0]?.trim() ?? '';
-    // Serving whatever the origin returned would let a signed token become an HTML
-    // delivery vector; only real image types are passed through.
     if (!IMAGE_TYPES.has(contentType))
       throw seraError('NOT_FOUND', { detail: `thumb type ${contentType}` });
 

@@ -10,7 +10,6 @@ export default defineConfig({
       'test/**/*.test.ts',
     ],
     environment: 'node',
-    // Media work is slow: a real conversion in the end-to-end suite takes seconds.
     testTimeout: 60_000,
     hookTimeout: 60_000,
     coverage: {

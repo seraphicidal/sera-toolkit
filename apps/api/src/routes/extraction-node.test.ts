@@ -6,14 +6,6 @@ import type { FastifyInstance } from 'fastify';
 import { loadConfig, seraError, SeraEngine, type ResolvedMedia } from '@sera/engine';
 import { buildServer } from '../server.js';
 
-/**
- * The extraction node loop, over real HTTP against the real routes.
- *
- * The point of this file is the thing unit tests cannot show: that a node which only
- * ever dials out can be handed work, report on it, ship a file back, and that the router
- * puts the result in front of the visitor as though the local network had produced it.
- */
-
 const TOKEN = 'test-node-token-0123456789';
 
 const remoteMedia: ResolvedMedia = {
@@ -44,13 +36,6 @@ const remoteMedia: ResolvedMedia = {
 let app: FastifyInstance;
 let engine: SeraEngine;
 let dataDir: string;
-/**
- * A real port, for the one case that cannot use `inject`.
- *
- * `inject` waits for the request body to be consumed in full, and the behaviour under
- * test is refusing an upload without reading all of it — so the test harness would hang
- * on exactly the thing that makes the fix a fix.
- */
 let port: number;
 
 beforeAll(async () => {
@@ -62,14 +47,9 @@ beforeAll(async () => {
       SERA_SECRET: 'integration-secret',
       SERA_DATA_DIR: dataDir,
       SERA_EXTRACTION_NODE_TOKEN: TOKEN,
-      // Short, so a claim that finds nothing returns quickly instead of holding the test.
       SERA_EXTRACTION_CLAIM_HOLD_SECONDS: '1',
-      // Small, so the oversized-upload case can be a real one rather than a four-gigabyte
-      // allocation. Every other upload here is a handful of bytes.
       SERA_MAX_FILESIZE_BYTES: String(64 * 1024),
     }),
-    // Every local extraction is refused the way a datacentre is refused, which is the
-    // only condition under which the router will look for another network.
     probe: () =>
       Promise.reject(
         seraError('SOURCE_BLOCKED', { detail: "Sign in to confirm you're not a bot" }),
@@ -90,7 +70,6 @@ afterAll(async () => {
 
 const auth = { authorization: `Bearer ${TOKEN}` };
 
-/** A claim from a current node, or, with `features: []`, from one that predates them. */
 function claim(features: readonly string[] = ['trim', 'subtitles']) {
   return app.inject({
     method: 'POST',
@@ -122,7 +101,6 @@ describe('extraction node endpoints', () => {
 
   it('says nothing useful to an unauthenticated caller', async () => {
     const response = await app.inject({ method: 'POST', url: '/internal/extraction/claim' });
-    // Not "wrong token", not "extraction node endpoint" — just gone.
     expect(response.json()).toEqual({ error: { code: 'NOT_FOUND', message: 'Not found.' } });
   });
 
@@ -132,7 +110,6 @@ describe('extraction node endpoints', () => {
   });
 
   it('carries a resolve from the visitor to the node and back', async () => {
-    // The visitor's request. It will fail locally and wait for a node.
     engine.extractionNodes.register('test-node', ['youtube'], 1);
     const visitorRequest = app.inject({
       method: 'POST',
@@ -140,7 +117,6 @@ describe('extraction node endpoints', () => {
       payload: { url: 'https://www.youtube.com/watch?v=aqz-KE-bpKQ' },
     });
 
-    // The node asks for work and gets that request.
     let task: { id: string; kind: string; providerId: string; url: string } | undefined;
     for (let attempt = 0; attempt < 8 && !task; attempt += 1) {
       const response = await claim();
@@ -150,7 +126,6 @@ describe('extraction node endpoints', () => {
     expect(task!.kind).toBe('resolve');
     expect(task!.providerId).toBe('youtube');
 
-    // It does the work on its own network and reports back.
     const reported = await app.inject({
       method: 'POST',
       url: `/internal/extraction/${task!.id}/resolved`,
@@ -162,7 +137,6 @@ describe('extraction node endpoints', () => {
     const visitor = await visitorRequest;
     expect(visitor.statusCode).toBe(200);
     const info = visitor.json();
-    // The visitor is not told which network answered; they get media either way.
     expect(info.title).toBe('Resolved somewhere else');
     expect(info.items).toHaveLength(1);
     expect(info.items[0].options[0].label).toBe('1080p');
@@ -196,7 +170,6 @@ describe('extraction node endpoints', () => {
       headers: auth,
       payload: { percent: 20, step: 'Downloading' },
     });
-    // A node that cannot find out keeps a home connection busy for nobody.
     expect(after.json()).toEqual({ cancelled: true });
   });
 
@@ -231,7 +204,6 @@ describe('extraction node endpoints', () => {
     expect(files).toHaveLength(1);
     expect(files[0]!.name).toBe('clip.mp4');
     expect(files[0]!.mimeType).toBe('video/mp4');
-    // The bytes are where the API said they are.
     expect(await readFile(files[0]!.path)).toEqual(bytes);
   });
 
@@ -259,17 +231,11 @@ describe('extraction node endpoints', () => {
     });
 
     const files = await dispatched;
-    // A node is trusted to extract, not to choose where bytes land.
     expect(files[0]!.name).not.toContain('..');
     expect(files[0]!.path).toContain(task.id);
   });
 
   it('stops an oversized upload while it is arriving, not after', async () => {
-    // The limit used to be checked with `stat` once the whole file was on disk, which
-    // spends the disk before deciding it should not have. On a host with a few gigabytes
-    // free that is the whole attack, and Fastify's own bodyLimit does not apply here —
-    // these uploads are handed through as a raw stream precisely so that a large file is
-    // never buffered.
     engine.extractionNodes.register('test-node', ['youtube'], 1);
     const dispatched = engine.extractionNodes
       .dispatchJob({
@@ -294,16 +260,11 @@ describe('extraction node endpoints', () => {
 
     expect(response.status).toBe(413);
     expect(((await response.json()) as { error: { code: string } }).error.code).toBe('TOO_LARGE');
-    // Nothing was kept, and the task was not settled with a file it should not have.
     engine.extractionNodes.fail(task.id, seraError('TOO_LARGE'));
     expect(await dispatched).toEqual([]);
   });
 
   it('puts an upload where the reaper can find it on its own', async () => {
-    // Uploads used to share one `remote/` parent. The reaper deletes top-level
-    // directories by age, and a parent's mtime is refreshed by every new child — so one
-    // busy node kept the parent young forever and the abandoned uploads underneath it
-    // never aged out. A directory per task is reaped exactly like a job workspace.
     engine.extractionNodes.register('test-node', ['youtube'], 1);
     const dispatched = engine.extractionNodes.dispatchJob({
       kind: 'job',
@@ -328,7 +289,6 @@ describe('extraction node endpoints', () => {
 
     const files = await dispatched;
     expect(files[0]!.path).toContain(`remote-${task.id}`);
-    // One level under the data directory, which is where the reaper looks.
     expect(relative(dataDir, files[0]!.path).split(/[\\/]/)).toHaveLength(2);
   });
 
@@ -353,15 +313,12 @@ describe('extraction node endpoints', () => {
       payload: { code: 'PRIVATE_CONTENT', message: 'That video is private.' },
     });
 
-    // Private is private on every network; the class survives the trip home.
     expect((await dispatched)?.code).toBe('PRIVATE_CONTENT');
   });
 });
 
 describe('the dispatch route a standalone worker uses', () => {
   it("carries a job's trim to the node that claims it", async () => {
-    // The route validates its body against a list of fields; one left off is dropped without
-    // a word, and the node cuts nothing. This is the path the Oracle worker takes.
     const dispatched = await app.inject({
       method: 'POST',
       url: '/internal/extraction/dispatch',
@@ -376,7 +333,6 @@ describe('the dispatch route a standalone worker uses', () => {
     });
     expect(dispatched.statusCode, dispatched.body).toBeLessThan(300);
 
-    // A node that does not say it can trim would ignore the trim, so it is not offered one.
     expect((await claim([])).statusCode).toBe(204);
     const claimed = await claim();
     expect(claimed.statusCode).toBe(200);

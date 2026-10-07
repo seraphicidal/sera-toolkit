@@ -1,16 +1,4 @@
 #!/usr/bin/env node
-/**
- * Checks for a newer yt-dlp and, with --write, pins it.
- *
- * Provider support is mostly yt-dlp's, and sites change faster than this repository
- * does, so "update the providers" really means "update the extractor". The version is
- * pinned in two places that must agree — the tool manifest the local `.tools/` fetch
- * reads, and the Dockerfile ARG the images build from — and this script keeps them in
- * step rather than trusting anyone to remember the second one.
- *
- *   npm run update-providers            # report only
- *   npm run update-providers -- --write # pin the newest release
- */
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';

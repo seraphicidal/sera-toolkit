@@ -2,19 +2,9 @@ import * as cheerio from 'cheerio';
 import type { MediaKind } from '@sera/contracts/types';
 import { MEDIA_EXTENSIONS, urlExtension } from '../security/url.js';
 
-/**
- * Finds media a page publishes about itself.
- *
- * This reads only what a page already declares for embeds and previews — OpenGraph
- * tags, media elements, and schema.org metadata. It does not follow links, execute
- * scripts, or guess at URLs, so a page that publishes nothing yields nothing rather
- * than triggering a crawl.
- */
-
 export interface DiscoveredMedia {
   readonly url: string;
   readonly kind: MediaKind;
-  /** Where it was found, ordered by how much the page is asserting it is the media. */
   readonly source:
     'og:video' | 'twitter:player' | 'video' | 'audio' | 'json-ld' | 'og:image' | 'link';
   readonly width?: number;
@@ -31,7 +21,6 @@ export interface PageMedia {
   readonly media: readonly DiscoveredMedia[];
 }
 
-/** Ranks discovery sources; a declared video beats a preview image. */
 const SOURCE_RANK: Record<DiscoveredMedia['source'], number> = {
   'og:video': 0,
   'twitter:player': 1,
@@ -84,7 +73,6 @@ function kindFromUrl(url: string, hint: MediaKind): MediaKind {
   }
 }
 
-/** Parses a page and returns whatever media it declares. */
 export function discoverMedia(html: string, pageUrl: URL): PageMedia {
   const $ = cheerio.load(html);
   const found: DiscoveredMedia[] = [];
@@ -118,7 +106,6 @@ export function discoverMedia(html: string, pageUrl: URL): PageMedia {
     return Number.isFinite(value) && value > 0 ? value : undefined;
   };
 
-  // OpenGraph video, the strongest signal a page can give about its own media.
   const ogVideoSize = {
     width: numericMeta('og:video:width'),
     height: numericMeta('og:video:height'),
@@ -157,7 +144,6 @@ export function discoverMedia(html: string, pageUrl: URL): PageMedia {
     });
   });
 
-  // schema.org VideoObject, which many CMS templates emit even without OpenGraph tags.
   const jsonLd: JsonLdNode[] = [];
   $('script[type="application/ld+json"]').each((_, element) => {
     const raw = $(element).contents().text();
@@ -167,9 +153,7 @@ export function discoverMedia(html: string, pageUrl: URL): PageMedia {
       for (const node of Array.isArray(parsed) ? parsed : [parsed]) {
         if (node && typeof node === 'object') jsonLd.push(node as JsonLdNode);
       }
-    } catch {
-      // A page with malformed JSON-LD is common and not worth failing the resolve over.
-    }
+    } catch {}
   });
 
   const visitLd = (node: JsonLdNode, depth = 0): void => {
@@ -186,7 +170,6 @@ export function discoverMedia(html: string, pageUrl: URL): PageMedia {
   };
   for (const node of jsonLd) visitLd(node);
 
-  // A preview image is media in its own right when the page has nothing better.
   add(meta('og:image:secure_url') ?? meta('og:image'), 'og:image', 'image', {
     ...(numericMeta('og:image:width') ? { width: numericMeta('og:image:width')! } : {}),
     ...(numericMeta('og:image:height') ? { height: numericMeta('og:image:height')! } : {}),

@@ -2,27 +2,15 @@ import type { MediaInfoType, ProviderCapabilities } from '@sera/contracts/types'
 import { YtdlpProvider } from './ytdlp-base.js';
 import { declare } from './capabilities.js';
 
-/**
- * SoundCloud tracks and sets.
- *
- * A `/sets/` URL is an album or playlist and is expanded into its tracks; a plain track
- * URL is one item. SoundCloud publishes audio only, so the base class produces just the
- * audio option list — no empty "video" group appears in the UI.
- */
 export class SoundCloudProvider extends YtdlpProvider {
   readonly id = 'soundcloud';
   readonly label = 'SoundCloud';
   readonly hosts = ['soundcloud.com', 'snd.sc', 'm.soundcloud.com', 'on.soundcloud.com'];
   override readonly priority = 30;
 
-  /**
-   * Audio only. Offering a video quality here would be a button that always fails.
-   */
   override readonly capabilities: ProviderCapabilities = declare({
     video: false,
-    // Audio is the media here, not something lifted off a video.
     audio: true,
-    // A set or a user's tracks expand into their entries.
     gallery: true,
   });
 
@@ -34,7 +22,6 @@ export class SoundCloudProvider extends YtdlpProvider {
     return out;
   }
 
-  /** A list of separate works, unlike the carousels other providers expand. */
   protected override multiItemType(url: URL): MediaInfoType {
     return this.wantsPlaylist(url) ? 'playlist' : 'collection';
   }

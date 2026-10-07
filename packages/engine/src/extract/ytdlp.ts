@@ -3,68 +3,30 @@ import { seraError, type SeraError } from '../errors.js';
 import { run } from '../util/spawn.js';
 import type { YtdlpInfo } from './ytdlp-types.js';
 
-/**
- * Adapter over the yt-dlp binary.
- *
- * Two things are deliberate here. Every invocation passes `--ignore-config`, so a config
- * file left on the host cannot inject options — `--exec` in particular would otherwise
- * be a remote code execution path. And the URL is always the last argument, after a
- * bare `--`, so a link beginning with a dash is a positional argument rather than a flag.
- */
-
 export interface YtdlpOptions {
   readonly binary: string;
   readonly ffmpegPath?: string;
-  /** An outbound proxy for this call, when the deployment address is refused. */
   readonly proxy?: string;
 
   readonly timeoutMs: number;
   readonly signal?: AbortSignal;
-  /** Passed through as `--extractor-args`; providers use it for site-specific tuning. */
   readonly extractorArgs?: readonly string[];
 }
 
 export interface DownloadRequest extends YtdlpOptions {
   readonly url: string;
-  /** A yt-dlp format selector, e.g. `137+140` or `bestaudio`. */
   readonly format: string;
-  /** Absolute directory the download is confined to. */
   readonly workdir: string;
-  /** Output template, relative to `workdir`. */
   readonly outputTemplate: string;
-  /** Aborts the download once the file exceeds this size. */
   readonly maxFilesizeBytes?: number;
-  /** An outbound proxy for this call, when the deployment address is refused. */
   readonly proxy?: string;
 
-  /** Container to remux into after download, when the selection needs merging. */
   readonly mergeContainer?: string;
-  /** `--remux-video` target, for a container change with no re-encode. */
   readonly remuxContainer?: string;
-  /** Delegates audio extraction to yt-dlp's own postprocessor. */
   readonly audioFormat?: string;
-  /** `--audio-quality`: a bitrate such as `320K`, or `0` for best. */
   readonly audioQuality?: string;
-  /**
-   * Selects one entry of a multi-item post, 1-based.
-   *
-   * This is how a single slide of a carousel is fetched without downloading the rest:
-   * the resolution already knows the entry's position, so the download asks for exactly
-   * that one.
-   */
   readonly playlistItem?: number;
-  /** Total bytes the caller expects, used to turn per-stream counters into one number. */
   readonly expectedTotalBytes?: number;
-  /**
-   * Download only this part, in seconds (`--download-sections`), so a ten-second clip of an
-   * hour does not cost the hour. `forceKeyframes` re-encodes around the cut, which any cut
-   * that does not start at 0 needs: a copy can only begin where the stream allows, possibly
-   * seconds early (a keyframe, or a fragment of a DASH audio stream).
-   */
-  /**
-   * A subtitle track to embed as a soft track (`--embed-subs`). yt-dlp converts it to what
-   * the container takes — mov_text for MP4 — when it merges.
-   */
   readonly subtitles?: { readonly lang: string; readonly auto: boolean };
   readonly sections?: {
     readonly start: number;
@@ -74,7 +36,6 @@ export interface DownloadRequest extends YtdlpOptions {
   readonly onProgress?: (progress: YtdlpProgress) => void;
 }
 
-/** yt-dlp's arguments for a section download. */
 export function sectionArgs(sections: NonNullable<DownloadRequest['sections']>): string[] {
   const range = `*${String(sections.start)}-${sections.end !== undefined ? String(sections.end) : 'inf'}`;
   return [
@@ -85,17 +46,14 @@ export function sectionArgs(sections: NonNullable<DownloadRequest['sections']>):
 }
 
 export interface YtdlpProgress {
-  /** 0-100 across every stream in the download. */
   readonly percent: number;
   readonly bytesDownloaded: number;
   readonly bytesTotal?: number;
   readonly speedBytesPerSecond?: number;
   readonly etaSeconds?: number;
-  /** Set while a postprocessor is running, e.g. `Merger`, `ExtractAudio`. */
   readonly postprocessor?: string;
 }
 
-/** Field separator for the machine-readable progress template. Chosen to never appear in values. */
 const SEP = '\u0001';
 const PROGRESS_PREFIX = 'SERA-PROGRESS';
 const POSTPROCESS_PREFIX = 'SERA-POSTPROCESS';
@@ -117,7 +75,6 @@ const POSTPROCESS_TEMPLATE = [
   '%(progress.postprocessor)s',
 ].join(SEP);
 
-/** Options every invocation gets: no config files, no cookies, bounded retries. */
 function baseArgs(options: YtdlpOptions): string[] {
   const args = [
     '--ignore-config',
@@ -142,7 +99,6 @@ function baseArgs(options: YtdlpOptions): string[] {
   return args;
 }
 
-/** Reads metadata without downloading anything. */
 export async function dumpInfo(
   url: string,
   options: YtdlpOptions & { readonly playlist?: boolean; readonly flatPlaylist?: boolean },
@@ -152,7 +108,6 @@ export async function dumpInfo(
     const index = args.indexOf('--no-playlist');
     if (index >= 0) args.splice(index, 1);
     args.push('--yes-playlist');
-    // Playlists are capped so one paste cannot enumerate an entire channel.
     args.push('--playlist-end', '100');
   }
   if (options.flatPlaylist) args.push('--flat-playlist');
@@ -179,7 +134,6 @@ export async function dumpInfo(
   }
 }
 
-/** Downloads a selection into `workdir`, reporting progress as it goes. */
 export async function download(request: DownloadRequest): Promise<void> {
   const args = baseArgs(request);
 
@@ -221,8 +175,6 @@ export async function download(request: DownloadRequest): Promise<void> {
 
   args.push('--', request.url);
 
-  // Byte counters restart for every stream in a selection, so the totals are tracked per
-  // format id and summed. Without this a video+audio download reports 0-100% twice.
   const bytesByFormat = new Map<string, number>();
   let lastPercent = 0;
 
@@ -253,7 +205,6 @@ export async function download(request: DownloadRequest): Promise<void> {
       (bytesByFormat.size === 1 && totalForStream !== undefined ? totalForStream : undefined);
 
     if (bytesTotal && bytesTotal > 0) {
-      // Never regress: a later stream reporting a smaller estimate must not move the bar back.
       lastPercent = Math.max(lastPercent, Math.min(99.5, (bytesDownloaded / bytesTotal) * 100));
     } else if (status === 'finished') {
       lastPercent = Math.max(lastPercent, 99);
@@ -285,7 +236,6 @@ export async function download(request: DownloadRequest): Promise<void> {
   if (result.code !== 0) throw classifyYtdlpFailure(result.stderrTail, result.code);
 }
 
-/** yt-dlp's arguments to fetch one subtitle track, written by people or by the site. */
 export function subtitleArgs(track: { readonly lang: string; readonly auto: boolean }): string[] {
   return [track.auto ? '--write-auto-subs' : '--write-subs', '--sub-langs', track.lang];
 }
@@ -296,16 +246,9 @@ export interface SubtitleDownloadRequest extends YtdlpOptions {
   readonly lang: string;
   readonly auto: boolean;
   readonly format: 'srt' | 'vtt';
-  /** As in `DownloadRequest`: one entry of a multi-item post, 1-based. */
   readonly playlistItem?: number;
 }
 
-/**
- * Fetches one subtitle track as a file, without the media.
- *
- * The site's own format is taken when it already is the one asked for, and converted by
- * FFmpeg otherwise (`--convert-subs`). Answers the path of the file written.
- */
 export async function downloadSubtitles(request: SubtitleDownloadRequest): Promise<string> {
   const args = baseArgs(request);
   if (request.playlistItem !== undefined) {
@@ -356,14 +299,12 @@ function sum(map: Map<string, number>): number {
   return total;
 }
 
-/** Progress fields render as the literal string `NA` when yt-dlp has no value. */
 function parseNumeric(value: string | undefined): number | undefined {
   if (!value || value === 'NA') return undefined;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-/** Reports the installed yt-dlp version, or throws if the binary is unusable. */
 export async function version(binary: string, timeoutMs = 10_000): Promise<string> {
   const result = await run(binary, { args: ['--version'], timeoutMs, captureStdout: true });
   if (result.code !== 0) {
@@ -372,21 +313,6 @@ export async function version(binary: string, timeoutMs = 10_000): Promise<strin
   return result.stdout.trim();
 }
 
-/**
- * Maps yt-dlp's stderr onto something a user can act on.
- *
- * Matching on message text is inherently brittle, which is why the fallback is
- * `PROVIDER_UNAVAILABLE` rather than a generic crash: when an extractor changes and the
- * wording moves, the user is told this source needs updating instead of seeing a 500.
- */
-/**
- * Removes proxy credentials from extractor output.
- *
- * A proxy URL is normally `scheme://user:pass@host:port`, and yt-dlp will name it in a
- * connection error. That output becomes an error detail, which reaches the structured
- * log. Nothing else in this file has to know the proxy exists; this is the one place its
- * password could escape.
- */
 export function scrubCredentials(text: string): string {
   return text.replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]*:[^\s/@]*@/gi, '$1[redacted]@');
 }
@@ -413,11 +339,6 @@ export function classifyYtdlpFailure(stderr: string, exitCode: number): SeraErro
   if (has('drm', 'protected by widevine', 'encrypted')) {
     return seraError('DRM_PROTECTED', { detail });
   }
-  // Checked before the sign-in branch below, whose phrases this text also contains.
-  // "Sign in to confirm you're not a bot" is not a statement about the media: the link is
-  // public and resolves fine from a residential connection. It is the platform refusing
-  // the address the request came from, and telling the visitor their video needs an
-  // account sends them looking for the wrong thing.
   if (
     has(
       "you're not a bot",
@@ -445,7 +366,6 @@ export function classifyYtdlpFailure(stderr: string, exitCode: number): SeraErro
   if (
     has(
       'not available in your country',
-      // YouTube's own phrasing, which does not contain "not available in your country".
       'available in your country',
       'not available from your location',
       'geo restricted',
@@ -465,10 +385,6 @@ export function classifyYtdlpFailure(stderr: string, exitCode: number): SeraErro
   if (has('http error 429', 'too many requests', 'rate-limit', 'rate limit')) {
     return seraError('RATE_LIMITED', { detail });
   }
-  // The extractor ran, understood the page, and found nothing it handles — which on
-  // most social platforms means the post is photos rather than video. That is a gap in
-  // *this* extractor, not a missing post, so it is reported as an unsupported source and
-  // the resolver retries through the page reader, which does read images.
   if (
     has(
       'no video could be found',

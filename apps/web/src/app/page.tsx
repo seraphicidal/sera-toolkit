@@ -18,7 +18,6 @@ export default function HomePage() {
       <Downloader />
       <ShareHint />
 
-      {/* Instagram photos can't be fetched server-side; this is the way in to the browser route. */}
       <p className="mt-6 text-center text-[0.8125rem] text-[var(--color-ink-faint)]">
         Instagram photo post or carousel?{' '}
         <Link

@@ -12,12 +12,6 @@ import { taskSubtitles } from '../apps/extractor/src/node.js';
 import { ensureFixtures, ffmpegPath, ffprobePath } from './helpers/fixtures.js';
 import { MediaServer } from './helpers/media-server.js';
 
-/**
- * Subtitles: which tracks are offered, what yt-dlp is asked for, and what the server refuses
- * before a job starts. Fetching a real track needs YouTube, so that is checked against the
- * live site, not here; the journey through a node is in `extraction-node-job.test.ts`.
- */
-
 let origin: MediaServer;
 let app: FastifyInstance;
 let engine: SeraEngine;

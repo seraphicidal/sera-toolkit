@@ -9,11 +9,6 @@ import { RedditTokenSource, type RedditPost } from './reddit-api.js';
 import { TwitterProvider } from './twitter.js';
 import type { ProviderContext } from './types.js';
 
-/**
- * The four platforms that were failing in production, and the shape each of them
- * actually needs. Every fixture below is trimmed from a real response.
- */
-
 const baseConfig = loadConfig({
   NODE_ENV: 'test',
   SERA_SECRET: 'test-secret',
@@ -40,8 +35,6 @@ function contextWith(
         : Promise.resolve({ body: JSON.stringify(overrides.json), url: 'https://fixture' }),
   };
 }
-
-/* ------------------------------------------------------------------ X / Twitter */
 
 const photoTweet = {
   id_str: '2095585125627003244',
@@ -118,13 +111,10 @@ describe('TwitterProvider', () => {
   const url = new URL('https://x.com/NASA/status/2095585125627003244');
 
   it('offers every photograph in post order, at the size that was uploaded', async () => {
-    // The extractor answers "No video could be found in this tweet" for all of these,
-    // which is why most X posts failed before.
     const media = await provider.resolve(url, contextWith({ json: photoTweet }));
 
     expect(media.type).toBe('collection');
     expect(media.items.map((item) => item.kind)).toEqual(['image', 'image']);
-    // `name=orig` is the original upload; the bare URL is a resized rendition.
     expect(media.items[0]?.plans[0]?.fetch).toEqual({
       via: 'direct',
       url: 'https://pbs.twimg.com/media/HRUDkRsXsAATlgc.jpg?name=orig',
@@ -139,23 +129,18 @@ describe('TwitterProvider', () => {
 
     expect(media.items).toHaveLength(1);
     expect(media.items[0]?.kind).toBe('video');
-    // The HLS manifest is not a download; only the progressive renditions are offered.
     const labels = media.items[0]!.plans.map((plan) => plan.label);
-    // 480x270 lands on the nearest standard rung the rest of the app speaks in.
     expect(labels).toEqual(['720p', '240p', 'MP3', 'M4A']);
     expect(media.items[0]?.duration).toBeCloseTo(15.548);
   });
 
   it('treats an animated GIF as one, and offers a real GIF', async () => {
-    // X stores these as silent MP4s. Offering only the MP4 is what every other tool does
-    // and is not what the person clicking "GIF" asked for.
     const media = await provider.resolve(url, contextWith({ json: gifTweet }));
     expect(media.items[0]?.kind).toBe('gif');
     expect(media.items[0]?.plans.map((p) => `${p.label}/${p.container}`)).toEqual([
       'Original/mp4',
       'GIF/gif',
     ]);
-    // No audio options: there is no sound in one.
     expect(media.items[0]?.plans.some((p) => p.kind === 'audio')).toBe(false);
   });
 
@@ -170,8 +155,6 @@ describe('TwitterProvider', () => {
   });
 
   it('takes the media from the post a quote is quoting', async () => {
-    // Someone pasting a quote post wants the picture in it, which belongs to the post
-    // underneath rather than to the share.
     const quote = {
       id_str: '9',
       text: 'look at this',
@@ -190,8 +173,6 @@ describe('TwitterProvider', () => {
     );
   });
 });
-
-/* ----------------------------------------------------------------------- Reddit */
 
 const gallery: RedditPost = {
   id: 'abc',
@@ -246,12 +227,10 @@ describe('RedditProvider', () => {
     const items = itemsFrom(gallery, 50);
     expect(items.map((item) => item.kind)).toEqual(['image', 'gif']);
     expect(items[0]?.plans[0]?.fetch).toEqual({ via: 'direct', url: 'https://i.redd.it/1.jpg' });
-    // The MP4 leads because it is smaller; the real GIF is still offered.
     expect(items[1]?.plans.map((p) => p.container)).toEqual(['mp4', 'gif']);
   });
 
   it('takes the container from the type Reddit recorded, not the URL', () => {
-    // The extension/MIME mismatch that already bit this application once.
     const items = itemsFrom(
       {
         is_gallery: true,
@@ -271,7 +250,6 @@ describe('RedditProvider', () => {
   });
 
   it('unescapes the URLs Reddit embeds in its JSON', () => {
-    // A literal `&amp;` in a query string is a 403 from the CDN.
     const items = itemsFrom(
       {
         url_overridden_by_dest: 'https://i.redd.it/a.jpg?width=1&amp;format=pjpg',
@@ -286,9 +264,6 @@ describe('RedditProvider', () => {
   });
 
   it('takes hosted video from the manifest, not the file this host is refused', () => {
-    // Measured against the live host: v.redd.it serves DASHPlaylist.mpd and
-    // HLSPlaylist.m3u8 with a 206 and refuses DASH_720.mp4?source=fallback with a 403.
-    // The manifest is also the only route that carries the separate audio stream.
     const withManifest: RedditPost = {
       secure_media: {
         reddit_video: {
@@ -305,7 +280,6 @@ describe('RedditProvider', () => {
     });
     expect(manifestUrlFor(withManifest)).toBe('https://v.redd.it/a/HLSPlaylist.m3u8');
 
-    // With no manifest offered there is nothing else to try, so the file it is.
     const onlyFile: RedditPost = {
       secure_media: { reddit_video: { fallback_url: 'https://v.redd.it/b/DASH_720.mp4' } },
     };
@@ -335,9 +309,6 @@ describe('RedditProvider', () => {
   });
 
   it('reads a post through the embed when no app is registered', async () => {
-    // It used to say "Reddit needs an account". Reddit refuses hosted ranges on every
-    // anonymous route to the *data*, which is true — but not on what it publishes for
-    // embedding, and that is enough to read a public post completely.
     const embedded = `<html>${'<shreddit-screenview-data data="' + JSON.stringify({ post: { type: 'image', url: 'https://i.redd.it/abc123.jpeg' }, subreddit: { name: 'aww' } }).replace(/"/g, '&quot;') + '">'}<img src="https://i.redd.it/abc123.jpeg"></html>`;
 
     const media = await provider.resolve(
@@ -379,7 +350,6 @@ describe('RedditTokenSource', () => {
     });
     const tokens = new RedditTokenSource(credentials, silentLogger(), () => now, fetchImpl);
 
-    // Ten jobs starting at once must not become ten token requests.
     const first = await Promise.all(Array.from({ length: 10 }, () => tokens.token()));
     expect(new Set(first)).toEqual(new Set(['t1']));
     expect(calls).toBe(1);
@@ -387,7 +357,6 @@ describe('RedditTokenSource', () => {
     now += 3500 * 1000;
     expect(await tokens.token()).toBe('t1');
 
-    // Inside the renewal margin, a fresh one is fetched before it can expire in flight.
     now += 100 * 1000;
     expect(await tokens.token()).toBe('t2');
   });
@@ -400,12 +369,9 @@ describe('RedditTokenSource', () => {
       (caught: unknown) => SeraError.from(caught),
     );
     expect(error?.code).toBe('PROVIDER_CONFIGURATION_ERROR');
-    // Nothing from the response body, which can echo back what was sent.
     expect(error?.detail).toBe('reddit: token endpoint returned 401');
   });
 });
-
-/* -------------------------------------------------------------------- Instagram */
 
 describe('InstagramProvider', () => {
   it('explains what a photo post needs, rather than talking about video', async () => {
@@ -435,13 +401,9 @@ describe('InstagramProvider', () => {
   });
 });
 
-/* ----------------------------------------------------------------- capabilities */
-
 describe('provider capabilities', () => {
   const registry = new ProviderRegistry(createProviders());
   const byId = new Map(registry.summarize().map((entry) => [entry.id, entry]));
-  // The direct-file and generic providers claim no hosts, so they are absent from the
-  // public summary — and they are the two whose routing rule matters most.
   const capabilitiesOf = (id: string) => registry.get(id)?.capabilities;
 
   it('every listed provider declares what it can do', () => {
@@ -452,7 +414,6 @@ describe('provider capabilities', () => {
   });
 
   it('does not promise audio extraction from a photo library', () => {
-    // A format picker built from a promise like that shows an MP3 button on a JPEG.
     expect(byId.get('soundcloud')?.capabilities.video).toBe(false);
     expect(byId.get('soundcloud')?.capabilities.image).toBe(false);
   });
@@ -462,18 +423,13 @@ describe('provider capabilities', () => {
       'photo posts',
       'carousels',
     ]);
-    // Reddit no longer needs one: the embed route works without an app registration.
     expect(byId.get('reddit')?.capabilities.authRequiredFor).toBeUndefined();
     expect(byId.get('reddit')?.capabilities.requiresOauth).toBe(false);
-    // X needs none of it any more.
     expect(byId.get('twitter')?.capabilities.authRequiredFor).toBeUndefined();
     expect(byId.get('twitter')?.capabilities.image).toBe(true);
   });
 
   it('answers every question in the matrix, for every provider', () => {
-    // The router reads this to decide where work may go, so a provider that forgot a
-    // field would be routed on `undefined`. Declaring through `declare` makes that
-    // impossible; this is the test that says so out loud.
     const questions = [
       'video',
       'image',
@@ -500,10 +456,6 @@ describe('provider capabilities', () => {
   });
 
   it('keeps an unconstrained URL off a connection that is not ours', () => {
-    // These two claim whatever host no dedicated provider wanted, so the address comes
-    // from the visitor. A node exists to get past a platform that refuses datacentres;
-    // routing arbitrary hosts through a home connection is the shape of an open relay
-    // even when each request is individually legitimate.
     for (const id of ['generic', 'direct', 'mastodon']) {
       expect(capabilitiesOf(id)?.residentialFallback, id).toBe(false);
     }
@@ -511,8 +463,6 @@ describe('provider capabilities', () => {
   });
 
   it('says where a datacentre has already been measured as refused', () => {
-    // Only YouTube, and only because every player client yt-dlp offers was tried from
-    // Oracle and answered with a bot challenge.
     const refused = registry
       .list()
       .filter((provider) => !provider.capabilities.cloudExtraction)
@@ -521,9 +471,6 @@ describe('provider capabilities', () => {
   });
 
   it('takes a post from a visitor’s browser only where SERA can check what arrives', () => {
-    // Visitor import believes nothing in the payload except what the media allowlist admits,
-    // and the only allowlist there is belongs to Instagram. A provider claiming this without
-    // one would be an open fetcher with a friendly name.
     const importing = registry
       .list()
       .filter((provider) => provider.capabilities.browserImport)
@@ -532,9 +479,6 @@ describe('provider capabilities', () => {
   });
 
   it('describes a platform by what it serves, not by what the base class assumed', () => {
-    // TikTok inherited "video only" while handling slideshows through the same playlist
-    // path Instagram carousels use, which is how a service ends up describing itself
-    // wrongly in the one place a visitor goes to read about it.
     expect(byId.get('tiktok')?.capabilities.image).toBe(true);
     expect(byId.get('tiktok')?.capabilities.carousel).toBe(true);
     expect(byId.get('bandcamp')?.capabilities.audio).toBe(true);
@@ -542,10 +486,6 @@ describe('provider capabilities', () => {
   });
 
   it('does not claim the photographs it was measured to be unable to reach', () => {
-    // Tumblr: the extractor is video-only, the page is a script shell, the old JSON
-    // endpoint is gone, and robots.txt disallows the www path. Pinterest: robots.txt is
-    // `Disallow: /` for every agent, and the extractor is video-only. Both refusals are
-    // correct; what would be wrong is a picker that offered a button for them.
     for (const id of ['tumblr', 'pinterest']) {
       expect(byId.get(id)?.capabilities.image, id).toBe(false);
       expect(byId.get(id)?.capabilities.authRequiredFor?.length, id).toBeGreaterThan(0);

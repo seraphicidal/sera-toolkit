@@ -2,15 +2,6 @@ import { dirname } from 'node:path';
 import { seraError } from '../errors.js';
 import { run } from '../util/spawn.js';
 
-/**
- * FFmpeg and ffprobe adapter.
- *
- * Conversions are described declaratively and turned into an argument array here, so no
- * caller ever assembles a command line. Every recipe prefers `-c copy` where the source
- * already satisfies the request: re-encoding costs minutes of CPU and loses quality, and
- * most "convert to MP4" requests are really remux requests.
- */
-
 export interface FfmpegOptions {
   readonly ffmpegPath: string;
   readonly ffprobePath: string;
@@ -53,7 +44,6 @@ interface FfprobeOutput {
   streams?: FfprobeStream[];
 }
 
-/** Reads a file's real properties, used both for UI detail and for output validation. */
 export async function probe(path: string, options: FfmpegOptions): Promise<ProbeResult> {
   const result = await run(options.ffprobePath, {
     args: ['-v', 'error', '-print_format', 'json', '-show_format', '-show_streams', '-i', path],
@@ -119,7 +109,6 @@ export async function probe(path: string, options: FfmpegOptions): Promise<Probe
   return out;
 }
 
-/** `30000/1001` -> `29.97`. */
 function parseFrameRate(value: string | undefined): number | undefined {
   if (!value) return undefined;
   const [numerator, denominator] = value.split('/').map(Number);
@@ -128,38 +117,24 @@ function parseFrameRate(value: string | undefined): number | undefined {
 }
 
 export type ConversionSpec =
-  /** Extract or transcode audio. */
   | {
       readonly kind: 'audio';
       readonly container: 'mp3' | 'm4a' | 'aac' | 'opus' | 'ogg' | 'wav' | 'flac';
       readonly bitrateKbps?: number;
     }
-  /** Change container only; fails rather than silently re-encoding. */
   | { readonly kind: 'remux'; readonly container: 'mp4' | 'webm' | 'mov' | 'mkv' }
-  /** Video to animated GIF, via a generated palette. */
   | { readonly kind: 'gif'; readonly fps?: number; readonly maxWidth?: number }
-  /** GIF (or any video) to a modern video container. */
   | { readonly kind: 'video'; readonly container: 'mp4' | 'webm' };
 
 export interface ConvertRequest extends FfmpegOptions {
   readonly input: string;
   readonly output: string;
   readonly spec: ConversionSpec;
-  /** Source duration in seconds; enables percentage progress. */
   readonly durationSeconds?: number;
-  /**
-   * Ceiling on what the conversion may write.
-   *
-   * The input is bounded and the duration is bounded, and neither bounds the output: a
-   * re-encode can be larger than what it was given. FFmpeg stops writing here rather
-   * than filling the disk, and the caller's own check turns the short file into an
-   * honest "too large" instead of a confusing "conversion failed".
-   */
   readonly maxOutputBytes?: number;
   readonly onProgress?: (percent: number) => void;
 }
 
-/** Audio encoder settings per container. */
 const AUDIO_ENCODERS: Record<string, { codec: string; extra?: string[] }> = {
   mp3: { codec: 'libmp3lame' },
   m4a: { codec: 'aac' },
@@ -170,7 +145,6 @@ const AUDIO_ENCODERS: Record<string, { codec: string; extra?: string[] }> = {
   flac: { codec: 'flac' },
 };
 
-/** Codecs that can be copied straight into a container rather than re-encoded. */
 const COPYABLE_AUDIO: Record<string, readonly string[]> = {
   mp3: ['mp3'],
   m4a: ['aac'],
@@ -209,7 +183,6 @@ function buildArgs(request: ConvertRequest, source: ProbeResult): string[] {
     '-y',
     '-i',
     request.input,
-    // Bound what a single conversion can consume on a shared host.
     '-threads',
     '2',
     '-max_muxing_queue_size',
@@ -219,7 +192,6 @@ function buildArgs(request: ConvertRequest, source: ProbeResult): string[] {
   switch (request.spec.kind) {
     case 'audio':
       args.push(...audioArgs(request.spec, source.audio?.codec));
-      // Carry the source tags across so a converted MP3 keeps its title and artist.
       args.push('-map_metadata', '0', '-id3v2_version', '3');
       break;
 
@@ -233,8 +205,6 @@ function buildArgs(request: ConvertRequest, source: ProbeResult): string[] {
     case 'gif': {
       const fps = request.spec.fps ?? 15;
       const width = request.spec.maxWidth ?? 480;
-      // A generated palette is the difference between a usable GIF and a dithered mess;
-      // `split` lets one pass build the palette and apply it without a temp file.
       args.push(
         '-filter_complex',
         `fps=${fps},scale=${width}:-1:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle`,
@@ -255,7 +225,6 @@ function buildArgs(request: ConvertRequest, source: ProbeResult): string[] {
           '23',
           '-pix_fmt',
           'yuv420p',
-          // Odd dimensions are legal in a GIF and illegal in H.264.
           '-vf',
           'scale=trunc(iw/2)*2:trunc(ih/2)*2',
           '-movflags',
@@ -277,7 +246,6 @@ function buildArgs(request: ConvertRequest, source: ProbeResult): string[] {
   return args;
 }
 
-/** Runs one conversion, reporting 0-100 progress derived from the output timestamp. */
 export async function convert(request: ConvertRequest): Promise<void> {
   const source = await probe(request.input, request);
   const duration = request.durationSeconds ?? source.durationSeconds;
@@ -295,7 +263,6 @@ export async function convert(request: ConvertRequest): Promise<void> {
     const [key, value] = line.split('=');
     if (key !== 'out_time_us' && key !== 'out_time_ms') return;
     if (!duration || duration <= 0 || !value || value === 'N/A') return;
-    // `out_time_ms` is a misnomer: FFmpeg reports microseconds in both fields.
     const micros = Number(value);
     if (!Number.isFinite(micros)) return;
     const percent = Math.min(99, (micros / 1_000_000 / duration) * 100);
@@ -322,7 +289,6 @@ export async function convert(request: ConvertRequest): Promise<void> {
   request.onProgress?.(100);
 }
 
-/** Reports the installed FFmpeg version, or throws if the binary is unusable. */
 export async function ffmpegVersion(ffmpegPath: string, timeoutMs = 10_000): Promise<string> {
   const result = await run(ffmpegPath, {
     args: ['-hide_banner', '-version'],

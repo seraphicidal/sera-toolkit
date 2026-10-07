@@ -68,7 +68,6 @@ describe('parseUserUrl', () => {
   });
 
   it('refuses control characters instead of letting URL() strip them', () => {
-    // Without this, `evil\n.example` parses as a host the caller never inspected.
     expect(codeFor('https://exa\nmple.com/x.mp4')).toBe('INVALID_URL');
     expect(codeFor('https://exa\tmple.com/x.mp4')).toBe('INVALID_URL');
     expect(codeFor('https://exam ple.com/x.mp4')).toBe('INVALID_URL');
@@ -131,7 +130,6 @@ describe('host matching', () => {
     expect(hostMatches('youtube.com', 'youtube.com')).toBe(true);
     expect(hostMatches('www.youtube.com', 'youtube.com')).toBe(true);
     expect(hostMatches('music.youtube.com', 'youtube.com')).toBe(true);
-    // The classic suffix-confusion bypass.
     expect(hostMatches('youtube.com.evil.test', 'youtube.com')).toBe(false);
     expect(hostMatches('notyoutube.com', 'youtube.com')).toBe(false);
     expect(hostMatches('evil-youtube.com', 'youtube.com')).toBe(false);

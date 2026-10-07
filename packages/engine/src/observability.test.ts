@@ -6,15 +6,6 @@ import type { YtdlpInfo } from './extract/ytdlp-types.js';
 import { logSafeUrl, REDACTED_PATHS, REDACTION_CENSOR, type Logger } from './logging.js';
 import { MediaResolver } from './resolver.js';
 
-/**
- * What a log line has to say, and what it must never say.
- *
- * A media downloader's logs are a record of what people watched unless someone decides
- * otherwise, so the redaction list is the privacy policy in code and this is the test
- * that keeps it honest. The positive half matters for a different reason: these fields
- * are the ones an operator correlates when a provider starts failing, and a field that
- * quietly stops being emitted is not something anybody notices until they need it.
- */
 function capture(): { logger: Logger; lines: () => Record<string, unknown>[] } {
   const written: string[] = [];
   const sink = new Writable({
@@ -24,7 +15,6 @@ function capture(): { logger: Logger; lines: () => Record<string, unknown>[] } {
     },
   });
   return {
-    // The real redaction configuration, not a restatement of it.
     logger: pino(
       { level: 'info', redact: { paths: [...REDACTED_PATHS], censor: REDACTION_CENSOR } },
       sink,
@@ -151,9 +141,7 @@ describe('the lines a visitor import writes', () => {
         url: post,
         node: node('https://evil.example/SECRETPATH.jpg?oh=SECRETSIGNATURE'),
       });
-    } catch {
-      // Refused, which is the point: a refusal writes a line as well.
-    }
+    } catch {}
 
     const written = lines();
     expect(written.find((line) => line.msg === 'imported')).toMatchObject({

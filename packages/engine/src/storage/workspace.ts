@@ -4,16 +4,6 @@ import type { Logger } from '../logging.js';
 import { seraError } from '../errors.js';
 import { assertSafeFilename } from '../util/filename.js';
 
-/**
- * Per-job scratch space.
- *
- * Every job gets its own directory and nothing is ever written outside it. The API and
- * the workers reach files only through `resolveFile`, which re-derives the path from the
- * job id and a validated bare filename — so a request for `../../etc/passwd` cannot
- * name a path at all, rather than being caught by a check that might be forgotten.
- */
-
-/** Written by the worker, read by the API when it serves the result. */
 export interface JobManifest {
   readonly jobId: string;
   readonly createdAt: string;
@@ -38,7 +28,6 @@ export class WorkspaceManager {
     private readonly logger: Logger,
   ) {}
 
-  /** The directory for a job. Job ids are hex, so they cannot contain a separator. */
   private jobDir(jobId: string): string {
     if (!/^[a-f0-9]{16,64}$/.test(jobId)) {
       throw seraError('NOT_FOUND', { detail: 'malformed job id' });
@@ -64,13 +53,6 @@ export class WorkspaceManager {
     }
   }
 
-  /**
-   * Maps a job id and filename onto an absolute path inside that job's output directory.
-   *
-   * The filename is validated as a bare name first, then the joined path is checked to
-   * still be under the output directory. Two independent guards, because this is the one
-   * function that turns user input into a filesystem read.
-   */
   async resolveFile(jobId: string, filename: string): Promise<string> {
     let safe: string;
     try {
@@ -94,13 +76,6 @@ export class WorkspaceManager {
     await rm(this.jobDir(jobId), { recursive: true, force: true }).catch(() => undefined);
   }
 
-  /**
-   * Deletes every workspace past its retention window.
-   *
-   * Retention is the privacy guarantee, so the reaper is deliberately dumb: it deletes by
-   * directory age and does not consult the job store. A crashed worker or a lost job
-   * record therefore cannot leave media on disk indefinitely.
-   */
   async reap(now = Date.now()): Promise<number> {
     let removed = 0;
     let entries;
@@ -127,7 +102,6 @@ export class WorkspaceManager {
     return removed;
   }
 
-  /** Starts the periodic sweep. Returns a function that stops it. */
   startReaper(intervalSeconds: number): () => void {
     const timer = setInterval(() => {
       void this.reap().catch((error: unknown) => {
@@ -138,7 +112,6 @@ export class WorkspaceManager {
     return () => clearInterval(timer);
   }
 
-  /** Total bytes currently held across all workspaces. */
   async usage(): Promise<{ workspaces: number; bytes: number }> {
     let workspaces = 0;
     let bytes = 0;
@@ -166,14 +139,11 @@ async function directorySize(dir: string): Promise<number> {
   return total;
 }
 
-/** A single job's directories, handed to the pipeline. */
 export class Workspace {
   constructor(
     readonly jobId: string,
     readonly baseDir: string,
-    /** Downloads and intermediate files. Never served. */
     readonly scratchDir: string,
-    /** Finished files. Only these are reachable over HTTP. */
     readonly outputDir: string,
   ) {}
 
@@ -185,13 +155,11 @@ export class Workspace {
     await writeFile(join(this.baseDir, MANIFEST_NAME), JSON.stringify(manifest, null, 2), 'utf8');
   }
 
-  /** Removes intermediate files once the outputs are final. */
   async clearScratch(): Promise<void> {
     await rm(this.scratchDir, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 
-/** Content types for the containers SERA produces. */
 export const MIME_TYPES: Readonly<Record<string, string>> = {
   srt: 'application/x-subrip',
   vtt: 'text/vtt',

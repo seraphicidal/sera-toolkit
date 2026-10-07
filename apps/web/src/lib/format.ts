@@ -1,13 +1,5 @@
 import type { JobState, MediaKind } from '@sera/contracts/types';
 
-/**
- * Presentation helpers for the browser.
- *
- * Deliberately duplicated from the engine rather than imported: the engine is a
- * server-side package that pulls in the extractor, the archiver and a validator, and
- * none of that belongs in a bundle sent to a phone.
- */
-
 const UNITS = ['B', 'KB', 'MB', 'GB', 'TB'] as const;
 
 export function formatBytes(bytes: number | undefined): string {
@@ -32,7 +24,6 @@ export function formatDuration(seconds: number | undefined): string {
   return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
 }
 
-/** `00:08` for an ETA; blank when there is nothing meaningful to say. */
 export function formatEta(seconds: number | undefined): string {
   if (seconds === undefined || !Number.isFinite(seconds) || seconds < 0) return '';
   if (seconds < 1) return '00:00';
@@ -52,17 +43,14 @@ export const KIND_LABELS: Record<Exclude<MediaKind, 'unknown'>, string> = {
   gif: 'GIF',
 };
 
-/** Plural-aware count, e.g. `1 file` / `7 files`. */
 export function pluralize(count: number, singular: string, plural = `${singular}s`): string {
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
-/** States in which the job is still doing something. */
 export function isRunning(state: JobState): boolean {
   return !['ready', 'failed', 'cancelled', 'expired'].includes(state);
 }
 
-/** Joins class names, skipping anything falsy. */
 export function cx(...parts: (string | false | null | undefined)[]): string {
   return parts.filter(Boolean).join(' ');
 }

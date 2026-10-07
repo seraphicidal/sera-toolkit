@@ -33,47 +33,24 @@ import { mimeTypeFor, type Workspace, type WorkspaceManager } from '../storage/w
 import { dedupeFilename, mediaFilename, sanitizeStem } from '../util/filename.js';
 import { createZip } from './zip.js';
 
-/**
- * The download pipeline.
- *
- * One job may produce one file or fifty, from one URL, in mixed formats. The steps are
- * always the same — re-resolve, fetch, convert, name, package, validate — and progress
- * is reported as a single number across all of it, because "file 3 of 7 at 62%" is what
- * the person waiting actually wants to know.
- */
-
 export interface JobSelection {
-  /** Item index within the resolution, 0-based. */
   readonly itemIndex: number;
-  /** The provider's id for that item, used to detect a shifted collection. */
   readonly sourceId?: string;
-  /** `kind/container/label`, matched against the re-resolved plan list. */
   readonly planKey: string;
 }
 
 export interface JobSpec {
   readonly jobId: string;
   readonly provider: string;
-  /** Canonical URL, exactly as the resolver produced it. */
   readonly url: string;
   readonly selections: readonly JobSelection[];
   readonly packaging: PackagingMode;
-  /** User-supplied filename stem. Sanitized before use. */
   readonly filename?: string;
-  /** Keep only this part of the one item, in seconds. Single-item video and audio only. */
   readonly trim?: TrimRange;
-  /** A subtitle track to embed or deliver as a file. Single item only. */
   readonly subtitles?: JobSubtitles;
-  /**
-   * Present when the job came from a post the visitor's own browser read.
-   *
-   * A job like that fetches these and never re-resolves: nothing on this side can read the
-   * post again, which is the point — there is no session here to read it with.
-   */
   readonly imported?: ImportedJob;
 }
 
-/** `SubtitleRequest`, with its defaults filled in. */
 export interface JobSubtitles {
   readonly lang: string;
   readonly auto: boolean;
@@ -81,14 +58,10 @@ export interface JobSubtitles {
   readonly only: boolean;
 }
 
-/** A post the visitor's browser read, as the server approved and signed it. */
 export interface ImportedJob {
-  /** The media to fetch, exactly as signed. */
   readonly entries: readonly ImportedEntry[];
-  /** For naming the files. */
   readonly title: string;
   readonly author?: string;
-  /** When Instagram stops honouring the earliest of those URLs, epoch seconds. */
   readonly expiresAt?: number;
 }
 
@@ -105,17 +78,9 @@ export interface JobRunnerDependencies {
   readonly logger: Logger;
   readonly resolver: MediaResolver;
   readonly workspaces: WorkspaceManager;
-  /**
-   * Extraction nodes on other networks.
-   *
-   * Only consulted for a resolution that came from one. A media URL signed for one
-   * address is refused from another, so a job whose plans were made elsewhere has to be
-   * carried out elsewhere too.
-   */
   readonly remote?: RemoteExtraction;
 }
 
-/** Share of a single file's progress attributed to the download, versus conversion. */
 const DOWNLOAD_SHARE = 0.85;
 
 export class JobRunner {
@@ -134,11 +99,6 @@ export class JobRunner {
 
     report({ state: 'resolving', step: 'Reading the link', progress: { percent: 0 } });
 
-    // Re-resolving rather than trusting a URL from the client is what keeps expired CDN
-    // links, and forged ones, out of the pipeline. An imported post is the exception, and not
-    // a hole in that rule: it cannot be re-read, so its media was checked against Instagram's
-    // hosts when it arrived and signed into the token this spec came from. The client has had
-    // no chance to change a byte of it since.
     const resolved = spec.imported
       ? mediaFromImport({
           url: spec.url,
@@ -155,12 +115,8 @@ export class JobRunner {
     const totalFiles = matched.length;
     const produced: { path: string; name: string }[] = [];
     const taken = new Set<string>();
-    /** Anything the visitor asked for that had to be met with something else. */
     const delivered: { requested: string; actual: string }[] = [];
 
-    // A resolution the local network could not produce cannot be downloaded here
-    // either: YouTube binds a media URL to the address that asked for it. The node that
-    // resolved this owns the whole job.
     const remoteBackend = resolved.remoteBackend;
     if (remoteBackend && this.deps.remote) {
       report({ state: 'downloading', step: 'Downloading', progress: { percent: 0 } });
@@ -171,10 +127,7 @@ export class JobRunner {
           providerId: spec.provider,
           planKeys: matched.map(({ plan }) => planKey(plan)),
           ...(spec.filename ? { filename: spec.filename } : {}),
-          // The node cuts the file itself: shipping the whole thing to cut it here would
-          // spend its upload on what is thrown away.
           ...(spec.trim ? { trim: spec.trim } : {}),
-          // So are subtitles: the track is fetched on the same network as the media.
           ...(spec.subtitles ? { subtitles: spec.subtitles } : {}),
         },
         {
@@ -182,7 +135,6 @@ export class JobRunner {
             report({
               state: 'downloading',
               step: progress.step,
-              // Capped below 100 so the terminal states remain the runner's to set.
               progress: { percent: Math.min(99, progress.percent) },
             }),
           ...(signal ? { signal } : {}),
@@ -194,12 +146,6 @@ export class JobRunner {
         await rename(file.path, destination);
         produced.push({ path: destination, name: file.name });
       }
-      // The upload directory is empty now. Leaving it would mean one stray directory per
-      // remote job until the reaper's retention window came round to it.
-      //
-      // Only a directory the upload endpoint itself created is removed. Deducing "the
-      // parent of the file" and deleting that would be one wrong assumption away from
-      // deleting a workspace, which is exactly what it did the first time it was written.
       const uploads = [...new Set(files.map((file) => dirname(file.path)))].filter((directory) =>
         basename(directory).startsWith('remote-'),
       );
@@ -229,7 +175,6 @@ export class JobRunner {
 
         if (spec.subtitles) assertSubtitlesOffered(item, spec.subtitles);
 
-        // The subtitle file alone: no media is fetched at all.
         if (spec.subtitles?.only) {
           report({
             state: 'downloading',
@@ -305,7 +250,6 @@ export class JobRunner {
         await rename(finished, destination);
         produced.push({ path: destination, name });
 
-        // A subtitle file beside the media, named after it: "Title.en.srt" next to "Title.mp4".
         if (spec.subtitles && spec.subtitles.format !== 'embed') {
           report({
             state: 'downloading',
@@ -335,9 +279,6 @@ export class JobRunner {
     }
 
     const packaged = await this.package(spec, resolved, workspace, produced, report, signal);
-    // Said out loud rather than left for someone to notice in the pixels: which backend
-    // produced this, and anything that had to be met with a different rendition. An imported
-    // post names the visitor's browser, because that is where the post was read.
     const backend = spec.imported ? 'visitor-browser' : (remoteBackend ?? 'local');
     const result: JobResult = {
       ...packaged,
@@ -373,21 +314,6 @@ export class JobRunner {
     return result;
   }
 
-  /* ------------------------------------------------------------------ */
-
-  /**
-   * The requested format, and then the next best one this item actually has.
-   *
-   * A format list is a snapshot. Between the moment it was read and the moment the
-   * bytes are asked for, the one that was picked can stop being available — a signed
-   * URL expires, a CDN refuses, a client's list changes underneath it. Failing the whole
-   * job at that point throws away a perfectly good 720p because the 1080p went missing.
-   *
-   * Only for the failures a different format is an answer to, and only downward through
-   * options this item already published: no re-resolving, no different media, and never
-   * a different kind — someone who asked for video does not want an MP3 instead. Each
-   * candidate is tried once, so this is a ladder and not a retry loop.
-   */
   private async fetchWithFallback(args: {
     workspace: Workspace;
     resolved: ResolvedMedia;
@@ -396,7 +322,6 @@ export class JobRunner {
     index: number;
     report: ReportFn;
     fileProgress: (fraction: number, extra?: Partial<JobProgress>) => JobProgress;
-    /** The item came from a post the visitor's browser read. */
     imported?: boolean;
     trim?: TrimRange;
     embedSubtitles?: JobSubtitles;
@@ -466,8 +391,6 @@ export class JobRunner {
         dispatcher: this.deps.resolver.dispatcher,
         maxBytes: config.maxFilesizeBytes,
         timeoutMs: config.jobTimeoutSeconds * 1000,
-        // Every hop, not only the first. A redirect is a new destination, and following one
-        // off Instagram's hosts would undo the check the import passed on arrival.
         ...(importHosts ? { allowUrl: (url: URL) => isAllowedMediaUrl(url, importHosts) } : {}),
         ...(signal ? { signal } : {}),
         onProgress: (progress) => {
@@ -488,20 +411,13 @@ export class JobRunner {
           });
         },
       }).catch((error: unknown) => {
-        // Instagram's CDN answers a link whose signature has run out with a 403, which would
-        // otherwise reach the visitor as "we couldn't retrieve this media".
         throw importHosts && isForbidden(error)
           ? importRefused('import: the cdn answered 403')
           : error;
       });
-      // The provider named this format before it had the file, from a URL or a header,
-      // and either can be wrong — Bluesky's CDN serves WebP from URLs ending in `@jpeg`.
-      // Renaming here is enough to correct everything downstream, because the produced
-      // file's own extension is what names the download.
       const fetched = await renameToActualFormat(destination, plan.container);
       if (!args.trim) return fetched;
 
-      // A direct file is cut after it arrives; yt-dlp, below, only fetches the part asked for.
       report({ state: 'converting', step: 'Trimming', progress: fileProgress(DOWNLOAD_SHARE) });
       const trimmed = join(scratch, `trimmed${extname(fetched)}`);
       await trimMedia({
@@ -531,12 +447,8 @@ export class JobRunner {
         url: args.resolved.url,
         format: fetchPlan.selector,
         workdir: scratch,
-        // yt-dlp appends the real extension; a fixed stem makes the output easy to find.
         outputTemplate: 'media.%(ext)s',
         maxFilesizeBytes: config.maxFilesizeBytes,
-        // The resolve and the download are separate invocations. A proxy that applied to
-        // only one of them would produce a format list from one address and ask another to
-        // fetch it, which for a signed URL is the 403 this exists to avoid.
         ...(config.proxyFor(args.resolved.provider)
           ? { proxy: config.proxyFor(args.resolved.provider) }
           : {}),
@@ -585,15 +497,7 @@ export class JobRunner {
       return findSingleFile(scratch);
     }
 
-    // Only the part asked for, where yt-dlp and FFmpeg manage it. A copy can only begin
-    // where the stream lets it: a video's keyframe, possibly seconds early, and — measured on
-    // YouTube's audio-only streams, where a copy from 0:03 came back starting at 0:00 — an
-    // audio stream's fragment. A cut from the very start is accurate as a copy; any other is
-    // re-encoded around the cut.
     const range = args.trim;
-    // yt-dlp hands a section to FFmpeg as one long request, and YouTube throttles that to a
-    // trickle: measured, a 1080p section wrote nothing in 75 s where the full download ran
-    // at 4 MB/s. A section that stops growing is abandoned for the full file.
     const stalled = new AbortController();
     const stopWatching = watchGrowth(scratch, SECTION_STALL_MS, () => stalled.abort());
     try {
@@ -633,9 +537,6 @@ export class JobRunner {
       );
     }
 
-    // The section did not come back usable — measured on Debian's FFmpeg 5.1 with Vimeo's
-    // DASH streams, it is unreadable with forced keyframes and a second long without. The
-    // whole file, cut here, is what a direct link gets: slower, and right.
     await rm(scratch, { recursive: true, force: true });
     await mkdir(scratch, { recursive: true });
     sawPostprocessor = undefined;
@@ -656,14 +557,6 @@ export class JobRunner {
     return trimmed;
   }
 
-  /**
-   * Titles, artist, album and cover art for an audio file (see convert/tags.ts).
-   *
-   * Best effort: a thumbnail that will not download or a tag FFmpeg refuses leaves the file
-   * as it was, because a working MP3 without its cover is still the thing that was asked
-   * for. An imported post gets tags but no cover; its pictures are Instagram's, fetched
-   * only under the rules the import was signed with.
-   */
   private async tagOne(args: {
     input: string;
     resolved: ResolvedMedia;
@@ -688,8 +581,6 @@ export class JobRunner {
     const artist = item.tags?.artist ?? resolved.author;
     const title = item.tags?.track ?? item.title ?? resolved.title;
 
-    // The picked thumbnail first, then the one yt-dlp verified, then the post's own: the
-    // first that downloads and crops becomes the cover.
     const candidates = args.imported
       ? []
       : [...new Set([item.thumbnailUrl, item.thumbnailFallbackUrl, resolved.thumbnailUrl])].filter(
@@ -743,7 +634,6 @@ export class JobRunner {
     }
   }
 
-  /** One subtitle track as a file, fetched with yt-dlp from the item's own page. */
   private async fetchSubtitles(args: {
     resolved: ResolvedMedia;
     item: ResolvedItem;
@@ -823,7 +713,6 @@ export class JobRunner {
     totalFiles: number,
   ): string {
     const extension = producedPath.split('.').pop() ?? plan.container;
-    // A trimmed file says which part it is, so two cuts of one video do not look alike.
     const suffix = spec.trim ? trimSuffix(spec.trim, item.duration) : '';
     if (spec.filename && totalFiles === 1) {
       return `${sanitizeStem(spec.filename)}${suffix}.${extension}`;
@@ -832,7 +721,6 @@ export class JobRunner {
       author: resolved.author,
       title: item.title ?? resolved.title,
       container: extension,
-      // A collection numbers its parts; a single file does not need a "(1)".
       ...(totalFiles > 1 || resolved.items.length > 1 ? { index: item.index + 1 } : {}),
     });
     if (!suffix) return name;
@@ -936,14 +824,6 @@ export class JobRunner {
     };
   }
 
-  /**
-   * Confirms the outputs are real media before the job is reported as ready.
-   *
-   * A zero-byte file or a truncated container is the difference between "your download
-   * failed" and "your download succeeded and then did not play", and the second is much
-   * worse. Images are checked for size only; ffprobe has nothing useful to say about a
-   * JPEG that a byte count does not.
-   */
   private async validate(
     produced: readonly { path: string; name: string }[],
     result: JobResult,
@@ -957,9 +837,6 @@ export class JobRunner {
           detail: `empty output: ${file.name}`,
         });
       }
-      // A re-encode can be larger than what it was given, so the bound on the input is
-      // not a bound on the output. FFmpeg is told to stop at the same ceiling; this is
-      // what turns the truncated file it leaves behind into an answer that says why.
       if (info.size >= config.maxFilesizeBytes) {
         throw seraError('TOO_LARGE', {
           message: 'The converted file is larger than this server allows.',
@@ -968,10 +845,6 @@ export class JobRunner {
         });
       }
 
-      // A refusal that arrived as a 200. A login page, a consent wall or a JSON error
-      // saved under the extension the plan asked for is a .jpg that opens to "Log in to
-      // continue" — and nothing else here would catch it, because it has no magic number
-      // to contradict and no audio or video track to probe.
       const imposter = sniffTextImposter(await headOf(file.path));
       if (imposter) {
         throw seraError('MEDIA_UNAVAILABLE', {
@@ -1011,23 +884,11 @@ export class JobRunner {
   }
 }
 
-/* -------------------------------------------------------------------------- */
-/*  Helpers                                                                   */
-/* -------------------------------------------------------------------------- */
-
 interface MatchedSelection {
   readonly item: ResolvedItem;
   readonly plan: DownloadPlan;
 }
 
-/**
- * Finds the item and plan a token refers to in a fresh resolution.
- *
- * The provider's own item id is trusted over the index, so a carousel that gained a
- * slide overnight still downloads the slide the person picked. When the plan itself is
- * gone — a quality that stopped being published — the job fails with a message that says
- * so, rather than quietly substituting something else.
- */
 export function matchSelection(resolved: ResolvedMedia, selection: JobSelection): MatchedSelection {
   const item =
     (selection.sourceId
@@ -1052,12 +913,6 @@ export function matchSelection(resolved: ResolvedMedia, selection: JobSelection)
   return { item, plan };
 }
 
-/**
- * Refuses to start a fetch Instagram is going to refuse.
- *
- * A job can wait in the queue past the moment the signed URLs in it run out, and asking the
- * CDN anyway turns a clear answer into a 403 that reads like a network fault.
- */
 function assertImportFresh(imported: ImportedJob, now = Date.now()): void {
   if (imported.expiresAt !== undefined && imported.expiresAt * 1000 <= now) {
     throw importExpired('import: the media urls expired before the job reached them');
@@ -1115,11 +970,6 @@ function stepForPostprocessor(name: string, plan: DownloadPlan): string {
   }
 }
 
-/** Locates the one media file yt-dlp produced in a per-selection scratch directory. */
-/**
- * Whether the item still offers the track asked for. The resolution the job was created
- * from listed it; a re-resolution that no longer does means the site took it down.
- */
 function assertSubtitlesOffered(item: ResolvedItem, subtitles: JobSubtitles): void {
   const offered = item.subtitles?.some(
     (track) => track.lang === subtitles.lang && track.auto === subtitles.auto,
@@ -1132,23 +982,14 @@ function assertSubtitlesOffered(item: ResolvedItem, subtitles: JobSubtitles): vo
   }
 }
 
-/** "Title.srt" → "Title.en.srt": the language before the extension, as players expect. */
 function subtitleName(name: string, lang: string): string {
   const dot = name.lastIndexOf('.');
-  // `en-orig` is YouTube's key for the original-language automatic track; a player looks
-  // for the language itself.
   const safe = lang.replace(/-orig$/, '').replace(/[^A-Za-z0-9_-]/g, '');
   return `${name.slice(0, dot)}.${safe}${name.slice(dot)}`;
 }
 
-/** How long a section download may write nothing before the full file is fetched instead. */
 export const SECTION_STALL_MS = 20_000;
 
-/**
- * Calls `onStall` once if the files under `directory` stop growing for `stallMs`, checking
- * every second (a quarter of `stallMs` when that is shorter). Returns a function that stops
- * watching.
- */
 export function watchGrowth(directory: string, stallMs: number, onStall: () => void): () => void {
   let size = -1;
   let since = Date.now();
@@ -1187,11 +1028,6 @@ async function directorySize(directory: string): Promise<number> {
   return total;
 }
 
-/**
- * Whether a section yt-dlp cut is the part asked for: readable, with a track, and within a
- * second (or a tenth, for a long cut) of the length the range implies — when that length is
- * known, from the range's end or the item's duration.
- */
 export function sectionIsUsable(
   probed:
     | { readonly durationSeconds?: number; readonly video?: unknown; readonly audio?: unknown }
@@ -1221,7 +1057,6 @@ async function findSingleFile(directory: string): Promise<string> {
   }
   if (files.length === 1) return join(directory, files[0]!);
 
-  // A merge can leave the source streams behind; the largest file is the merged result.
   const sized = await Promise.all(
     files.map(async (name) => ({
       name,
@@ -1236,19 +1071,6 @@ async function findSingleFile(directory: string): Promise<string> {
 
 export { SeraError };
 
-/**
- * Corrects a downloaded file's extension to whatever its bytes say it is.
- *
- * Returns the path to use. A file whose format cannot be recognised keeps the name it
- * was given: guessing wrong twice is worse than guessing wrong once.
- */
-/**
- * Failures a different format is an answer to.
- *
- * A missing format and a refused or truncated stream are about *this* rendition. A bot
- * challenge, a private post or a login wall are about the whole request, and stepping
- * down the quality list would ask the same question in a smaller voice.
- */
 const FORMAT_FALLBACK_ANSWERS = new Set([
   'FORMAT_UNAVAILABLE',
   'STREAM_403',
@@ -1256,13 +1078,6 @@ const FORMAT_FALLBACK_ANSWERS = new Set([
   'SOURCE_ERROR',
 ]);
 
-/**
- * The same kind of thing, smaller, from what this item already published.
- *
- * Ordered by height descending so the step down is one step, not a fall to the bottom.
- * Plans with no height sort last: an audio rendition or a still has no ladder to walk,
- * and putting them behind the sized ones keeps "the next best video" meaning that.
- */
 function lowerQualityAlternatives(
   item: ResolvedItem,
   chosen: DownloadPlan,
@@ -1279,7 +1094,6 @@ function lowerQualityAlternatives(
     .sort((a, b) => (b.height ?? 0) - (a.height ?? 0));
 }
 
-/** The first bytes of a file, or nothing when it cannot be read. */
 async function headOf(path: string): Promise<Buffer> {
   try {
     const handle = await open(path, 'r');

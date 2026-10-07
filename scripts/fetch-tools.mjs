@@ -1,26 +1,4 @@
 #!/usr/bin/env node
-/**
- * Downloads the pinned yt-dlp and FFmpeg builds into `.tools/`.
- *
- * The engine prefers a binary here over one on PATH, so a deployment gets the exact
- * version the manifest names rather than whatever the host happens to have. Every
- * download is checked against the publisher's own checksum file before it is written
- * into place; a mismatch aborts rather than warns.
- *
- * yt-dlp is re-fetched whenever the pinned version differs from the one installed, which
- * `.tools/yt-dlp.version` records, so running this after a pin moves is the whole upgrade.
- *
- * Usage:
- *   node scripts/fetch-tools.mjs            # fetch anything missing or out of date
- *   node scripts/fetch-tools.mjs --force    # re-fetch even if present
- *   node scripts/fetch-tools.mjs --only=ytdlp
- *   node scripts/fetch-tools.mjs --only=ytdlp --pin-from=main
- *
- * `--pin-from=<branch>` takes the yt-dlp version from that branch's manifest on GitHub
- * instead of this checkout's. An extraction node uses it to follow what the deployment
- * runs without pulling the checkout it runs from; the binary is still checked against
- * yt-dlp's own published checksums, exactly as for a local pin.
- */
 
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
@@ -42,7 +20,6 @@ import { fileURLToPath } from 'node:url';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const TOOLS_DIR = join(ROOT, '.tools');
 const MANIFEST = JSON.parse(readFileSync(join(ROOT, 'scripts', 'tools.manifest.json'), 'utf8'));
-/** Where `--pin-from` reads a branch's manifest. */
 const MANIFEST_REPO = process.env.SERA_MANIFEST_REPO ?? 'seraphicidal/sera-toolkit';
 
 const args = process.argv.slice(2);
@@ -50,16 +27,8 @@ const FORCE = args.includes('--force');
 const ONLY = args.find((a) => a.startsWith('--only='))?.slice('--only='.length);
 const PIN_FROM = args.find((a) => a.startsWith('--pin-from='))?.slice('--pin-from='.length);
 
-/** `SERA_TOOLS_PLATFORM` stands in for this machine's `platform-arch`, for testing a fetch. */
 const PLATFORM_KEY = process.env.SERA_TOOLS_PLATFORM ?? `${process.platform}-${process.arch}`;
 const EXE = PLATFORM_KEY.startsWith('win32-') ? '.exe' : '';
-/**
- * Android (Termux) cannot run yt-dlp's Linux builds, which are linked against glibc. There
- * the platform-independent zipapp runs under Termux's own Python: it is checked against the
- * same checksum file, installed as `.tools/yt-dlp.pyz`, and `.tools/yt-dlp` becomes a
- * launcher for it with an absolute interpreter path, so nothing depends on `/usr/bin/env`
- * resolving, which on Android it does not by itself.
- */
 const ZIPAPP = PLATFORM_KEY.startsWith('android-');
 const TERMUX_PREFIX = process.env.PREFIX ?? '/data/data/com.termux/files/usr';
 
@@ -67,13 +36,8 @@ function log(...parts) {
   console.log('[tools]', ...parts);
 }
 
-/** A refusal worth reporting as one line, not a stack trace. */
 class ToolsError extends Error {}
 
-/**
- * Stops the fetch. Thrown rather than `process.exit`, which on Windows can abort inside
- * libuv while a request is still being torn down, losing the message.
- */
 function fail(message) {
   throw new ToolsError(message);
 }
@@ -107,7 +71,6 @@ function sha256(buffer) {
   return createHash('sha256').update(buffer).digest('hex');
 }
 
-/** Parses `<hash>  <filename>` lines, as produced by sha256sum. */
 function parseChecksums(text) {
   const map = new Map();
   for (const line of text.split('\n')) {
@@ -121,7 +84,6 @@ function releaseUrl(repo, tag, asset) {
   return `https://github.com/${repo}/releases/download/${tag}/${asset}`;
 }
 
-/** The archive extractor to use: Windows' bundled bsdtar, or `tar` elsewhere. */
 function bsdtar() {
   if (process.platform !== 'win32') return 'tar';
   const system32 = join(process.env.SYSTEMROOT ?? 'C:\\Windows', 'System32', 'tar.exe');
@@ -142,7 +104,6 @@ function runSync(command, commandArgs, cwd) {
   });
 }
 
-/** Recursively finds the first file named `name` (with the platform suffix) under `dir`. */
 function findFile(dir, name) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const full = join(dir, entry.name);
@@ -162,9 +123,6 @@ function installBinary(sourcePath, targetName) {
   renameSync(sourcePath, staging);
   if (!EXE) chmodSync(staging, 0o755);
   if (existsSync(target)) {
-    // Moved aside rather than deleted: Windows will not delete an executable that is
-    // running, but it will rename one, so a node mid-download keeps its copy and the next
-    // spawn gets the new one. The previous leftover goes first, if nothing still holds it.
     const previous = `${target}.old`;
     rmSync(previous, { force: true, maxRetries: 2 });
     if (existsSync(previous)) rmSync(target, { force: true });
@@ -174,12 +132,10 @@ function installBinary(sourcePath, targetName) {
   return target;
 }
 
-/** The yt-dlp version pinned on a branch on GitHub, for `--pin-from`. */
 async function pinnedOn(branch) {
   const url = `https://raw.githubusercontent.com/${MANIFEST_REPO}/${encodeURIComponent(branch)}/scripts/tools.manifest.json`;
   const manifest = JSON.parse((await fetchBuffer(url, `manifest on ${branch}`)).toString('utf8'));
   const version = manifest?.ytdlp?.version;
-  // The version becomes part of a download URL; accept only the shape yt-dlp tags have.
   if (typeof version !== 'string' || !/^\d{4}\.\d{2}\.\d{2}(\.\d+)?$/.test(version)) {
     fail(`manifest on ${branch} does not pin a yt-dlp version`);
   }
@@ -273,11 +229,6 @@ async function fetchFfmpeg() {
     const archivePath = join(staging, asset);
     writeFileSync(archivePath, archive);
     log('extracting…');
-    // bsdtar ships with Windows 10+ and every mainstream Linux image, and reads both
-    // .zip and .tar.xz, so one command covers every platform in the manifest. On
-    // Windows it must be addressed by full path: a Git-for-Windows install puts GNU
-    // tar first on PATH, and GNU tar cannot read a zip. The archive is passed as a
-    // bare filename because GNU tar reads `C:\...` as a remote host specification.
     await runSync(bsdtar(), ['-xf', asset], staging);
     void archivePath;
 

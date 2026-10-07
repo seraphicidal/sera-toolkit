@@ -11,12 +11,9 @@ import {
   toUsableFormats,
 } from './formats.js';
 
-/** A realistic YouTube-shaped format list, including everything that must be filtered. */
 const youtubeFormats: YtdlpFormat[] = [
-  // Storyboards: images of the timeline, not media.
   { format_id: 'sb0', ext: 'mhtml', protocol: 'mhtml', vcodec: 'none', acodec: 'none' },
   { format_id: 'sb1', ext: 'mhtml', protocol: 'mhtml', format_note: 'storyboard' },
-  // Audio, including the loudness-normalized twins.
   {
     format_id: '140',
     ext: 'm4a',
@@ -51,7 +48,6 @@ const youtubeFormats: YtdlpFormat[] = [
     vcodec: 'none',
     abr: 141,
   },
-  // Video-only renditions.
   {
     format_id: '137',
     ext: 'mp4',
@@ -112,7 +108,6 @@ const youtubeFormats: YtdlpFormat[] = [
     tbr: 1000,
     filesize: 12_000_000,
   },
-  // The "premium" 1080p twin, which is the same picture at a slightly higher bitrate.
   {
     format_id: '616',
     ext: 'mp4',
@@ -124,7 +119,6 @@ const youtubeFormats: YtdlpFormat[] = [
     format_note: 'Premium',
     tbr: 4200,
   },
-  // Progressive, which carries both streams.
   {
     format_id: '18',
     ext: 'mp4',
@@ -137,7 +131,6 @@ const youtubeFormats: YtdlpFormat[] = [
     tbr: 700,
     filesize: 9_000_000,
   },
-  // HLS duplicate of a rendition already present.
   {
     format_id: '96',
     ext: 'mp4',
@@ -159,7 +152,6 @@ describe('toUsableFormats', () => {
 
   it('drops the loudness-normalized audio twins', () => {
     expect(usable.some((f) => f.id.endsWith('-drc'))).toBe(false);
-    // The ordinary rendition survives.
     expect(usable.some((f) => f.id === '140')).toBe(true);
   });
 
@@ -184,7 +176,7 @@ describe('toUsableFormats', () => {
   it('returns nothing for an empty or missing list', () => {
     expect(toUsableFormats(undefined)).toEqual([]);
     expect(toUsableFormats([])).toEqual([]);
-    expect(toUsableFormats([{ ext: 'mp4' }])).toEqual([]); // no format_id
+    expect(toUsableFormats([{ ext: 'mp4' }])).toEqual([]);
   });
 
   it('drops entries with neither a video nor an audio codec', () => {
@@ -205,8 +197,8 @@ describe('bestAudio', () => {
   const { audioOnly } = splitFormats(toUsableFormats(youtubeFormats));
 
   it('prefers a codec that muxes into the requested container without re-encoding', () => {
-    expect(bestAudio(audioOnly, 'mp4')?.id).toBe('140'); // AAC for MP4
-    expect(bestAudio(audioOnly, 'webm')?.id).toBe('251'); // Opus for WebM
+    expect(bestAudio(audioOnly, 'mp4')?.id).toBe('140');
+    expect(bestAudio(audioOnly, 'webm')?.id).toBe('251');
   });
 
   it('falls back to the highest bitrate when the container does not matter', () => {
@@ -244,12 +236,8 @@ describe('container reasoning', () => {
     expect(fitsInMp4('av01.0.08M.08', 'mp4a.40.2')).toBe(true);
     expect(fitsInMp4('avc1.640028', 'opus')).toBe(false);
 
-    // VP9 with AAC is an MP4, and used to be called a WebM — which cannot hold AAC, so
-    // the merge failed and every Instagram Reel with it failed at the download step.
     expect(fitsInMp4('vp09.00.40.08', 'mp4a.40.2')).toBe(true);
-    // With Opus it is a WebM again, which is YouTube's usual pairing.
     expect(fitsInMp4('vp09.00.40.08', 'opus')).toBe(false);
-    // VP8 stays off the list: legal in MP4, played by almost nothing.
     expect(fitsInMp4('vp8', 'mp4a.40.2')).toBe(false);
   });
 });
@@ -264,7 +252,6 @@ describe('estimateSize', () => {
 
   it('derives a size from bitrate and duration when there is not', () => {
     const [format] = toUsableFormats([{ format_id: 'a', ext: 'mp4', vcodec: 'avc1', tbr: 1000 }]);
-    // 1000 kbps for 60s = 7.5 MB.
     expect(estimateSize(format!, 60)).toBe(7_500_000);
   });
 
@@ -276,15 +263,12 @@ describe('estimateSize', () => {
 
 describe('audioBitrateChoices', () => {
   it('never offers a bitrate above what the source carries', () => {
-    // Claiming 320 kbps from a 64 kbps source would be a lie about quality.
     expect(audioBitrateChoices(64)[0]).toBeLessThanOrEqual(128);
     expect(audioBitrateChoices(96)[0]).toBeLessThanOrEqual(128);
   });
 
   it('offers the full range for a high-bitrate source', () => {
     expect(audioBitrateChoices(320)[0]).toBe(320);
-    // A 256 kbps source is allowed up to 10% above itself, which is short of 320, so
-    // the highest honest label is 192 — not the 320 a less careful tool would print.
     expect(audioBitrateChoices(256)[0]).toBe(192);
     expect(audioBitrateChoices(128)[0]).toBe(128);
   });

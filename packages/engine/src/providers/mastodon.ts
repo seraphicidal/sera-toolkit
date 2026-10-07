@@ -9,20 +9,6 @@ import type { DownloadPlan, ProviderContext, ResolvedItem, ResolvedMedia } from 
 import { YtdlpProvider } from './ytdlp-base.js';
 import { declare } from './capabilities.js';
 
-/**
- * Mastodon and other fediverse servers.
- *
- * The fediverse has no canonical host list — anyone can run an instance — so detection
- * is by URL shape plus the largest well-known servers. `/@user/<numeric id>` and
- * `/users/<name>/statuses/<id>` are the two status forms every Mastodon-compatible
- * server serves, and matching on them keeps the provider from claiming unrelated sites.
- *
- * Video goes through yt-dlp. Everything else goes through the instance's own API: a
- * status routinely carries four images, and neither the extractor nor the page's single
- * `og:image` will give you more than one of them. `/api/v1/statuses/:id` is public for
- * public posts, needs no application registration, and returns every attachment at full
- * size with its alt text.
- */
 export class MastodonProvider extends YtdlpProvider {
   readonly id = 'mastodon';
   readonly label = 'Mastodon';
@@ -39,27 +25,17 @@ export class MastodonProvider extends YtdlpProvider {
   ];
   override readonly priority = 40;
 
-  /**
-   * Every attachment kind the fediverse carries: photographs, video, audio, and the
-   * looping `gifv` that is worth offering as a real GIF.
-   */
   override readonly capabilities: ProviderCapabilities = declare({
     image: true,
     carousel: true,
     gif: true,
-    // This provider claims a status path on an instance it has never heard of, so the
-    // host comes from the visitor. Handing that to someone's home connection is the
-    // shape of an open relay even when each individual request is legitimate, and no
-    // Mastodon instance refuses a datacentre anyway.
     residentialFallback: false,
   });
 
-  /** `/@name/123456` or `/users/name/statuses/123456`. */
   private static readonly STATUS_PATH = /^\/(@[^/]+\/\d+|users\/[^/]+\/statuses\/\d+)\/?$/;
 
   override canHandle(url: URL, host: string): boolean {
     if (hostMatchesAny(host, this.hosts)) return true;
-    // An unknown host is claimed only when the path is unmistakably a fediverse status.
     return MastodonProvider.STATUS_PATH.test(url.pathname);
   }
 
@@ -67,14 +43,6 @@ export class MastodonProvider extends YtdlpProvider {
     return true;
   }
 
-  /**
-   * The instance API first, because it is the only path that sees every attachment.
-   *
-   * A status with four photographs is four items there and nothing at all to the
-   * extractor. But the extractor renders video in several qualities the API cannot, so a
-   * status carrying video falls through to it deliberately — the first rung declines
-   * rather than answering with the one rendition the API knows about.
-   */
   protected override strategies(
     _url: URL,
     _context: ProviderContext,
@@ -104,9 +72,6 @@ export class MastodonProvider extends YtdlpProvider {
         run: (target, ctx) => this.runExtractor(target, ctx),
       },
       {
-        // The API answer, whatever it was, once the extractor has declined too. A single
-        // rendition of a video is less than the extractor would have given and more than
-        // the nothing otherwise on offer — and unlike a cover image, it is the media.
         id: 'instance-api-anything',
         label: "the instance's public API, taking whatever it has",
         run: async (target, ctx) => {
@@ -178,7 +143,6 @@ function statusIdFrom(url: URL): string | undefined {
   return match?.[1];
 }
 
-/** `gifv` is Mastodon's name for a silent looping video, not an actual GIF file. */
 function kindFor(type: string | undefined): DownloadPlan['kind'] {
   if (type === 'video') return 'video';
   if (type === 'gifv') return 'gif';
@@ -209,8 +173,6 @@ function toItem(attachment: MastodonAttachment, index: number): ResolvedItem {
     },
   ];
 
-  // A looping video is worth offering as a real GIF, and anything with a soundtrack is
-  // worth offering as audio. Neither makes sense for a photograph.
   if (kind === 'gif') {
     plans.push({
       kind: 'gif',
@@ -250,20 +212,17 @@ function toItem(attachment: MastodonAttachment, index: number): ResolvedItem {
   };
 }
 
-/** The account's handle in its usual written form, or nothing if the server sent none. */
 function atHandle(acct: string | undefined): string | undefined {
   const handle = nonEmpty(acct);
   if (!handle) return undefined;
   return `@${handle}`;
 }
 
-/** Alt text, when the poster wrote any. */
 function describe(value: string | undefined): string | undefined {
   const text = nonEmpty(value);
   return text ? truncate(text, 120) : undefined;
 }
 
-/** Mastodon status content is HTML; only the readable text is wanted for a title. */
 function stripHtml(html: string): string {
   return html
     .replace(/<br\s*\/?>/gi, ' ')

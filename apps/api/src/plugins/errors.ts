@@ -4,13 +4,6 @@ import { SeraError } from '@sera/engine';
 import type { ApiErrorBody } from '@sera/contracts/types';
 import { ZodError } from 'zod';
 
-/**
- * The single place an exception becomes an HTTP response.
- *
- * Users get a sentence and a status code. Stack traces, provider messages and yt-dlp
- * output stay on the server, in the structured log, where they are useful to whoever is
- * running this and useless to anyone probing it.
- */
 export const errorHandlerPlugin = fp(function errorHandlerPlugin(
   app: FastifyInstance,
   _options: unknown,
@@ -18,7 +11,6 @@ export const errorHandlerPlugin = fp(function errorHandlerPlugin(
 ) {
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof SeraError) {
-      // Expected outcomes are logged at info; they are not faults.
       request.log.info(
         { errorCode: error.code, detail: error.detail, route: request.routeOptions.url },
         'request failed',
@@ -41,7 +33,6 @@ export const errorHandlerPlugin = fp(function errorHandlerPlugin(
       return;
     }
 
-    // Fastify's own validation and payload errors carry a usable status code.
     const status =
       typeof (error as { statusCode?: unknown }).statusCode === 'number'
         ? (error as { statusCode: number }).statusCode

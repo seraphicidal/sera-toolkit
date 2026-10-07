@@ -1,7 +1,5 @@
 name: CI
 
-# Every push and pull request runs the same gate the deploy job depends on, so a broken
-# commit is caught before it can become a broken production image.
 on:
   push:
     branches: [main]
@@ -9,10 +7,6 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# A newer push supersedes a pull request's run, but never a run on main: a cancelled
-# publish left the API image of one commit beside the web image of another, and the server
-# deployed the pair (a page without the feature its API had just gained). Runs on main queue
-# instead; a queued one is still replaced by a newer push, which builds from a later commit.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -27,10 +21,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
-    # The Redis driver is the one part of the engine a mock cannot stand in for: BullMQ's
-    # own constructor validation, custom job ids and cross-connection pub/sub all behave
-    # differently against a fake. Skipping it here is how a queue name BullMQ rejects
-    # reached a production server.
     services:
       redis:
         image: redis:7.4-alpine
@@ -53,15 +43,12 @@ jobs:
       - name: Install
         run: npm ci --ignore-scripts
 
-      # FFmpeg is a real dependency of the test suite: the end-to-end tests generate
-      # media with it and read every produced file back with ffprobe.
       - name: Install FFmpeg
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ffmpeg
           ffmpeg -version | head -n 1
 
-      # yt-dlp is pinned so CI exercises the same extractor as production.
       - name: Install yt-dlp
         run: |
           VERSION=$(node -p "require('./scripts/tools.manifest.json').ytdlp.version")
@@ -87,22 +74,11 @@ jobs:
       - name: Test
         run: npm test
         env:
-          # Unset, the Redis integration tests skip themselves. Set, they run.
           SERA_TEST_REDIS_URL: redis://127.0.0.1:6379
 
       - name: Build
         run: npm run build
 
-      # The reverse proxy's config is as load-bearing as the application's, and it fails
-      # in a way nothing in the test suite can see: a Caddyfile Caddy refuses means the
-      # site has no TLS terminator at all. Both states are checked because the bug that
-      # prompted this was in the one where the optional ACME contact is absent.
-      # SERA_API_URL is baked into the web bundle at build time and read again at run
-      # time by server components. If the Dockerfile default and the compose value ever
-      # disagree, /api/* proxies to a host that does not exist and every request 500s.
-      # The deploy scripts run as root on the server — provisioning, the auto-update that
-      # can roll a release back, the alerts — and a shell mistake there fails silently or
-      # worse. shellcheck is on the runner image already.
       - name: Lint the deploy scripts
         run: shellcheck deploy/*.sh deploy/node-android/*.sh
 
@@ -114,11 +90,6 @@ jobs:
           echo "run with:   $runtime"
           test -n "$baked" && test "$baked" = "$runtime"
 
-      # A queue is not a cache. An eviction policy here would drop live jobs to stay
-      # under the memory cap, and the only sign of it is a warning in the worker log.
-      # Every tracked compose file is checked, so a new one cannot slip past: each
-      # --maxmemory-policy it sets must be noeviction, and a Redis that caps its memory
-      # must say which policy it uses rather than lean on a default.
       - name: Check Redis cannot evict the queue
         run: |
           status=0
@@ -138,10 +109,6 @@ jobs:
           done
           exit $status
 
-      # A setting that was removed from the schema and left behind in a compose file, an
-      # example or a guide reads as a supported knob and silently does nothing. This is
-      # the check for that: every SERA_* named outside the code has to exist in the
-      # config schema, or be one of the few that only an extraction node reads.
       - name: Check every documented setting still exists
         run: |
           node --input-type=module -e '
@@ -209,16 +176,10 @@ jobs:
   images:
     name: Build container images
     runs-on: ubuntu-latest
-    # The arm64 half is emulated, so it is slower than a native build by a wide margin.
     timeout-minutes: 60
-    # Only after the code gate passes: an image built from failing code is not useful,
-    # and building it anyway would let a red build produce a green-looking artefact.
     needs: verify
 
     env:
-      # Registry-qualified even when only building locally. An unqualified tag like
-      # `sera-api:ci` resolves to Docker Hub, and `push: true` then tries to publish
-      # it there and fails on auth.
       IMAGE_API: ghcr.io/${{ github.repository_owner }}/sera-api
       IMAGE_WEB: ghcr.io/${{ github.repository_owner }}/sera-web
       PUSH: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
@@ -226,8 +187,6 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # arm64 matters specifically: Oracle Cloud's always-free tier is Ampere, and an
-      # amd64-only image simply will not start there.
       - uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64
@@ -242,9 +201,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Built for this runner's architecture and loaded, so the steps below can actually
-      # execute it. `load` cannot accept a multi-platform build, which is why publishing
-      # is a separate step rather than one build doing both.
       - name: Build API image (amd64, for verification)
         uses: docker/build-push-action@v6
         with:
@@ -257,18 +213,12 @@ jobs:
           cache-from: type=gha,scope=api
           cache-to: type=gha,mode=max,scope=api
 
-      # A container that starts but cannot run its tools is a deployment that fails at
-      # the first download rather than at boot, so both binaries are exercised here.
       - name: Verify the API image has working media tools
         run: |
           docker run --rm --entrypoint yt-dlp "$IMAGE_API:verify" --version
           docker run --rm --entrypoint ffmpeg "$IMAGE_API:verify" -version | head -n 1
           docker run --rm --entrypoint ffprobe "$IMAGE_API:verify" -version | head -n 1
 
-      # Booted the way the compose file boots it — Redis driver, API and worker in
-      # separate containers — because the memory driver shares almost no code with it.
-      # The failure this replaces was a crash inside the Redis backend's constructor,
-      # which a memory-driver smoke test cannot reach.
       - name: Verify the API and worker images boot against Redis
         run: |
           docker network create sera-ci >/dev/null
@@ -323,9 +273,6 @@ jobs:
           cache-from: type=gha,scope=web
           cache-to: type=gha,mode=max,scope=web
 
-      # Booted, not just built. The web container runs with a read-only root filesystem
-      # and reaches the API only over the compose network, so "it compiled" says nothing
-      # about whether it serves a page.
       - name: Verify the web image boots and proxies to the API
         run: |
           docker network create sera-web-ci >/dev/null
@@ -368,9 +315,6 @@ jobs:
           docker rm -f sera-web-ci sera-api-web-ci sera-redis-web-ci >/dev/null
           docker network rm sera-web-ci >/dev/null
 
-      # Published for both architectures once the amd64 build has proved itself — under the
-      # commit's tag only. `latest`, which the server pulls, moves for both images in the
-      # step after, so it can never name the API of one commit and the web of another.
       - name: Publish API image
         if: env.PUSH == 'true'
         uses: docker/build-push-action@v6
@@ -395,7 +339,6 @@ jobs:
           cache-from: type=gha,scope=web
           cache-to: type=gha,mode=max,scope=web
 
-      # A manifest copy in the registry: seconds for both, with nothing rebuilt.
       - name: Move latest to this commit, for both images together
         if: env.PUSH == 'true'
         run: |

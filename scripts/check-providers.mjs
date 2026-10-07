@@ -1,38 +1,9 @@
 #!/usr/bin/env node
-/**
- * Every provider, against the real sites, from whatever network this runs on.
- *
- * The offline suite proves the code does what it was written to do. This answers the
- * question it cannot: do these platforms still answer the way the providers expect, from
- * here, today. The two failures worth telling apart are "SERA is broken" and "this
- * address is refused", and the failure class in each row is which.
- *
- *   npm run check:providers                    # metadata for every case
- *   npm run check:providers -- --download      # …and run the declared jobs through to bytes
- *   npm run check:providers -- youtube vimeo   # only these cases
- *
- * A case that expects a refusal counts a refusal as a pass. Instagram carousels need a
- * session and Reddit needs an app registration; on an installation with neither, saying
- * so accurately *is* the correct behaviour, and pretending otherwise is what this file
- * exists to prevent.
- *
- * A failure prints what a report needs and a stack trace does not: which provider, which
- * link, which strategy answered, the failure class, and what the ladder tried on the way
- * there.
- */
 
 import { readFile, rm } from 'node:fs/promises';
 import { classifyFailure } from '../packages/engine/dist/extract/failure.js';
 import { loadConfig, SeraEngine, SeraError } from '../packages/engine/dist/index.js';
 
-/**
- * The links under test, in provider-cases.json, which the server's daily canary shares: the
- * cases with a `canary` field are the ones it downloads from (deploy/ORACLE.md, "The canary").
- *
- * `expect` is either the media that should come back or the failure class that should.
- * Every URL here is public and was serving at the time it was added; a case that starts
- * reporting DELETED_CONTENT needs a new link, not a code change.
- */
 const CASES = JSON.parse(await readFile(new URL('./provider-cases.json', import.meta.url), 'utf8'));
 
 const CLIENT_KEY = 'check-providers';
@@ -56,7 +27,6 @@ const engine = await SeraEngine.create({
 });
 if (wantDownloads) engine.startWorker();
 
-/** Credentials the operator has configured are used if present, and never required. */
 function envPassthrough() {
   const keys = [
     'SERA_REDDIT_CLIENT_ID',
@@ -78,7 +48,6 @@ function report(id, ok, detail) {
   console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${id.padEnd(18)} ${detail}`);
 }
 
-/** Magic bytes, because an extension is a claim and the bytes are the fact. */
 function sniff(bytes) {
   const ascii = (offset, text) =>
     bytes.subarray(offset, offset + text.length).toString('latin1') === text;
@@ -93,7 +62,6 @@ function sniff(bytes) {
   return `?${bytes.subarray(0, 4).toString('latin1')}`;
 }
 
-/** The first option of a kind, so a case can ask for "the audio" without an index. */
 function pickOption(info, want) {
   const options = info.items.flatMap((item) => item.options);
   if (typeof want === 'number') return options[want];
@@ -106,8 +74,6 @@ function pickOption(info, want) {
 async function runJob(info, want) {
   const option = pickOption(info, want);
   if (!option) return { ok: false, detail: `no option matching ${JSON.stringify(want)}` };
-  // A client key, as the API passes one for every visitor: it is what per-client limits count
-  // against. One key for the whole run, so the matrix is limited like a single visitor.
   const job = await engine.jobs.create({ infoId: info.id, optionIds: [option.id] }, CLIENT_KEY);
 
   const deadline = Date.now() + 5 * 60_000;
@@ -184,8 +150,6 @@ for (const entry of cases) {
     const ok = failure === expected;
     report(entry.id, ok, `${failure} / ${sera.code}`);
     if (!ok) {
-      // What a report needs, which a stack trace does not have: which link, which
-      // ladder, and what the next thing to do about it would be.
       console.log(`          url        ${entry.url}`);
       console.log(`          expected   ${expected ?? 'media'}`);
       console.log(`          detail     ${(sera.detail ?? sera.message).slice(0, 160)}`);

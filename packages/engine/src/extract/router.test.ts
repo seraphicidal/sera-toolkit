@@ -57,7 +57,6 @@ function backend(
   return impl;
 }
 
-/** A provider that behaves like YouTube unless a test says otherwise. */
 const caps =
   (differences: Partial<ProviderCapabilities> = {}) =>
   () =>
@@ -79,7 +78,6 @@ describe('ExtractionRouter', () => {
     const outcome = await router.resolve(url, 'youtube');
     expect(outcome.backend).toBe('oracle');
     expect(outcome.fallbackUsed).toBe(false);
-    // The scarce backend is not touched when the free one succeeded.
     expect(home.calls).toBe(0);
   });
 
@@ -100,7 +98,6 @@ describe('ExtractionRouter', () => {
   });
 
   it('does not fall back for an answer that is the same everywhere', async () => {
-    // The rule that keeps a home connection from being spent on nothing.
     for (const code of ['PRIVATE_CONTENT', 'MEDIA_UNAVAILABLE', 'UNSUPPORTED_SOURCE'] as const) {
       const primary = backend('oracle', { result: seraError(code) });
       const home = backend('residential', { result: 'ok' });
@@ -139,8 +136,6 @@ describe('ExtractionRouter', () => {
   });
 
   it('reports the first failure when every backend refuses', async () => {
-    // The visitor hears about the path this deployment is configured to take, not about
-    // an internal fallback they never asked for.
     const primary = backend('oracle', { result: seraError('SOURCE_BLOCKED') });
     const home = backend('residential', { result: seraError('NETWORK_ERROR') });
     const router = new ExtractionRouter({
@@ -157,7 +152,6 @@ describe('ExtractionRouter', () => {
   });
 
   it('picks up a backend that connected after start-up', async () => {
-    // The node dials out; it must not need a restart of the API to be usable.
     const primary = backend('oracle', { result: seraError('SOURCE_BLOCKED') });
     const late = backend('residential', { result: 'ok' });
     const connected: ExtractionBackend[] = [];
@@ -195,10 +189,6 @@ describe('ExtractionRouter', () => {
 
 describe('the capability matrix decides where work may go', () => {
   it('never sends a provider that declares no residential fallback', async () => {
-    // The generic and direct-file providers claim whatever host nothing else wanted, so
-    // their URL is the visitor's. A node exists to get past a platform that refuses
-    // datacentres; it is not there to fetch arbitrary addresses from someone's house,
-    // and a bot challenge on an arbitrary host must not turn it into one.
     const primary = backend('oracle', { result: seraError('SOURCE_BLOCKED') });
     const home = backend('residential', { result: 'ok' });
     const router = new ExtractionRouter({
@@ -227,8 +217,6 @@ describe('the capability matrix decides where work may go', () => {
   });
 
   it('asks the node first when the datacentre has already been measured as refused', async () => {
-    // YouTube from Oracle is refused on every player client yt-dlp offers. Paying for
-    // that refusal before asking a connected node is a delay with a known outcome.
     const primary = backend('oracle', { result: 'ok' });
     const home = backend('residential', { result: 'ok' });
     const router = new ExtractionRouter({
@@ -244,8 +232,6 @@ describe('the capability matrix decides where work may go', () => {
   });
 
   it('does not reorder when the operator has not said what their network is', async () => {
-    // SERA on a home connection has a primary that is not a datacentre. A measurement
-    // taken on Oracle must not demote it.
     const primary = backend('oracle', { result: 'ok', networkClass: 'unknown' });
     const home = backend('residential', { result: 'ok' });
     const router = new ExtractionRouter({
@@ -260,7 +246,6 @@ describe('the capability matrix decides where work may go', () => {
   });
 
   it('still tries the datacentre when no node is connected', async () => {
-    // A measurement is not a reason to invent a refusal SERA could have avoided.
     const primary = backend('oracle', { result: 'ok' });
     const router = new ExtractionRouter({
       primary,
@@ -273,7 +258,6 @@ describe('the capability matrix decides where work may go', () => {
   });
 
   it('comes home when a node drops mid-request', async () => {
-    // The node going away is the deployment's problem, not the visitor's.
     const primary = backend('oracle', { result: 'ok' });
     const home = backend('residential', { result: seraError('NETWORK_ERROR') });
     const router = new ExtractionRouter({
@@ -289,10 +273,6 @@ describe('the capability matrix decides where work may go', () => {
   });
 
   it('says a node answered even when the node was the first choice', async () => {
-    // `fallbackUsed` asks whether the first choice failed, which is a different question
-    // from where the work ran. A node can be the first choice — that is exactly what a
-    // provider declaring no datacentre extraction asks for — and the download still has
-    // to follow it, because a media URL signed for one address is refused from another.
     const primary = backend('oracle', { result: 'ok' });
     const home = backend('residential', { result: 'ok' });
     const router = new ExtractionRouter({
@@ -384,7 +364,6 @@ describe('a post only an account can read', () => {
   it('is asked however the extractor described the photo post', async () => {
     for (const described of [
       seraError('UNSUPPORTED_SOURCE', { detail: 'There is no video in this post' }),
-      // What the live log showed for one photo post: yt-dlp's "No video formats found".
       seraError('MEDIA_UNAVAILABLE', { detail: 'ERROR: [Instagram] x: No video formats found!' }),
     ]) {
       const node = backend('instagram-session', { result: 'ok' });

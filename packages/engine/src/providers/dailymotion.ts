@@ -1,6 +1,5 @@
 import { YtdlpProvider } from './ytdlp-base.js';
 
-/** Dailymotion videos, including the `dai.ly` shortener. */
 export class DailymotionProvider extends YtdlpProvider {
   readonly id = 'dailymotion';
   readonly label = 'Dailymotion';

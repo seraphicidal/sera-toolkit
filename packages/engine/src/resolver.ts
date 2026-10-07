@@ -42,56 +42,21 @@ import { hostMatchesAny, normalizeUrl, parseUserUrl } from './security/url.js';
 import { TtlCache } from './util/cache.js';
 import { readToken, signToken, verifyToken } from './util/tokens.js';
 
-/**
- * Turns a pasted link into the model the UI renders.
- *
- * The only thing the client gets back is `MediaInfo`: no format ids, no provider
- * internals, no media URLs. Each option carries a signed token that encodes how to
- * fetch it, which is what keeps the frontend free of platform-specific logic and keeps
- * the download pipeline from accepting a URL the resolver never approved.
- */
-
-/**
- * What an option token carries. Kept to single letters: it travels in every response.
- *
- * The URL lives in the resolution token, not here. An option instead carries a keyed
- * digest of it, so a 40-slide carousel with six options each ships one copy of the URL
- * rather than 240 — while still being cryptographically bound to the resolution that
- * produced it, since the digest is computed with the server secret.
- */
 interface OptionTokenPayload {
-  /** Keyed digest of the resolution this option belongs to. */
   readonly h: string;
-  /** Item index within the resolution. */
   readonly i: number;
-  /** The provider's own id for that item, checked on re-resolution. */
   readonly s?: string;
-  /** Plan key: kind/container/label. */
   readonly k: string;
-  /**
-   * The item's length in seconds, when known. Signed with the option so a trim can be
-   * checked against it without trusting the client's idea of how long the media is.
-   */
   readonly d?: number;
 }
 
 interface InfoTokenPayload {
   readonly u: string;
   readonly p: string;
-  /**
-   * Where the resolution came from when this server did not make it: `visitor` for a post
-   * the visitor's own browser read and sent. Absent on every ordinary resolution.
-   */
   readonly o?: 'visitor';
-  /**
-   * The media approved from that post. A job fetches exactly these and re-resolves nothing,
-   * because nothing on this side can read the post again.
-   */
   readonly m?: readonly ImportedEntry[];
-  /** The post's title and author, for naming files, for the same reason. */
   readonly t?: string;
   readonly a?: string;
-  /** The earliest expiry Instagram signed into those URLs, epoch seconds. */
   readonly x?: number;
 }
 
@@ -99,7 +64,6 @@ interface ThumbTokenPayload {
   readonly t: string;
 }
 
-/** What an imported post signs into its resolution token besides the link. */
 interface ImportedSignature {
   readonly entries: readonly ImportedEntry[];
   readonly title: string;
@@ -107,16 +71,8 @@ interface ImportedSignature {
   readonly expiresAt?: number;
 }
 
-/**
- * The lifetime of an imported post whose media URLs carry no expiry of their own. Instagram's
- * always do; one without is unusual enough not to be given the full option lifetime.
- */
 const IMPORT_UNSIGNED_TTL_SECONDS = 600;
 
-/**
- * Less than this left, and an import is refused as expired. It is about what choosing a
- * format takes, and a token that lapses while someone is still choosing helps nobody.
- */
 const IMPORT_MIN_REMAINING_SECONDS = 60;
 
 export interface ResolverDependencies {
@@ -124,19 +80,9 @@ export interface ResolverDependencies {
   readonly logger?: Logger;
   readonly registry?: ProviderRegistry;
   readonly dispatcher?: Dispatcher;
-  /**
-   * Extraction backends on other networks, consulted at call time so a node that dials
-   * in later is usable without restarting the API.
-   */
   readonly remoteBackends?: () => readonly ExtractionBackend[];
-  /** A connected node holding this feature (an account), as a backend; none when absent. */
   readonly sessionBackend?: (feature: NodeFeature) => ExtractionBackend | undefined;
-  /**
-   * Where the media of a post a visitor's browser sends may be fetched from. Instagram's CDN
-   * unless a test says otherwise; see `EngineOptions.importHosts`.
-   */
   readonly importHosts?: MediaHostPolicy;
-  /** Overridable so tests can exercise the whole pipeline with no yt-dlp installed. */
   readonly probe?: (
     url: string,
     options: {
@@ -155,11 +101,9 @@ export class MediaResolver {
   readonly logger: Logger;
   readonly registry: ProviderRegistry;
   readonly dispatcher: Dispatcher;
-  /** Hosts an imported post's media may come from. The runner checks them on every hop. */
   readonly importHosts: MediaHostPolicy;
 
   private readonly probeImpl: NonNullable<ResolverDependencies['probe']>;
-  /** Short-lived, so submitting a job just after analyzing does not re-hit the provider. */
   private readonly cache = new TtlCache<ExtractionOutcome>(200, 5 * 60_000);
 
   constructor(deps: ResolverDependencies) {
@@ -170,8 +114,6 @@ export class MediaResolver {
       createLogger({ level: deps.config.logLevel, pretty: !deps.config.isProduction });
     this.registry = deps.registry ?? new ProviderRegistry(undefined, deps.config);
 
-    // The primary backend is this worker doing exactly what it did before the router
-    // existed; everything else the router knows about dials in from another network.
     this.router = new ExtractionRouter({
       primary: {
         id: 'local',
@@ -183,16 +125,11 @@ export class MediaResolver {
       },
       logger: this.logger,
       fallbacks: deps.remoteBackends ?? (() => []),
-      // What each provider says about itself, rather than a conditional in the router
-      // that knows about failure classes and nothing about platforms.
       capabilitiesOf: (providerId) => this.registry.get(providerId)?.capabilities,
-      // A node signed in to the platform, for what only an account can read.
       authenticated: (providerId) => {
         const feature = this.registry.get(providerId)?.nodeSession;
         return feature ? deps.sessionBackend?.(feature) : undefined;
       },
-      // The bottom rung: the same provider, allowed to answer with a lesser public
-      // representation now that nothing else has answered at all.
       lastResort: (url, providerId, signal) =>
         this.runProvider(url, providerId, signal, { allowDegraded: true }),
     });
@@ -215,12 +152,6 @@ export class MediaResolver {
         }));
   }
 
-  /**
-   * The extractor's version, asked for once.
-   *
-   * It belongs on every resolve line because it is the first question when a provider
-   * starts failing: did the site change, or did the extractor?
-   */
   private cachedExtractorVersion: string | undefined;
 
   private async extractorVersion(): Promise<string> {
@@ -233,10 +164,6 @@ export class MediaResolver {
 
   private readonly router: ExtractionRouter;
 
-  /**
-   * The source a link belongs to, for counting a resolve that failed before it named one:
-   * a provider id, or `other` for a link no provider claims or that is not a link at all.
-   */
   sourceOf(input: string): string {
     try {
       const { url } = parseUserUrl(input, {
@@ -248,12 +175,6 @@ export class MediaResolver {
     }
   }
 
-  /**
-   * Resolves user input into the client model.
-   *
-   * `requestId` is the API's own id for the request, carried only so a log line can be
-   * followed from the visitor's request through to the extraction that answered it.
-   */
   async resolve(input: string, signal?: AbortSignal, requestId?: string): Promise<MediaInfo> {
     const { url } = parseUserUrl(input, {
       allowPrivateAddresses: this.config.allowPrivateAddresses,
@@ -277,13 +198,6 @@ export class MediaResolver {
       try {
         outcome = await this.route(canonical, provider.id, signal);
       } catch (error) {
-        // "This provider cannot handle what is here" is not the same as "there is
-        // nothing here", and the page reader can often do better. Two cases in practice: a
-        // path ending in .gif that is really a file-description page, and a social post
-        // whose extractor only understands video while the post is photographs. Both are
-        // reported as an unsupported source, and both are worth one more try through the
-        // reader — which grants no extra reach, since a URL the specific provider had not
-        // claimed would have arrived there anyway.
         const generic = this.registry.get('generic');
         if (
           provider.id === 'generic' ||
@@ -295,10 +209,6 @@ export class MediaResolver {
         try {
           outcome = await this.route(canonical, generic.id, signal);
         } catch (fallbackError) {
-          // The reader found nothing either, so the first answer stands — it names the
-          // source the user actually pasted. The exception is a site that asks not to be
-          // read automatically: "this source isn't supported" would be misleading when
-          // the truthful answer is that we were asked not to look.
           const refusal = SeraError.from(fallbackError);
           throw refusal.detail?.startsWith('robots.txt disallows') ? refusal : error;
         }
@@ -307,9 +217,6 @@ export class MediaResolver {
       this.registry.markHealthy(used.id);
     } catch (error) {
       const seraErr = SeraError.from(error);
-      // A source that refuses this server refuses it for everyone using this instance, so
-      // it belongs in the degraded list that /api/info reports — better that the About page
-      // says so once than that every visitor discovers it one link at a time.
       if (seraErr.code === 'PROVIDER_UNAVAILABLE' || seraErr.code === 'SOURCE_BLOCKED') {
         this.registry.markDegraded(used.id, seraErr.detail ?? seraErr.message);
       }
@@ -352,19 +259,6 @@ export class MediaResolver {
     return this.toMediaInfo(resolved);
   }
 
-  /**
-   * Accepts a post the visitor's own signed-in browser read.
-   *
-   * The answer to "photo posts need an account" that does not put an account on this server.
-   * The browser that is already signed in reads the one post it is showing and sends it here.
-   * Nothing in the request is believed: the media is derived with the same functions the
-   * operator's session route uses, only URLs on Instagram's CDN are admitted, and what was
-   * admitted is signed into the resolution token — so a job fetches exactly that, and nothing
-   * a client adds afterwards.
-   *
-   * It makes no request of its own. There is nothing to ask Instagram that the visitor's
-   * browser has not just asked, and nothing on this side to ask it with.
-   */
   importSubmitted(request: ImportRequest, requestId?: string, now = Date.now()): MediaInfo {
     const started = Date.now();
     let source = '(unparsed)';
@@ -393,9 +287,6 @@ export class MediaResolver {
           detail: 'import: the link is not a post',
         });
       }
-      // A consistency check, not a boundary: the sender controls both values. What it catches
-      // is an honest race, the page moving on to another post between reading one and
-      // sending it.
       if (request.node.code !== undefined && request.node.code !== shortcode) {
         throw seraError('INVALID_URL', {
           message: "That post doesn't match the page it was sent from.",
@@ -420,7 +311,6 @@ export class MediaResolver {
       }
 
       const entries = slides.map((slide) => slide.entry);
-      // The thumbnails as well: the proxy fetches those, so they are destinations too.
       assertCdnHosts(
         [
           ...entries.map((entry) => entry.url),
@@ -438,8 +328,6 @@ export class MediaResolver {
         entries,
       });
 
-      // What the person choosing sees and a job has no use for, laid over the resolution the
-      // job will rebuild. None of it is signed, so none of it can change what gets fetched.
       const authorUrl = authorUrlFor(request.node);
       const cover = slides[0]?.thumbnailUrl;
       const presented: ResolvedMedia = {
@@ -465,8 +353,6 @@ export class MediaResolver {
           ...(expiresAt !== undefined ? { expiresAt } : {}),
         },
       });
-      // Refused where the token is made, so the ceiling is never discovered at the moment
-      // someone presses Download.
       if (info.id.length > MAX_INFO_TOKEN_LENGTH) {
         throw seraError('TOO_LARGE', {
           message: 'That post is too large to download in one go.',
@@ -506,13 +392,6 @@ export class MediaResolver {
     }
   }
 
-  /**
-   * How long an imported post stays usable, and when the links in it run out.
-   *
-   * The ordinary option lifetime, unless Instagram's own signature ends sooner — a token that
-   * outlived the URLs inside it would only turn into a 403 at download time. A URL with no
-   * expiry signed into it gets a short window instead, because its real lifetime is unknown.
-   */
   private importLifetime(
     entries: readonly ImportedEntry[],
     now: number,
@@ -536,12 +415,6 @@ export class MediaResolver {
     };
   }
 
-  /**
-   * Resolves an already-canonical URL through a known provider.
-   *
-   * The download pipeline calls this to re-derive a plan at job time, which is why the
-   * result is cached briefly and why plans are matched by key rather than by index.
-   */
   async resolveCanonical(
     canonical: URL,
     providerId: string,
@@ -550,15 +423,6 @@ export class MediaResolver {
     return (await this.route(canonical, providerId, signal)).media;
   }
 
-  /**
-   * Resolution plus where it happened.
-   *
-   * Through the router rather than straight to the provider, so the job-time
-   * re-resolution takes the same backend the analysis did. It has to: a media URL signed
-   * for one address is refused from another, so a resolution and its download belong to
-   * the same network. The outcome is cached with the media for the same reason a log
-   * line carries it — "which network answered this" stays true on a cache hit.
-   */
   private async route(
     canonical: URL,
     providerId: string,
@@ -574,9 +438,6 @@ export class MediaResolver {
     if (cached) return cached;
 
     const outcome = await this.router.resolve(canonical, providerId, signal);
-    // Always assigned, never merged: a node returns a whole `ResolvedMedia` over the
-    // wire, and what it says about where it ran is not what decides where the download
-    // goes. The router's answer is.
     const media: ResolvedMedia = {
       ...outcome.media,
       ...(outcome.remote ? { remoteBackend: outcome.backend } : { remoteBackend: undefined }),
@@ -588,7 +449,6 @@ export class MediaResolver {
     return withMedia;
   }
 
-  /** One attempt on this worker. The router decides whether it is the only one. */
   private async runProvider(
     canonical: URL,
     providerId: string,
@@ -648,18 +508,12 @@ export class MediaResolver {
     };
   }
 
-  /* ------------------------------------------------------------------ */
-  /*  Token minting and verification                                     */
-  /* ------------------------------------------------------------------ */
-
   toMediaInfo(
     resolved: ResolvedMedia,
     options: { readonly ttlSeconds?: number; readonly imported?: ImportedSignature } = {},
   ): MediaInfo {
     const ttl = options.ttlSeconds ?? this.config.optionTtlSeconds;
     const { imported } = options;
-    // Once per resolution, not once per option: an imported carousel's digest covers every
-    // URL in it.
     const hash = this.resolutionHash(resolved.url, resolved.provider, imported?.entries);
     const items: MediaItem[] = resolved.items.map((item) =>
       this.toMediaItem(resolved, item, ttl, hash),
@@ -769,7 +623,6 @@ export class MediaResolver {
     };
   }
 
-  /** Signs a third-party thumbnail URL into a path on this API. */
   thumbnailPath(url: string): string {
     const token = signToken<ThumbTokenPayload>(
       { t: url },
@@ -779,7 +632,6 @@ export class MediaResolver {
     return `/api/thumb/${encodeURIComponent(token)}`;
   }
 
-  /** Recovers the origin URL from a thumbnail token, or throws. */
   verifyThumbnailToken(token: string): string {
     const payload = verifyToken<ThumbTokenPayload>(token, this.config.secret);
     if (typeof payload.t !== 'string' || !payload.t) {
@@ -788,13 +640,6 @@ export class MediaResolver {
     return payload.t;
   }
 
-  /**
-   * Recovers a resolution from its token, or throws.
-   *
-   * Expiry is judged here rather than inside the token check, because what to say depends on
-   * what expired. An ordinary resolution is refreshed by analyzing the link again; an imported
-   * post cannot be, since the link alone leads straight back to "needs an account".
-   */
   verifyInfoId(infoId: string, now = Date.now()): InfoTokenPayload {
     const payload = readToken<InfoTokenPayload>(infoId, this.config.secret);
     if (typeof payload.u !== 'string' || typeof payload.p !== 'string') {
@@ -816,8 +661,6 @@ export class MediaResolver {
     }
 
     if (payload.m) {
-      // Signed here, so these passed when the token was made. Checked again because the host
-      // list is allowed to tighten in between, and a token must not outlive that.
       assertCdnHosts(
         payload.m.map((entry) => entry.url),
         this.importHosts,
@@ -838,33 +681,15 @@ export class MediaResolver {
     return payload;
   }
 
-  /**
-   * A short keyed digest identifying one resolution.
-   *
-   * Keyed rather than plain: a plain hash of a public URL could be recomputed by anyone,
-   * which would let a client mint option tokens for a resolution the server never ran.
-   *
-   * An imported post is identified by the media approved from it as well as by its link.
-   * Two imports of one post can carry different media — a forged one and a real one, say —
-   * and an option minted for one must not be spendable against the other.
-   */
   resolutionHash(url: string, provider: string, imported?: readonly ImportedEntry[]): string {
-    const hmac = createHmac('sha256', this.config.secret)
-      // A NUL separator: it cannot occur in either value, so no provider/URL pair
-      // can be made to collide with another by moving the boundary.
-      .update(`${provider}\u0000${url}`);
+    const hmac = createHmac('sha256', this.config.secret).update(`${provider}\u0000${url}`);
     if (imported) hmac.update(NUL).update('visitor').update(NUL).update(importDigest(imported));
     return hmac.digest('base64url').slice(0, 22);
   }
 }
 
-/** The separator byte in a resolution hash. It cannot occur in any of the parts it separates. */
 const NUL = Buffer.alloc(1);
 
-/**
- * A digest of an imported post's approved media, over a spelling fixed here rather than
- * whatever key order a trip through JSON happens to produce.
- */
 function importDigest(entries: readonly ImportedEntry[]): string {
   const canonical = entries.map((entry) => [
     entry.s,

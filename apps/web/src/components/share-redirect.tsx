@@ -4,12 +4,6 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { homeWithUrl, sharedUrl } from '@/lib/share';
 
-/**
- * Reads what was shared and hands it to the home page in the fragment.
- *
- * `location.replace`, so `/share?…` does not stay in history: Back from the result should
- * go to the app that shared, not to a page that would share the same link again.
- */
 export function ShareRedirect() {
   const [missing, setMissing] = useState(false);
 

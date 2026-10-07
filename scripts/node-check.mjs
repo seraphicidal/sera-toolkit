@@ -1,26 +1,4 @@
 #!/usr/bin/env node
-/**
- * The extraction-node architecture, end to end, on one machine.
- *
- * A server that calls itself a datacentre, a real node process that dials into it, and a
- * YouTube job that has to cross the connection because YouTube declares no datacentre
- * extraction. It finishes with bytes served over HTTP and the node's own workspace gone.
- *
- * The unit tests prove the protocol and the live test proves the node is a program that
- * runs. This proves the thing they are both for: that a link a visitor pastes comes back
- * as a file, having been fetched somewhere else entirely.
- *
- *   npm run check:node                  # the deployment declares itself a datacentre
- *   npm run check:node -- --blocked     # …and instead the cloud attempt is refused
- *   npm run check:node -- <url>
- *
- * The two modes reach the node through different code. Without `--blocked` the router
- * *orders* the node first, because the provider declares no datacentre extraction and
- * the deployment has said what it is. With `--blocked` the deployment says nothing, the
- * cloud attempt is made and comes back with the bot challenge Oracle actually gets, and
- * the node is reached by escalation. The second is the path a deployment takes when
- * nobody has configured anything, so it is the one worth being sure of.
- */
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
@@ -51,13 +29,8 @@ const engine = await SeraEngine.create({
     SERA_DATA_DIR: apiDir,
     SERA_EXTRACTION_NODE_TOKEN: TOKEN,
     SERA_EXTRACTION_CLAIM_HOLD_SECONDS: '5',
-    // Without `--blocked`, the deployment says it is a datacentre and YouTube goes to a
-    // node first rather than after a refusal already measured. With it, the deployment
-    // says nothing and the refusal is what routes.
     ...(blocked ? {} : { SERA_NETWORK_CLASS: 'datacenter' }),
   }),
-  // The exact answer Oracle gets from YouTube, produced where extraction happens — so
-  // the classification, the escalation and the node's whole job all run for real.
   ...(blocked
     ? {
         probe: () =>
@@ -156,7 +129,6 @@ try {
     console.log(
       `file     ${finished.result.filename} · ${bytes.length} bytes · magic=${magic} · served ${response.status}`,
     );
-    // And the workspace on the node is gone.
     const left = await readFile(join(nodeDir, 'nothing')).then(
       () => 'something',
       () => 'clean',

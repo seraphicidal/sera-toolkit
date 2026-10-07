@@ -29,8 +29,6 @@ function contextFor(info: YtdlpInfo): ProviderContext {
 const labelsFor = (media: ResolvedMedia, kind: DownloadPlan['kind']): string[] =>
   (media.items[0]?.plans ?? []).filter((p) => p.kind === kind).map((p) => p.label);
 
-/* -------------------------------------------------------------------------- */
-
 const youtubeInfo: YtdlpInfo = {
   id: 'dQw4w9WgXcQ',
   _type: 'video',
@@ -120,8 +118,6 @@ describe('YouTube video', () => {
       new URL(youtubeInfo.webpage_url!),
       contextFor(youtubeInfo),
     );
-    // Three heights plus the MOV remux of the best one. Every label is distinct, so a
-    // quality dropdown never shows the same text twice.
     const labels = labelsFor(media, 'video');
     expect(labels).toEqual(['1080p', '720p', '480p', '1080p (MOV)']);
     expect(new Set(labels).size).toBe(labels.length);
@@ -158,7 +154,6 @@ describe('YouTube video', () => {
   });
 
   it('does not claim a bitrate the source cannot supply', async () => {
-    // Source audio is ~129 kbps, so 320 would be an invented number.
     const media = await new YouTubeProvider().resolve(
       new URL(youtubeInfo.webpage_url!),
       contextFor(youtubeInfo),
@@ -208,12 +203,9 @@ describe('YouTube video', () => {
     expect(media.duration).toBe(212);
     expect(media.type).toBe('single');
     expect(media.createdAt).toBe(new Date(1_700_000_000_000).toISOString());
-    // The 640px thumbnail, not the 120px or the 1920px one.
     expect(media.thumbnailUrl).toContain('medium.jpg');
   });
 });
-
-/* -------------------------------------------------------------------------- */
 
 const carouselInfo: YtdlpInfo = {
   _type: 'playlist',
@@ -269,7 +261,6 @@ const carouselInfo: YtdlpInfo = {
 
 describe('Instagram carousel', () => {
   it('resolves every slide, not just the first', async () => {
-    // The single most common failure in tools like this.
     const media = await new InstagramProvider().resolve(
       new URL('https://www.instagram.com/p/ABC123'),
       contextFor(carouselInfo),
@@ -334,9 +325,6 @@ describe('Instagram photo post, with a session', () => {
   };
 
   it('reads the post with the session when the extractor finds no video formats', async () => {
-    // What the laptop node's log showed for a photo post: yt-dlp's "No video formats
-    // found", which classifies as FORMAT_UNAVAILABLE by its wording. The session route was
-    // skipped for it, and the node returned the 640 px cover as though it had succeeded.
     const asked: string[] = [];
     const context: ProviderContext = {
       ...contextFor({}),
@@ -364,8 +352,6 @@ describe('Instagram photo post, with a session', () => {
   });
 });
 
-/* -------------------------------------------------------------------------- */
-
 describe('X GIF post', () => {
   const gifPost: YtdlpInfo = {
     id: '123',
@@ -374,7 +360,6 @@ describe('X GIF post', () => {
     duration: 6,
     webpage_url: 'https://x.com/someone/status/123',
     formats: [
-      // What the interface calls a GIF is a silent MP4.
       {
         format_id: 'http-950',
         ext: 'mp4',
@@ -418,8 +403,6 @@ describe('X GIF post', () => {
   });
 });
 
-/* -------------------------------------------------------------------------- */
-
 describe('SoundCloud track', () => {
   const track: YtdlpInfo = {
     id: 't1',
@@ -458,13 +441,8 @@ describe('SoundCloud track', () => {
   });
 });
 
-/* -------------------------------------------------------------------------- */
-
 describe('failure handling', () => {
   it('reports a link with nothing downloadable rather than returning an empty result', async () => {
-    // Reddit used to stand in here and no longer can: it now refuses before probing,
-    // because a server has no anonymous path to it at all. Any extractor-backed
-    // provider makes the same point about an empty format list.
     const empty: YtdlpInfo = { id: 'x', title: 'nothing here', formats: [] };
     await expect(
       new YouTubeProvider().resolve(
@@ -475,10 +453,6 @@ describe('failure handling', () => {
   });
 
   it('never spends a probe on Reddit, which answers 403 to this address', async () => {
-    // Reddit answers 403 Blocked to anonymous requests from hosted ranges, so the
-    // extractor is a guaranteed waste of the one worker this instance has. The embed
-    // route replaces it — and when that cannot be reached either, the failure is about
-    // the fetch rather than about the extractor never being tried.
     const empty: YtdlpInfo = { id: 'x', title: 'nothing here', formats: [] };
     let probed = false;
     const context: ProviderContext = {
@@ -529,13 +503,8 @@ describe('failure handling', () => {
   });
 });
 
-/* -------------------------------------------------------------------------- */
-
 describe('extractor tuning reaches the download', () => {
   it("puts a provider's extractor args on the plans it builds", async () => {
-    // These were reaching the probe and stopping there: a provider could ask for the
-    // player clients that expose 1080p, list them, and then fetch with whatever the
-    // extractor defaults to. Both halves of a job have to agree.
     const tuned: ProviderContext = {
       ...contextFor(youtubeInfo),
       config: { ...config, youtube: { ...config.youtube, playerClients: 'tv,default' } },
@@ -554,10 +523,6 @@ describe('extractor tuning reaches the download', () => {
   });
 
   it('asks for no player client unless the operator configures one', async () => {
-    // The audit behind SERA_YOUTUBE_PLAYER_CLIENTS measured every client the extractor
-    // offers, from both a datacentre and a residential address. No override beat letting
-    // yt-dlp choose, so the default asks for nothing rather than pinning a list that
-    // would rot the next time YouTube changes which clients answer.
     const media = await new YouTubeProvider().resolve(
       new URL('https://www.youtube.com/watch?v=dQw4w9WgXcQ'),
       contextFor(youtubeInfo),
@@ -568,8 +533,6 @@ describe('extractor tuning reaches the download', () => {
   });
 
   it('leaves plans alone for a provider that declares none', async () => {
-    // The aliasing this replaced emptied the item list entirely when a provider had no
-    // args, which is most of them.
     const media = await new TwitterProvider().resolve(
       new URL('https://x.com/someone/status/1'),
       contextFor(youtubeInfo),

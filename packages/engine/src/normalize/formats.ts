@@ -1,16 +1,6 @@
 import type { YtdlpFormat } from '../extract/ytdlp-types.js';
 import { num, str } from '../extract/ytdlp-types.js';
 
-/**
- * Turns yt-dlp's raw format list into something a person can choose from.
- *
- * Providers return dozens of entries per video: the same stream over several protocols,
- * storyboard sheets, loudness-normalized audio twins, and duplicate renditions that
- * differ only in an internal id. Showing that list is the difference between a tool and
- * a debug dump, so everything below is about reducing it to the few rows that actually
- * mean something different to the person downloading.
- */
-
 export interface UsableFormat {
   readonly id: string;
   readonly ext: string;
@@ -30,7 +20,6 @@ export interface UsableFormat {
   readonly note?: string;
 }
 
-/** Protocols the pipeline can actually download and remux. */
 const SUPPORTED_PROTOCOLS = new Set([
   'https',
   'http',
@@ -40,7 +29,6 @@ const SUPPORTED_PROTOCOLS = new Set([
   'mhtml_ignored',
 ]);
 
-/** Storyboard sheets, which are images of the timeline rather than media. */
 function isStoryboard(format: YtdlpFormat): boolean {
   return (
     format.ext === 'mhtml' ||
@@ -49,11 +37,6 @@ function isStoryboard(format: YtdlpFormat): boolean {
   );
 }
 
-/**
- * Loudness-normalized audio duplicates (`-drc`) and the `-<n>` "premium" video twins
- * YouTube emits alongside the ordinary rendition. Both are byte-for-byte alternatives
- * to a format already in the list, so keeping them only doubles the menu.
- */
 function isRedundantTwin(format: YtdlpFormat): boolean {
   const id = str(format.format_id) ?? '';
   if (id.endsWith('-drc')) return true;
@@ -105,7 +88,6 @@ export function toUsableFormats(formats: readonly YtdlpFormat[] | undefined): Us
   return out;
 }
 
-/** Estimates a size from bitrate when the provider reports none. */
 export function estimateSize(format: UsableFormat, durationSeconds?: number): number | undefined {
   if (format.filesize) return format.filesize;
   const bitrate = format.tbr ?? format.abr;
@@ -113,24 +95,12 @@ export function estimateSize(format: UsableFormat, durationSeconds?: number): nu
   return Math.round((bitrate * 1000 * durationSeconds) / 8);
 }
 
-/** Containers a codec can be remuxed into without re-encoding. */
 export function nativeContainer(vcodec: string | undefined): 'mp4' | 'webm' {
   const codec = (vcodec ?? '').toLowerCase();
   if (codec.startsWith('vp9') || codec.startsWith('vp09') || codec.startsWith('vp8')) return 'webm';
   return 'mp4';
 }
 
-/**
- * True when the codec pair can live in an MP4 without re-encoding.
- *
- * VP9 belongs on this list. It is a standard MP4 video codec, and leaving it off had a
- * consequence: Instagram serves VP9 video in MP4 with AAC audio, this said the pair did
- * not fit, the plan asked for a WebM — and WebM cannot hold AAC, so every Reel died in
- * the merge with "Stream #1:0 -> #0:1 (copy)". The audio codec is the real constraint
- * here, and it still decides: VP9 with Opus is a WebM, VP9 with AAC is an MP4.
- *
- * VP8 is deliberately absent. It is legal in MP4 and almost nothing plays it.
- */
 export function fitsInMp4(vcodec: string | undefined, acodec: string | undefined): boolean {
   const v = (vcodec ?? '').toLowerCase();
   const a = (acodec ?? '').toLowerCase();
@@ -172,7 +142,6 @@ export function splitFormats(formats: readonly UsableFormat[]): FormatSplit {
   return { videoOnly, audioOnly, progressive };
 }
 
-/** Ranks audio, preferring the container that muxes cleanly with the chosen video. */
 export function bestAudio(
   audio: readonly UsableFormat[],
   prefer: 'mp4' | 'webm' | 'any' = 'any',
@@ -189,13 +158,6 @@ export function bestAudio(
   return [...audio].sort((a, b) => score(b) - score(a))[0];
 }
 
-/**
- * Picks one video rendition per distinct height.
- *
- * Ranking prefers a higher frame rate, then a codec that remuxes into MP4 without
- * re-encoding, then bitrate. The codec preference is what makes "1080p, MP4" usually
- * mean a stream copy rather than a two-minute transcode.
- */
 export function bestVideoPerHeight(video: readonly UsableFormat[]): UsableFormat[] {
   const byHeight = new Map<number, UsableFormat>();
   for (const format of video) {
@@ -217,10 +179,8 @@ function rankVideo(format: UsableFormat): number {
   return fpsScore * 100_000 + codecScore * 10_000 + (format.tbr ?? 0);
 }
 
-/** The set of audio bitrates worth offering, given what the source actually carries. */
 export function audioBitrateChoices(sourceAbr: number | undefined): number[] {
   const source = sourceAbr ?? 0;
-  // Offering 320 kbps for a 64 kbps source would be a lie about quality, not an upgrade.
   const candidates = [320, 192, 128];
   const usable = candidates.filter((rate) => source === 0 || rate <= Math.max(source * 1.1, 128));
   return usable.length ? usable : [Math.round(Math.max(source, 64))];

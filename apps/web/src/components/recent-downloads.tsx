@@ -11,18 +11,9 @@ import {
   type HistoryEntry,
 } from '@/lib/history';
 
-/** How often relative times and expiry are brought up to date while the list is shown. */
 const TICK_MS = 30_000;
 
-/**
- * The last few downloads made in this browser (`lib/history.ts`).
- *
- * Nothing here comes from the server: the list is this browser's own, and an entry outlives
- * the files it points at. Once they are deleted the entry says so, and offers to read the
- * original link again rather than a link that would 404.
- */
 export function RecentDownloads({ onAgain }: { readonly onAgain: (url: string) => void }) {
-  // Empty until mounted: the server has no history, and the first render must match it.
   const [entries, setEntries] = useState<HistoryEntry[]>([]);
   const [now, setNow] = useState(() => Date.now());
 
@@ -31,7 +22,6 @@ export function RecentDownloads({ onAgain }: { readonly onAgain: (url: string) =
       setEntries(readHistory());
       setNow(Date.now());
     };
-    // Another tab's changes arrive as `storage`; this tab's own as HISTORY_EVENT.
     const onStorage = (event: StorageEvent) => {
       if (event.key === null || event.key === HISTORY_KEY) refresh();
     };

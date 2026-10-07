@@ -1,16 +1,4 @@
 #!/usr/bin/env node
-/**
- * Runs the whole stack for development.
- *
- * Node cannot execute the TypeScript sources directly here: internal imports carry the
- * `.js` extensions that NodeNext requires of the compiled output, and the type stripper
- * does not rewrite them. So the Node packages are compiled in watch mode and the API is
- * run from `dist`, which restarts itself when the compiler writes. Next runs its own dev
- * server alongside.
- *
- *   node scripts/dev.mjs           # API + web
- *   node scripts/dev.mjs --worker  # also a standalone worker (needs SERA_QUEUE_DRIVER=redis)
- */
 
 import { spawn } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
@@ -28,7 +16,6 @@ function start(label, command, args, colour) {
   const child = spawn(command, args, {
     cwd: ROOT,
     stdio: ['ignore', 'pipe', 'pipe'],
-    // npm and npx are batch files on Windows, which cmd must interpret.
     shell: process.platform === 'win32',
     env: { ...process.env, FORCE_COLOR: '1' },
   });
@@ -66,10 +53,8 @@ function shutdown(code = 0) {
 process.on('SIGINT', () => shutdown(0));
 process.on('SIGTERM', () => shutdown(0));
 
-// The compiler runs first and keeps running; `node --watch` picks up what it writes.
 start('tsc', NPX, ['tsc', '--build', '--watch', '--preserveWatchOutput'], '36');
 
-// A short delay lets the first compile land before the API tries to import dist.
 setTimeout(() => {
   if (shuttingDown) return;
   start('api', 'node', ['--enable-source-maps', '--watch', 'apps/api/dist/index.js'], '32');

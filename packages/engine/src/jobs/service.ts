@@ -19,34 +19,21 @@ import type { JobBackend, JobRecord, WorkerHandle } from '../queue/types.js';
 import { toPublicJob } from '../queue/types.js';
 import { JobRunner, type JobSelection, type JobSpec, type JobSubtitles } from './runner.js';
 
-/**
- * Job lifecycle: accepting work, reporting on it, and cleaning up after it.
- *
- * The service is deliberately the only place that turns client input into a `JobSpec`.
- * Option tokens are verified here and must all belong to the same resolution, so a
- * request cannot stitch together selections from different URLs — which is what would
- * otherwise let someone use a legitimate token as a wrapper for an arbitrary fetch.
- */
-
 export interface JobServiceDependencies {
   readonly config: EngineConfig;
   readonly logger: Logger;
   readonly resolver: MediaResolver;
   readonly workspaces: WorkspaceManager;
   readonly backend: JobBackend;
-  /** Extraction nodes, for a job whose plans were made on another network. */
   readonly remote?: RemoteExtraction;
   readonly runner?: JobRunner;
-  /** Where each finished job is counted, by source and outcome only. */
   readonly usage?: UsageCounter;
 }
 
-/** Progress updates are coalesced to this interval before they hit the store. */
 const PROGRESS_THROTTLE_MS = 250;
 
 export class JobService {
   private readonly runner: JobRunner;
-  /** Controllers for jobs running in this process, so cancellation can reach them. */
   private readonly inFlight = new Map<string, AbortController>();
 
   constructor(private readonly deps: JobServiceDependencies) {
@@ -61,10 +48,6 @@ export class JobService {
       });
   }
 
-  /**
-   * Validates a request and queues it. Throws a `SeraError` if it cannot be accepted.
-   * `uncounted` keeps the job out of the usage counts: the server's own canary.
-   */
   async create(
     request: CreateJobRequest,
     clientKey: string,
@@ -73,16 +56,12 @@ export class JobService {
     const { config, resolver, backend } = this.deps;
 
     const info = resolver.verifyInfoId(request.infoId);
-    // An imported post's hash covers the media approved from it, so an option minted for one
-    // import of a post cannot be spent against another import of the same post.
     const expectedHash = resolver.resolutionHash(info.u, info.p, info.m);
     const selections: JobSelection[] = [];
     const options = [];
 
     for (const optionId of request.optionIds) {
       const option = resolver.verifyOptionId(optionId);
-      // Every option must come from the resolution named by infoId, so a request cannot
-      // stitch selections from different links into one job.
       if (option.h !== expectedHash) {
         throw seraError('EXPIRED', {
           message: 'Those options came from a different link.',
@@ -133,8 +112,6 @@ export class JobService {
       ...(request.filename ? { filename: request.filename } : {}),
       ...(trim ? { trim } : {}),
       ...(subtitles ? { subtitles } : {}),
-      // Carried whole, because the job cannot read the post again. It only ever comes from a
-      // token this server signed; nothing in the request body can reach it.
       ...(info.m
         ? {
             imported: {
@@ -180,7 +157,6 @@ export class JobService {
     return record ? toPublicJob(record) : undefined;
   }
 
-  /** Marks a job cancelled and, if it is running here, stops it. */
   async cancel(id: string): Promise<boolean> {
     const record = await this.deps.backend.get(id);
     if (!record || isTerminalJobState(record.state)) return false;
@@ -195,12 +171,6 @@ export class JobService {
     return true;
   }
 
-  /**
-   * Yields events for a job until it reaches a terminal state.
-   *
-   * The current state is emitted first so a client that connects after the job finished
-   * still gets a result rather than an open stream that never says anything.
-   */
   async *events(id: string, signal?: AbortSignal): AsyncGenerator<JobEvent> {
     const record = await this.deps.backend.get(id);
     if (!record) throw seraError('NOT_FOUND', { message: 'That download has expired.' });
@@ -234,7 +204,6 @@ export class JobService {
 
         await new Promise<void>((resolve) => {
           notify = resolve;
-          // A periodic wake doubles as the SSE keep-alive.
           const timer = setTimeout(resolve, 15_000);
           timer.unref();
         });
@@ -247,12 +216,10 @@ export class JobService {
     }
   }
 
-  /** Starts processing jobs in this process. */
   startWorker(concurrency = this.deps.config.workerConcurrency): WorkerHandle {
     return this.deps.backend.startWorker((record) => this.execute(record), concurrency);
   }
 
-  /** Counts a finished job by its source and outcome, unless it is the canary's. */
   private count(
     record: JobRecord,
     outcome: { readonly ok: true } | { readonly ok: false; readonly code: string },
@@ -261,16 +228,11 @@ export class JobService {
     void this.deps.usage.record({ source: record.provider, kind: 'download', ...outcome });
   }
 
-  /** Runs one job to completion, translating every outcome into a stored state. */
   private async execute(record: JobRecord): Promise<void> {
     const { backend, logger, workspaces } = this.deps;
     const controller = new AbortController();
     this.inFlight.set(record.id, controller);
 
-    // Cancellation has to cross the process boundary. `inFlight` only reaches jobs
-    // running in this process, and in the distributed deployment the API that handles the
-    // DELETE is not the worker holding the job — so the worker learns about it the same
-    // way a browser does, off the backend's update channel.
     const unwatch = backend.subscribe(record.id, (updated) => {
       if (updated.state === 'cancelled') controller.abort();
     });
@@ -295,8 +257,6 @@ export class JobService {
         (update) => {
           pending = update;
           const now = Date.now();
-          // Throttling keeps a fast download from writing hundreds of updates a second,
-          // while state changes always go through immediately.
           const stateChanged = update.state !== record.state;
           if (stateChanged || now - lastPatch >= PROGRESS_THROTTLE_MS) {
             lastPatch = now;
@@ -306,9 +266,6 @@ export class JobService {
         controller.signal,
       );
 
-      // The file counts are carried into the final progress: a completed multi-file job
-      // should still be able to say "7 of 7", not lose the count at the moment it
-      // finishes.
       const totalFiles = record.spec.selections.length;
       await backend.patch(record.id, {
         state: 'ready',
@@ -323,7 +280,6 @@ export class JobService {
     } catch (error) {
       const seraErr = SeraError.from(error);
       const cancelled = seraErr.code === 'CANCELLED' || controller.signal.aborted;
-      // A visitor changing their mind is not a failure of the source.
       if (!cancelled) this.count(record, { ok: false, code: seraErr.code });
 
       await backend.patch(record.id, {
@@ -361,11 +317,6 @@ function eventTypeFor(job: Job): JobEvent['type'] {
   return job.state === 'queued' ? 'state' : 'progress';
 }
 
-/**
- * A trim, checked against what was signed: one option, of a kind that has a timeline, and
- * times inside the item's own length. The schema has already checked the shape and order;
- * the length is only known here, from the option token, which the client cannot edit.
- */
 function trimFor(
   request: NonNullable<CreateJobRequest['trim']>,
   options: readonly { readonly k: string; readonly d?: number }[],
@@ -391,11 +342,6 @@ function trimFor(
   return checked.range;
 }
 
-/**
- * Subtitles, checked against what was signed: one option, never alongside a trim (the track
- * would keep the whole timeline), and an embedded track only in a video container that
- * holds one. Whether the language is really offered is checked when the job re-resolves.
- */
 function subtitlesFor(
   request: NonNullable<CreateJobRequest['subtitles']>,
   options: readonly { readonly k: string }[],

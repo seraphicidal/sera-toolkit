@@ -50,8 +50,6 @@ describe('MemoryJobBackend', () => {
   });
 
   it('refuses to move a job out of a terminal state', async () => {
-    // A cancelled job that a still-unwinding worker then reports as failed used to end
-    // up "Failed" in front of the user, seconds after they were told it was cancelled.
     const backend = new MemoryJobBackend(silentLogger());
     await backend.submit(record('a-terminal'));
 
@@ -65,8 +63,6 @@ describe('MemoryJobBackend', () => {
   });
 
   it('never lets progress move backwards', async () => {
-    // Streams report independently, and a late update from a slower one must not rewind
-    // a bar the user has already watched advance.
     const backend = new MemoryJobBackend(silentLogger());
     await backend.submit(record('a3'));
 
@@ -136,7 +132,6 @@ describe('MemoryJobBackend', () => {
   });
 
   it('keeps processing after a handler throws', async () => {
-    // One bad job must not stall the queue behind it.
     const backend = new MemoryJobBackend(silentLogger());
     const finished: string[] = [];
 
@@ -169,7 +164,6 @@ describe('MemoryJobBackend', () => {
 
 describe('job projection', () => {
   it('never sends the spec or the client key to a client', () => {
-    // The spec holds the source URL, which is exactly what must not be echoed back.
     const publicJob = toPublicJob(record('f1')) as unknown as Record<string, unknown>;
     expect(publicJob).not.toHaveProperty('spec');
     expect(publicJob).not.toHaveProperty('clientKey');

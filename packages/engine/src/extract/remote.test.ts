@@ -37,14 +37,12 @@ const media: ResolvedMedia = {
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function registry(): ExtractionNodeRegistry {
-  // Short windows so the tests exercise expiry without waiting on the real ones.
   return new ExtractionNodeRegistry(silentLogger(), 200, 2000);
 }
 
 describe('ExtractionNodeRegistry', () => {
   it('hands a queued task to a node that is already waiting', async () => {
     const nodes = registry();
-    // The node asks first and blocks — this is the heartbeat as well as the queue.
     const claim = nodes.claim('home', ['youtube'], 1, 1000);
     const dispatched = nodes.dispatch({ kind: 'resolve', url: media.url, providerId: 'youtube' });
 
@@ -67,11 +65,9 @@ describe('ExtractionNodeRegistry', () => {
 
   it('only gives a node providers it said it would take', async () => {
     const nodes = registry();
-    // Deliberately never answered, so the rejection when it ages out is expected.
     nodes
       .dispatch({ kind: 'resolve', url: 'https://x.com/a/status/1', providerId: 'twitter' })
       .catch(() => undefined);
-    // A node that only does YouTube must not be handed an X task.
     expect(await nodes.claim('home', ['youtube'], 1, 120)).toBeUndefined();
     expect((await nodes.claim('home', ['twitter'], 1, 120))?.providerId).toBe('twitter');
   });
@@ -130,7 +126,6 @@ describe('ExtractionNodeRegistry', () => {
 
     abort.abort();
     await expect(dispatched).rejects.toMatchObject({ code: 'CANCELLED' });
-    // The node is mid-download and has to be able to find out.
     expect(nodes.isCancelled(task!.id)).toBe(true);
   });
 
@@ -150,7 +145,6 @@ describe('ExtractionNodeRegistry', () => {
   });
 
   it('ignores a result for a task nobody is waiting for', () => {
-    // A node reconnecting after a restart may finish work the API has forgotten.
     const nodes = registry();
     expect(nodes.completeResolve('never-existed', media)).toBe(false);
     expect(nodes.fail('never-existed', seraError('INTERNAL'))).toBe(false);
@@ -159,11 +153,6 @@ describe('ExtractionNodeRegistry', () => {
 
 describe('matching a task to a node', () => {
   it('does not hand a waiting node work it said it would not take', async () => {
-    // The bug this pins: a node's provider list was checked when it found a task already
-    // queued, and not when a task arrived while it was waiting. Since waiting is the
-    // normal state — the request is held open as a heartbeat — the check that mattered
-    // was the one that was missing, and a node told to do YouTube alone could be handed
-    // Instagram and refuse it as an extractor bug.
     const nodes = registry();
     const waiting = nodes.claim('youtube-only', ['youtube'], 1, 400);
 
@@ -198,8 +187,6 @@ describe('matching a task to a node', () => {
       })
       .catch(() => undefined);
 
-    // A second cloud node is a legitimate node, and it is not the answer to a refusal
-    // that was about being in a datacentre in the first place.
     expect(await nodes.claim('cloud', ['youtube'], 1, 120, 'datacenter')).toBeUndefined();
     expect((await nodes.claim('home', ['youtube'], 1, 120, 'residential'))?.providerId).toBe(
       'youtube',
@@ -216,8 +203,6 @@ describe('matching a task to a node', () => {
     nodes
       .dispatch({ kind: 'resolve', url: media.url, providerId: 'youtube' })
       .catch(() => undefined);
-    // The busy node is at capacity; the idle one takes it. Counting every claimed task
-    // against every node made the second one look busy too.
     expect(await nodes.claim('first', ['youtube'], 1, 120)).toBeUndefined();
     expect(await nodes.claim('second', ['youtube'], 1, 120)).toBeDefined();
 
@@ -238,7 +223,6 @@ describe('a task that needs more than a download', () => {
 
   it('is not handed to a node that never said it understands it', async () => {
     const nodes = registry();
-    // An outdated node would ignore the trim and send back the whole video.
     nodes.dispatchJob(job({ trim: { start: 10, end: 20 } })).catch(() => undefined);
     expect(await nodes.claim('old', ['youtube'], 1, 120)).toBeUndefined();
     expect(
@@ -264,7 +248,6 @@ describe('a task that needs more than a download', () => {
 
   it('is refused at once when the connected nodes cannot do it', async () => {
     const nodes = registry();
-    // Only an outdated node is connected: waiting would only end at the task timeout.
     await nodes.claim('old', ['youtube'], 1, 50);
     const started = Date.now();
     await expect(nodes.dispatchJob(job({ trim: { start: 10 } }))).rejects.toMatchObject({
@@ -301,13 +284,11 @@ describe('a post only a node holding an account can read', () => {
     nodes.register('laptop', ['instagram'], 1, 'residential', [...account]);
     const resolving = sessionBackend(nodes, 'instagram-session').resolve(post, 'instagram');
 
-    // The phone, out of date, takes it and cannot read it.
     const first = await nodes.claim('phone', ['instagram'], 1, 500, 'residential', [...account]);
     expect(first?.requires).toEqual(['instagram-session']);
     nodes.fail(first!.id, seraError('PROVIDER_AUTH_REQUIRED'));
     await wait(10);
 
-    // It is offered to the laptop, and the phone is not given it again.
     expect(
       await nodes.claim('phone', ['instagram'], 1, 120, 'residential', [...account]),
     ).toBeUndefined();
@@ -334,18 +315,15 @@ describe('a post only a node holding an account can read', () => {
 });
 
 describe('a node that goes silent on a task it claimed', () => {
-  /** A lease short enough to lapse in a test, and nodes that stay live throughout. */
   const leased = () => new ExtractionNodeRegistry(silentLogger(), 5000, 5000, 150);
 
   it('loses the task to another node, which completes it', async () => {
     const nodes = leased();
     const dispatched = nodes.dispatch({ kind: 'resolve', url: media.url, providerId: 'youtube' });
 
-    // Claimed, and then nothing: the connection died with the answer in it.
     const lost = await nodes.claim('laptop', ['youtube'], 1, 200);
     expect(lost).toBeDefined();
 
-    // Another node is waiting; the lapsed lease puts the task in front of it.
     const retaken = await nodes.claim('phone', ['youtube'], 1, 1000);
     expect(retaken?.url).toBe(lost!.url);
     expect(retaken?.id).not.toBe(lost!.id);
@@ -363,7 +341,6 @@ describe('a node that goes silent on a task it claimed', () => {
     expect(nodes.status().find((node) => node.id === 'laptop')?.inFlight).toBe(1);
 
     await wait(250);
-    // Back in the queue, and the node it was lost on is free to take it — or anything.
     expect(nodes.status().find((node) => node.id === 'laptop')?.inFlight).toBe(0);
     expect(await nodes.claim('laptop', ['youtube'], 1, 200)).toBeDefined();
   });
@@ -380,8 +357,6 @@ describe('a node that goes silent on a task it claimed', () => {
     const retaken = await nodes.claim('phone', ['youtube'], 1, 1000);
     expect(retaken).toBeDefined();
 
-    // The original node wakes up and carries on as though nothing happened. It is told
-    // the task is cancelled, which stops it; nothing it sends is accepted.
     nodes.reportProgress(lost!.id, { percent: 90, step: 'late' });
     expect(nodes.isCancelled(lost!.id)).toBe(true);
     expect(
@@ -390,7 +365,6 @@ describe('a node that goes silent on a task it claimed', () => {
     expect(nodes.fail(lost!.id, seraError('NETWORK_ERROR'))).toBe(false);
     expect(nodes.completeJob(lost!.id)).toBe(false);
 
-    // The node that holds it now is unaffected and settles it alone.
     expect(nodes.isCancelled(retaken!.id)).toBe(false);
     nodes.reportProgress(retaken!.id, { percent: 50, step: 'Downloading' });
     nodes.acceptFile(retaken!.id, { name: 'one.mp4', mimeType: 'video/mp4', path: '/one' });
@@ -426,7 +400,6 @@ describe('a node that goes silent on a task it claimed', () => {
     const dispatched = nodes.dispatch({ kind: 'resolve', url: media.url, providerId: 'youtube' });
     const task = await nodes.claim('laptop', ['youtube'], 1, 200);
 
-    // Three leases' worth of time, reported on throughout, the way the node's heartbeat does.
     for (let i = 0; i < 9; i += 1) {
       await wait(50);
       nodes.reportProgress(task!.id, { percent: 0, step: 'Working' });
@@ -449,7 +422,6 @@ describe('a node that goes silent on a task it claimed', () => {
 
     controller.abort();
     await expect(dispatched).rejects.toMatchObject({ code: 'CANCELLED' });
-    // Removed from the queue as well, so no node is handed work nobody wants.
     expect(await nodes.claim('phone', ['youtube'], 1, 100)).toBeUndefined();
   });
 });

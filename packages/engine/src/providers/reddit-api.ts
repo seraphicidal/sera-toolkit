@@ -1,28 +1,13 @@
 import { seraError } from '../errors.js';
 import type { Logger } from '../logging.js';
 
-/**
- * Application-only OAuth against Reddit's Data API.
- *
- * Reddit refuses anonymous requests from hosted address ranges outright — `403 Blocked`
- * on both the HTML and the `.json` endpoint — so a server deployment has no unauthorized
- * path to a post at all. The supported answer is the `client_credentials` grant against
- * an app registered at https://www.reddit.com/prefs/apps, which reads public listings
- * and nothing else: no user, no scopes, no access to anything private.
- *
- * The token is held in memory only. It is never written to disk, never logged, never
- * sent to a client, and never leaves this module.
- */
-
 const TOKEN_ENDPOINT = 'https://www.reddit.com/api/v1/access_token';
 
-/** Renew early: a token that expires mid-request is a failed download. */
 const RENEW_MARGIN_MS = 60_000;
 
 export interface RedditCredentials {
   readonly clientId: string;
   readonly clientSecret: string;
-  /** Reddit's API rules require a descriptive, unique agent naming the application. */
   readonly userAgent: string;
 }
 
@@ -33,7 +18,6 @@ interface CachedToken {
 
 export class RedditTokenSource {
   private cached: CachedToken | undefined;
-  /** One flight at a time: a burst of jobs must not become a burst of token requests. */
   private inFlight: Promise<string> | undefined;
 
   constructor(
@@ -52,7 +36,6 @@ export class RedditTokenSource {
     return this.inFlight;
   }
 
-  /** Drops a token the API has just rejected, so the next call fetches a fresh one. */
   invalidate(): void {
     this.cached = undefined;
   }
@@ -80,7 +63,6 @@ export class RedditTokenSource {
     }
 
     if (response.status === 401 || response.status === 403) {
-      // Deliberately not the response body: it can echo back part of what was sent.
       throw seraError('PROVIDER_CONFIGURATION_ERROR', {
         message: "Reddit rejected this server's credentials.",
         detail: `reddit: token endpoint returned ${response.status}`,
@@ -100,7 +82,6 @@ export class RedditTokenSource {
 
     const lifetimeSeconds = typeof payload.expires_in === 'number' ? payload.expires_in : 3600;
     this.cached = { value, expiresAt: this.now() + lifetimeSeconds * 1000 };
-    // The token itself is never part of this line.
     this.logger.info(
       { provider: 'reddit', expiresInSeconds: lifetimeSeconds },
       'reddit access token issued',
@@ -109,7 +90,6 @@ export class RedditTokenSource {
   }
 }
 
-/** A post as the Data API returns it, narrowed to the fields that carry media. */
 export interface RedditPost {
   readonly id?: string;
   readonly title?: string;
@@ -155,9 +135,7 @@ export interface RedditVideo {
 
 export interface RedditMediaMetadata {
   readonly status?: string;
-  /** `Image` or `AnimatedImage`. */
   readonly e?: string;
-  /** The MIME type Reddit recorded, e.g. `image/jpg`. */
   readonly m?: string;
   readonly s?: {
     readonly u?: string;
@@ -168,12 +146,6 @@ export interface RedditMediaMetadata {
   };
 }
 
-/**
- * Fetches one post through the authenticated API.
- *
- * `oauth.reddit.com` is the only host that answers an authenticated request; the token
- * is not accepted on `www.reddit.com`.
- */
 export async function fetchPost(
   postId: string,
   tokens: RedditTokenSource,
@@ -187,7 +159,6 @@ export async function fetchPost(
 
   let response = await call(await tokens.token());
   if (response.status === 401) {
-    // The cached token was revoked or expired early; one retry with a fresh one.
     tokens.invalidate();
     response = await call(await tokens.token());
   }
@@ -212,7 +183,6 @@ export async function fetchPost(
   return post;
 }
 
-/** The comments endpoint answers with `[postListing, commentListing]`. */
 function firstPostIn(body: unknown): RedditPost | undefined {
   const listings = Array.isArray(body) ? body : [body];
   for (const listing of listings) {

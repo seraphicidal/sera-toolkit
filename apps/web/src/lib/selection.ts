@@ -3,18 +3,6 @@ import { KIND_LABELS } from './format';
 
 export type SelectableKind = Exclude<MediaKind, 'unknown'>;
 
-/**
- * Turning a resolution into a download request.
- *
- * The rules here are what make the interface feel decided rather than configurable. A
- * single video shows a format and a quality. A carousel shows the items, because that is
- * the real choice there — which slides, not which codec. And a preference for one kind
- * is honoured per item where it exists and quietly ignored where it does not, so asking
- * for audio on a post of three videos and two photos still returns all five files
- * instead of an error about the photos.
- */
-
-/** The kinds present anywhere in a resolution, in a stable display order. */
 export function availableKinds(info: MediaInfo): SelectableKind[] {
   const order: SelectableKind[] = ['video', 'audio', 'image', 'gif'];
   const present = new Set<SelectableKind>();
@@ -24,37 +12,23 @@ export function availableKinds(info: MediaInfo): SelectableKind[] {
   return order.filter((kind) => present.has(kind));
 }
 
-/**
- * What a kind is called in the picker. An image is a "Thumbnail" when no item in the post is
- * itself an image — the picture of a video or a song is its thumbnail, not a photo — and an
- * "Image" when one is, so a photo post or a carousel with photos keeps the word.
- */
 export function kindLabel(info: MediaInfo, kind: SelectableKind): string {
   if (kind === 'image' && !info.items.some((item) => item.kind === 'image')) return 'Thumbnail';
   return KIND_LABELS[kind];
 }
 
-/** Options of one kind for one item, in the order the engine produced them. */
 export function optionsOfKind(item: MediaItem, kind: SelectableKind): DownloadOption[] {
   return item.options.filter((option) => option.kind === kind);
 }
 
-/** The engine's default for a kind, or the first option if it marked none. */
 export function defaultOption(item: MediaItem, kind: SelectableKind): DownloadOption | undefined {
   const candidates = optionsOfKind(item, kind);
   return candidates.find((option) => option.recommended) ?? candidates[0];
 }
 
-/**
- * The option to use for an item, given a preferred kind.
- *
- * Falls back to the item's own default when the preference does not apply, which is what
- * lets one control drive a mixed collection.
- */
 export function optionForItem(
   item: MediaItem,
   preferredKind: SelectableKind | undefined,
-  /** A label the user picked, applied when this item offers the same one. */
   preferredLabel?: string,
 ): DownloadOption | undefined {
   if (preferredKind) {
@@ -68,14 +42,12 @@ export function optionForItem(
   return anyRecommended ?? item.options[0];
 }
 
-/** The kind SERA opens on: whatever the first item's own default is. */
 export function initialKind(info: MediaInfo): SelectableKind {
   const first = info.items[0];
   const recommended = first?.options.find((option) => option.recommended);
   return recommended?.kind ?? availableKinds(info)[0] ?? 'video';
 }
 
-/** Quality labels offered for a kind across the selected items, deduplicated. */
 export function qualityLabels(
   info: MediaInfo,
   kind: SelectableKind,
@@ -93,13 +65,11 @@ export function qualityLabels(
 
 export interface ResolvedSelection {
   readonly optionIds: string[];
-  /** Combined size estimate, when every chosen option reported one. */
   readonly totalBytes?: number;
   readonly anyApproximate: boolean;
   readonly fileCount: number;
 }
 
-/** Resolves the UI state into the exact options a job request will carry. */
 export function resolveSelection(
   info: MediaInfo,
   selectedIds: ReadonlySet<string>,

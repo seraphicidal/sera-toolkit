@@ -1,26 +1,9 @@
 import type { DownloadOption, Job, MediaInfo } from '@sera/contracts/types';
 
-/**
- * The canary: a real download per source, through the API's own front door.
- *
- * /health says the tools are installed and a node is connected. It cannot say that YouTube
- * still hands out playable streams, or that a site has not changed its pages overnight —
- * everything can be green while a source returns nothing. So once a day the server asks
- * itself for one small file from each source, by the same route a visitor uses: resolve,
- * pick an option, run the job, fetch the result. YouTube goes through the extraction nodes
- * exactly as a visitor's link would.
- *
- * The requests carry `x-sera-canary`, which exempts them from rate limits and abuse
- * strikes (a source that is down must not lock the canary out of noticing it is back) and
- * keeps them out of usage counts.
- */
-
-/** One entry of scripts/provider-cases.json that the canary runs. */
 export interface CanaryCase {
   readonly id: string;
   readonly url: string;
   readonly canary: {
-    /** The source's name, as an alert says it: "YouTube downloads failing". */
     readonly label: string;
     readonly kind: 'video' | 'audio' | 'image' | 'gif';
   };
@@ -30,26 +13,21 @@ export interface CanaryResult {
   readonly source: string;
   readonly label: string;
   readonly ok: boolean;
-  /** The API's error code, or one of the canary's own (TIMEOUT, NO_OPTION, EMPTY). */
   readonly code?: string;
   readonly durationMs: number;
-  /** ISO-8601, when this source's check finished. */
   readonly at: string;
   readonly bytes?: number;
 }
 
 export interface CanaryOptions {
-  /** The API's origin, e.g. http://127.0.0.1:4000. */
   readonly apiUrl: string;
   readonly token: string;
   readonly cases: readonly CanaryCase[];
-  /** The ceiling for one source: resolve, job and download together. */
   readonly timeoutMs?: number;
   readonly pollMs?: number;
   readonly fetch?: typeof fetch;
 }
 
-/** The cases a list marks for the canary, from the parsed provider-cases.json. */
 export function canaryCases(all: readonly unknown[]): CanaryCase[] {
   return all.filter((entry): entry is CanaryCase => {
     if (!entry || typeof entry !== 'object') return false;
@@ -63,10 +41,6 @@ export function canaryCases(all: readonly unknown[]): CanaryCase[] {
   });
 }
 
-/**
- * The cheapest option of a kind: the smallest by declared size, or, where no size is
- * declared, the last one listed, since options come best first.
- */
 export function smallestOption(info: MediaInfo, kind: string): DownloadOption | undefined {
   const options = info.items.flatMap((item) => item.options).filter((o) => o.kind === kind);
   const sized = options.filter((o) => typeof o.filesizeBytes === 'number');
@@ -76,7 +50,6 @@ export function smallestOption(info: MediaInfo, kind: string): DownloadOption | 
   return options.at(-1);
 }
 
-/** A failure the canary reports by code, whether the API's or its own. */
 class CanaryFailure extends Error {
   constructor(readonly code: string) {
     super(code);
@@ -85,7 +58,6 @@ class CanaryFailure extends Error {
 
 export async function runCanary(options: CanaryOptions): Promise<CanaryResult[]> {
   const results: CanaryResult[] = [];
-  // One source at a time: the canary should look like one patient visitor, not a burst.
   for (const entry of options.cases) {
     results.push(await checkOne(entry, options));
   }
@@ -152,8 +124,6 @@ async function download(
     throw new CanaryFailure(job.error?.code ?? job.state.toUpperCase());
   }
 
-  // The bytes themselves, counted as they arrive: a result that cannot be fetched is a
-  // failure as real as one that never resolved.
   const response = await call(`${base}${job.result.downloadPath}`, { headers, signal });
   if (!response.ok || !response.body) {
     throw new CanaryFailure(`HTTP_${String(response.status)}`);

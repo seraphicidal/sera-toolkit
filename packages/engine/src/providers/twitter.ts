@@ -7,21 +7,6 @@ import { YtdlpProvider } from './ytdlp-base.js';
 import { declare } from './capabilities.js';
 import type { ExtractionStrategy } from '../extract/strategy.js';
 
-/**
- * X, formerly Twitter, plus the legacy and mobile hostnames.
- *
- * The extractor handles video and refuses everything else — "No video could be found in
- * this tweet" — which for a platform where most posts are photographs meant most posts
- * failed. Worse, for a photo post carrying a link card it followed the *link* and
- * reported the article as an unsupported source.
- *
- * So media enumeration comes from X's own public embed endpoint instead. It is what
- * every embedded tweet on the web is rendered from, needs no account and no key, answers
- * from a datacentre, and returns each attachment in post order with its dimensions, its
- * alt text and — for video — every bitrate X publishes. That makes mixed posts and
- * multi-photo posts work in the right order, which is the part the extractor could never
- * do. yt-dlp remains the fallback for anything the embed endpoint will not serve.
- */
 export class TwitterProvider extends YtdlpProvider {
   readonly id = 'twitter';
   readonly label = 'X';
@@ -35,11 +20,6 @@ export class TwitterProvider extends YtdlpProvider {
   ];
   override readonly priority = 20;
 
-  /**
-   * Video through the extractor or the embed endpoint, photographs and mixed posts
-   * through the embed endpoint. What the interface calls a GIF is a silent MP4, and is
-   * offered as both.
-   */
   override readonly capabilities: ProviderCapabilities = declare({
     image: true,
     carousel: true,
@@ -48,10 +28,8 @@ export class TwitterProvider extends YtdlpProvider {
 
   override normalize(url: URL): URL {
     const out = new URL(url.toString());
-    // The mirror front-ends exist to fix embeds; the extractor wants the real host.
     out.hostname = 'x.com';
     out.protocol = 'https:';
-    // /i/status/<id> and /<user>/status/<id> are the same post.
     out.pathname = out.pathname.replace(/\/(photo|video)\/\d+$/, '');
     return out;
   }
@@ -60,14 +38,6 @@ export class TwitterProvider extends YtdlpProvider {
     return true;
   }
 
-  /**
-   * The syndication endpoint first, then the extractor.
-   *
-   * The endpoint X's own embed widget calls sees photographs, multi-photo posts and
-   * animated GIFs; the extractor sees video and nothing else, which is why a photo post
-   * used to come back as unsupported. Behind it the extractor still gets a turn, because
-   * it renders video in several qualities the embed payload does not carry.
-   */
   protected override strategies(
     _url: URL,
     _context: ProviderContext,
@@ -88,22 +58,17 @@ export class TwitterProvider extends YtdlpProvider {
 
   private async viaSyndication(url: URL, context: ProviderContext): Promise<ResolvedMedia> {
     const tweet = await this.readTweet(url, context).catch(() => undefined);
-    // A quote post carries its own media if it has any, and otherwise the media belongs
-    // to the post being quoted — which is what someone pasting the link is after.
     const source = usableMedia(tweet).length ? tweet : (tweet?.quoted_tweet ?? tweet);
     const media = usableMedia(source);
 
     if (media.length) return this.fromEmbed(url, source!, media, context);
 
-    // The endpoint answered and the post has nothing in it. That is a real answer and
-    // ends the ladder, rather than sending the extractor after media nobody posted.
     if (tweet) {
       throw seraError('MEDIA_UNAVAILABLE', {
         message: 'That post has no media to download.',
         detail: 'twitter: embed endpoint reported no attachments',
       });
     }
-    // It did not answer at all, which the extractor may yet survive.
     throw seraError('UNSUPPORTED_SOURCE', {
       detail: 'twitter: the syndication endpoint did not answer',
     });
@@ -141,10 +106,6 @@ export class TwitterProvider extends YtdlpProvider {
     };
   }
 
-  /**
-   * X's embed endpoint wants a token derived from the post id — the same arithmetic the
-   * embed widget on any website performs in the browser before making this request.
-   */
   private async readTweet(
     url: URL,
     context: ProviderContext,
@@ -163,8 +124,6 @@ export class TwitterProvider extends YtdlpProvider {
     return typeof tweet?.id_str === 'string' ? tweet : undefined;
   }
 }
-
-/* -------------------------------------------------------------------------- */
 
 interface TweetVariant {
   readonly bitrate?: number;
@@ -191,19 +150,16 @@ interface SyndicatedTweet {
   readonly quoted_tweet?: SyndicatedTweet;
 }
 
-/** Attachments the embed payload lists with a URL worth trying. */
 function usableMedia(tweet: SyndicatedTweet | undefined): readonly TweetMedia[] {
   return tweet?.mediaDetails?.filter((entry) => nonEmpty(entry?.media_url_https)) ?? [];
 }
 
-/** `/vid/avc1/1280x720/abc.mp4` — X puts the rendition's size in the path. */
 function sizeFromVariantUrl(url: string): { width?: number; height?: number } {
   const match = /\/(\d{2,4})x(\d{2,4})\//.exec(url);
   if (!match) return {};
   return { width: Number(match[1]), height: Number(match[2]) };
 }
 
-/** X serves a photo at several sizes; `name=orig` is the one that was uploaded. */
 function originalPhotoUrl(url: string): string {
   const out = new URL(url);
   out.searchParams.set('name', 'orig');
@@ -258,7 +214,6 @@ function toItem(media: TweetMedia, index: number): ResolvedItem | undefined {
     };
   }
 
-  // Only progressive MP4 renditions; the HLS manifest alongside them needs a player.
   const variants = (media.video_info?.variants ?? [])
     .filter((variant) => variant.content_type === 'video/mp4' && variant.url)
     .sort((a, b) => (b.bitrate ?? 0) - (a.bitrate ?? 0));
@@ -293,8 +248,6 @@ function toItem(media: TweetMedia, index: number): ResolvedItem | undefined {
 
   const best = variants[0]!.url!;
   if (isGif) {
-    // The post is a GIF as far as anyone reading it is concerned; X just stores it as a
-    // silent MP4. Offering the real thing is the point of recognising the difference.
     plans.push({
       kind: 'gif',
       container: 'gif',

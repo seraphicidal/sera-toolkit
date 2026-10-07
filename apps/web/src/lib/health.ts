@@ -1,29 +1,16 @@
 import type { HealthReport } from '@sera/contracts/types';
 
-/**
- * The status light in the header, as a small state machine.
- *
- * It is fed one observation per poll — a report, or the fact that none came back — and
- * decides what the light says. The rule that matters is the second one: a single failed
- * request is a phone changing networks or a deploy restarting the API, not an outage, so
- * the light only goes red after two failures in a row. Until then it keeps saying what it
- * said before.
- */
-
 export type HealthLight = 'unknown' | 'green' | 'amber' | 'red';
 
 export interface HealthState {
   readonly light: HealthLight;
-  /** The last report that arrived, kept through a single failure. */
   readonly report?: HealthReport;
-  /** Requests in a row that got no report. */
   readonly failures: number;
 }
 
 export type HealthObservation =
   { readonly ok: true; readonly report: HealthReport } | { readonly ok: false };
 
-/** Failures in a row before the light says the service is down. */
 export const FAILURES_BEFORE_DOWN = 2;
 
 export const initialHealth: HealthState = { light: 'unknown', failures: 0 };
@@ -43,7 +30,6 @@ function lightFor(report: HealthReport): HealthLight {
   return 'red';
 }
 
-/** Whether a response body is a health report, rather than a proxy's error page. */
 export function isHealthReport(body: unknown): body is HealthReport {
   if (!body || typeof body !== 'object') return false;
   const { status, checks } = body as { status?: unknown; checks?: unknown };
@@ -59,17 +45,9 @@ export function isHealthReport(body: unknown): body is HealthReport {
 export interface HealthLine {
   readonly label: string;
   readonly ok: boolean;
-  /** What it means for someone using the site, rather than the check's own detail. */
   readonly note: string;
 }
 
-/**
- * The report in words a visitor can use.
- *
- * The checks are named for operators (`yt-dlp`, `queue`); the popover names what each one
- * is for. The checks' own details — node names, storage use — are left out: they are
- * there for whoever runs the server.
- */
 const CHECKS: Record<string, { label: string; ok: string; error: string }> = {
   'yt-dlp': {
     label: 'Media extractor',
@@ -99,8 +77,6 @@ export function describeHealth(state: HealthState): HealthLine[] {
             : 'Checking…',
     },
   ];
-  // A report from before the server stopped answering would describe a server that is
-  // no longer there, so only the server line is shown while it is down.
   if (!state.report || state.failures >= FAILURES_BEFORE_DOWN) return lines;
 
   for (const check of state.report.checks) {
@@ -115,16 +91,10 @@ export function describeHealth(state: HealthState): HealthLine[] {
   return lines;
 }
 
-/**
- * Whether the dot is drawn at all. Not until the first answer — or the second failure in a
- * row — has said something: a grey dot on every page load reads as "something is off".
- * The button and its label are there all along.
- */
 export function showsLight(state: HealthState): boolean {
   return state.light !== 'unknown';
 }
 
-/** The light's accessible name, which is also its tooltip. */
 export function summarizeHealth(state: HealthState): string {
   switch (state.light) {
     case 'green':

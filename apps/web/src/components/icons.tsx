@@ -1,14 +1,5 @@
 import type { SVGProps } from 'react';
 
-/**
- * The icon set.
- *
- * Hand-drawn on a 24-unit grid rather than pulled from a library: there are nine of
- * them, they share one stroke weight, and shipping an icon package to draw nine shapes
- * would cost more than it saves. Every icon is `aria-hidden`; the meaning lives in the
- * label next to it.
- */
-
 type IconProps = SVGProps<SVGSVGElement> & { readonly size?: number };
 
 function Icon({ size = 20, children, ...props }: IconProps) {

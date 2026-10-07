@@ -1,15 +1,6 @@
 import type { SourceUsage, UsageDay } from '@sera/engine';
 import { formatUsage } from './stats.js';
 
-/**
- * Prints the usage counts as a table, from the admin endpoint on loopback.
- *
- * Meant to run inside the API container, where `SERA_ADMIN_TOKEN` is in the environment:
- *
- *   docker exec sera-api-1 node apps/api/dist/stats-cli.js [--days=7] [--json]
- *
- * `sudo sera stats` does exactly that, through deploy/stats.sh.
- */
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const value = (flag: string) =>

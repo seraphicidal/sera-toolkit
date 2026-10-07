@@ -6,10 +6,6 @@ export const metadata: Metadata = {
   robots: { index: false, follow: false },
 };
 
-/**
- * Where the share sheet sends a link (the manifest's `share_target`). It does no work of its
- * own: the browser reads the link out of the query and moves on to the home page at once.
- */
 export default function SharePage() {
   return <ShareRedirect />;
 }

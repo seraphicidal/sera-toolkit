@@ -5,39 +5,20 @@ import type { JobSpec } from '../jobs/runner.js';
 import { QUEUE_NAME, RedisJobBackend } from './redis.js';
 import type { JobRecord } from './types.js';
 
-/**
- * Naming rules for the Redis backend.
- *
- * These look trivial, and one of them shipped broken anyway: the queue was originally
- * `sera:jobs`, which BullMQ rejects in its constructor. Nothing caught it because the
- * Redis driver is the one path the offline suite cannot exercise, so the failure surfaced
- * as a container restart loop on a freshly provisioned server.
- */
 describe('queue naming', () => {
   it('has no colon, which BullMQ rejects', () => {
-    // BullMQ builds its own key namespace by joining on ':', so a colon in the queue
-    // name would collide with its internal layout. It throws from `new Queue(...)`.
     expect(QUEUE_NAME).not.toContain(':');
   });
 
   it('is a plain identifier', () => {
-    // Whitespace and wildcards are equally unwelcome in something used to build keys.
     expect(QUEUE_NAME).toMatch(/^[a-z0-9][a-z0-9-]*$/);
   });
 
   it('is still namespaced to this application', () => {
-    // The queue shares a Redis instance with the job records; a generic name like
-    // "jobs" would collide with anything else pointed at the same server.
     expect(QUEUE_NAME.startsWith('sera')).toBe(true);
   });
 });
 
-/**
- * The Redis driver stores a job as `JSON.stringify` and reads it back with `JSON.parse`, and
- * the in-memory backend does neither — so a spec field that does not survive that trip would
- * pass every other test in the suite. An imported post is the one spec that carries a
- * structure rather than a URL, and a job made from one cannot fall back to re-resolving.
- */
 describe('a job carrying an imported post', () => {
   it('survives the round trip the Redis driver puts it through', () => {
     const job = importedRecord('i0');
@@ -45,15 +26,6 @@ describe('a job carrying an imported post', () => {
   });
 });
 
-/**
- * The rest of the file needs a real Redis, because the failures worth catching here —
- * BullMQ's constructor validation, cross-connection pub/sub, custom job ids — are exactly
- * the ones a mock reproduces incorrectly.
- *
- *   SERA_TEST_REDIS_URL=redis://127.0.0.1:6379 npm test
- *
- * The database is flushed before the suite runs, so point it at a throwaway instance.
- */
 const REDIS_URL = process.env.SERA_TEST_REDIS_URL;
 
 function record(id: string, clientKey = 'client-a'): JobRecord {
@@ -118,7 +90,6 @@ function importedRecord(id: string): JobRecord {
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** Polls rather than sleeping a fixed amount, so a slow Redis does not flake. */
 async function until(predicate: () => boolean, timeoutMs = 5000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -144,15 +115,10 @@ describe.skipIf(!REDIS_URL)('RedisJobBackend against a live Redis', () => {
   });
 
   it('constructs without BullMQ rejecting the queue name', () => {
-    // The regression that broke the first deployment: `new Queue('sera:jobs')` throws,
-    // so the backend never finished construction and the API crash-looped.
     expect(backend.driver).toBe('redis');
   });
 
   it('accepts our job ids as BullMQ custom ids', async () => {
-    // BullMQ also rejects custom ids containing ':' and ids that round-trip through
-    // parseInt. Job ids are dashless UUIDs, but that is worth pinning down here rather
-    // than in a comment.
     const id = 'a'.repeat(32);
     await backend.submit(record(id));
     expect((await backend.get(id))?.state).toBe('queued');
@@ -167,8 +133,6 @@ describe.skipIf(!REDIS_URL)('RedisJobBackend against a live Redis', () => {
   });
 
   it('publishes patches to a subscriber', async () => {
-    // The fan-out that matters in production: the worker patches, and an API process
-    // holding the client's event stream has to hear about it over pub/sub.
     await backend.submit(record('b2'));
     const seen: JobRecord[] = [];
     const unsubscribe = backend.subscribe('b2', (r) => seen.push(r));
@@ -205,7 +169,6 @@ describe.skipIf(!REDIS_URL)('RedisJobBackend against a live Redis', () => {
   });
 
   it('hands queued jobs to a worker', async () => {
-    // End to end through BullMQ itself, which is the part that was never exercised.
     const handled: string[] = [];
     const worker = backend.startWorker((r) => {
       handled.push(r.id);
@@ -227,13 +190,8 @@ describe.skipIf(!REDIS_URL)('RedisJobBackend against a live Redis', () => {
   });
 
   it('carries a cancellation to a second process', async () => {
-    // The deployment shape this exists for: the API that handles DELETE /api/jobs/:id is
-    // not the container running the job. Cancelling has to reach the worker over Redis,
-    // or the worker keeps going, finds its workspace deleted, and reports a failure.
     const worker = new RedisJobBackend(REDIS_URL!, silentLogger());
     try {
-      // A process that has only just connected; one that has run for more than a moment is
-      // long since subscribed. Without this the patch below could beat the subscription.
       await worker.ready();
       await backend.submit(record('b8'));
 

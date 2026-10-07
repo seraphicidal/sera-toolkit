@@ -1,19 +1,11 @@
 import { checkTrim, formatTimecode, type TrimRequest } from '@sera/contracts/types';
 
-/**
- * What the trim fields amount to, for the form.
- *
- * The same `checkTrim` the server runs decides whether the times are usable, so a trim the
- * form accepts is never refused after Download is pressed. The size is an estimate: a share
- * of the whole file in proportion to the time kept, which is what the bitrate makes it.
- */
 export type TrimSummary =
   | { readonly state: 'none' }
   | { readonly state: 'invalid'; readonly message: string }
   | {
       readonly state: 'ok';
       readonly request: TrimRequest;
-      /** "Keeps 0:20 of 10:00" — absent when the length of the media is unknown. */
       readonly keptSeconds?: number;
       readonly estimatedBytes?: number;
     };
@@ -46,7 +38,6 @@ export function summarizeTrim(
   };
 }
 
-/** The placeholder for the end field: the media's own length, so the format is shown. */
 export function endPlaceholder(durationSeconds: number | undefined): string {
   return durationSeconds ? formatTimecode(durationSeconds) : 'End';
 }

@@ -16,30 +16,15 @@ import type {
 } from './types.js';
 import { YtdlpProvider } from './ytdlp-base.js';
 
-/**
- * The last resort: a page that is not a known platform and is not itself a media file.
- *
- * Two strategies, in order. If the operator has explicitly allowed the host, the
- * extractor gets a try, because it supports far more sites than SERA has providers for.
- * Otherwise the page is read once and only the media it already declares for embeds and
- * previews is offered. Nothing is crawled, no links are followed, and an explicit
- * `Disallow` is honoured — this is a reader, not a spider.
- */
 export class GenericProvider implements MediaProvider {
   readonly id = 'generic';
   readonly label = 'Web page';
   readonly hosts: readonly string[] = [];
   readonly priority = 1000;
 
-  /**
-   * Whatever a page declares for its embeds and previews, which is often several
-   * images. Audio extraction only applies when what it found was a video.
-   */
   readonly capabilities: ProviderCapabilities = declare({
     image: true,
     carousel: true,
-    // Same reason as the direct-file provider: this one claims every host no other
-    // provider wanted, so its URL is unconstrained. Never a node's problem.
     residentialFallback: false,
   });
 
@@ -50,7 +35,6 @@ export class GenericProvider implements MediaProvider {
   })();
 
   canHandle(): boolean {
-    // Runs last and claims everything that reached it.
     return true;
   }
 
@@ -66,7 +50,6 @@ export class GenericProvider implements MediaProvider {
       });
     }
 
-    // A page that declares a video is about that video; its preview image is decoration.
     const hasPlayable = page.media.some((m) => m.kind === 'video' || m.kind === 'audio');
     const selected = (
       hasPlayable ? page.media.filter((m) => m.kind !== 'image') : page.media
@@ -98,14 +81,12 @@ export class GenericProvider implements MediaProvider {
   }
 }
 
-/** Fetches and applies robots.txt, treating an unreadable file as permission. */
 async function assertRobotsAllows(url: URL, context: ProviderContext): Promise<void> {
   const robotsUrl = new URL('/robots.txt', url);
   let body: string;
   try {
     body = (await context.fetchText(robotsUrl, 512 * 1024)).body;
   } catch {
-    // A missing or unreachable robots.txt is not a refusal.
     return;
   }
   if (!isAllowed(parseRobots(body, 'sera-toolkit'), url.pathname)) {

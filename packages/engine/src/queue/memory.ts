@@ -10,14 +10,6 @@ import {
   type WorkerHandle,
 } from './types.js';
 
-/**
- * The single-process driver.
- *
- * Records live in a map and workers are promises with a concurrency gate. This is the
- * default because a self-hosted SERA is almost always one container, and requiring Redis
- * to download a video would be infrastructure for its own sake. The Redis driver exists
- * for deployments that actually need workers on separate machines.
- */
 export class MemoryJobBackend implements JobBackend {
   readonly driver = 'memory' as const;
 
@@ -29,12 +21,10 @@ export class MemoryJobBackend implements JobBackend {
   private handler: JobHandler | undefined;
   private concurrency = 1;
   private closed = false;
-  /** Resolves whenever a slot frees up or work arrives, waking the dispatch loop. */
   private wake: (() => void) | undefined;
 
   constructor(
     private readonly logger: Logger,
-    /** Finished records are dropped after this long so memory does not grow unbounded. */
     private readonly retentionMs = 60 * 60_000,
   ) {
     this.events.setMaxListeners(0);
@@ -55,16 +45,11 @@ export class MemoryJobBackend implements JobBackend {
     const current = this.records.get(id);
     if (!current) return Promise.resolve(undefined);
 
-    // A settled job stays settled. Without this, a worker that is still unwinding when a
-    // cancellation lands writes 'failed' over it a moment later, and the user watches
-    // "Cancelled" turn into "Failed" — which is exactly what the distributed deployment
-    // did, because the abort reaches the worker asynchronously.
     if (isTerminalJobState(current.state)) return Promise.resolve(current);
 
     const next: JobRecord = {
       ...current,
       ...patch,
-      // Progress must never move backwards, however the steps report it.
       ...(patch.progress
         ? {
             progress: {
@@ -120,7 +105,6 @@ export class MemoryJobBackend implements JobBackend {
     return Promise.resolve();
   }
 
-  /** Pulls work while slots are free, awaiting a wake-up when there is nothing to do. */
   private async dispatchLoop(): Promise<void> {
     while (!this.closed) {
       while (this.running.size < this.concurrency && this.waiting.length > 0) {
@@ -129,13 +113,11 @@ export class MemoryJobBackend implements JobBackend {
       }
       await new Promise<void>((resolve) => {
         this.wake = resolve;
-        // A timeout keeps the loop responsive if a wake is ever missed.
         const timer = setTimeout(resolve, 250);
         timer.unref();
       });
       this.wake = undefined;
     }
-    // Let anything still running finish before the handle resolves.
     while (this.running.size > 0) {
       await new Promise<void>((resolve) => {
         const timer = setTimeout(resolve, 50);
@@ -152,7 +134,6 @@ export class MemoryJobBackend implements JobBackend {
     try {
       await this.handler(record);
     } catch (error) {
-      // The handler owns failure reporting; reaching here means it threw unexpectedly.
       this.logger.error({ err: error, jobId: id }, 'job handler threw');
     } finally {
       this.running.delete(id);

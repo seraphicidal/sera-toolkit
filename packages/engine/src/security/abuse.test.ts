@@ -49,7 +49,6 @@ describe('AbuseGuard', () => {
     const guard = new AbuseGuard({ maxFailures: 3, windowMs: 10_000 });
     guard.recordFailure('a', undefined, start);
     guard.recordFailure('a', undefined, start + 1_000);
-    // Past the window: the counter restarts rather than carrying two failures forward.
     guard.recordFailure('a', undefined, start + 20_000);
     expect(blocked(guard, 'a', start + 20_000)).toBe(false);
   });
@@ -66,7 +65,6 @@ describe('AbuseGuard', () => {
   });
 
   it('does not extend a cooldown for requests made during it', () => {
-    // Otherwise a client retrying on a timer could never get out.
     const start = 1_000_000;
     const guard = new AbuseGuard({ maxFailures: 3, cooldownMs: 60_000 });
     for (let i = 0; i < 3; i += 1) guard.recordFailure('a', undefined, start);
@@ -84,7 +82,6 @@ describe('AbuseGuard', () => {
       const sera = error as SeraError;
       expect(sera.message).toBe("You're downloading too quickly.");
       expect(sera.hint).toContain('wait a moment');
-      // The remaining time is server-side only.
       expect(sera.toJobError()).not.toHaveProperty('detail');
     }
   });
@@ -110,8 +107,6 @@ describe('what counts as abuse', () => {
   });
 
   it('ignores the ordinary outcomes of pasting a real link', () => {
-    // Cooling someone down for pasting a private post would punish exactly the people
-    // trying hardest to use the service.
     for (const code of [
       'PRIVATE_CONTENT',
       'LOGIN_REQUIRED',

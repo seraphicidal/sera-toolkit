@@ -2,13 +2,6 @@ import { describe, expect, it } from 'vitest';
 import { createJobRequestSchema } from './schemas.js';
 import { checkTrim, formatTimecode, parseTimecode, trimSuffix } from './types.js';
 
-/**
- * The trim rules the form and the server share.
- *
- * One function decides, so a time the form accepts is never refused by the server, and a
- * time the server would refuse is caught before the visitor presses Download.
- */
-
 describe('timecodes', () => {
   it('reads m:ss, mm:ss and h:mm:ss', () => {
     expect(parseTimecode('0:07')).toBe(7);
@@ -49,7 +42,6 @@ describe('checkTrim', () => {
 
   it('treats an end at the reported length as the end of the media', () => {
     expect(ok({ start: '0:10', end: '10:00' }, 600)).toEqual({ start: 10 });
-    // Lengths are rounded by the source; a second over is still the end.
     expect(ok({ start: '0:10', end: '10:01' }, 600)).toEqual({ start: 10 });
   });
 

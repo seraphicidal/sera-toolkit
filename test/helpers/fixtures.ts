@@ -4,15 +4,6 @@ import { mkdir, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { locateTool } from '@sera/engine';
 
-/**
- * Real media, generated once with FFmpeg and reused by the end-to-end tests.
- *
- * Synthesising the fixtures rather than committing binaries keeps the repository small
- * and, more importantly, means the pipeline is exercised against files a real encoder
- * produced: containers with proper indexes, actual keyframes, a genuine audio stream.
- * A hand-written stub would pass the same assertions while proving much less.
- */
-
 export const FIXTURE_DIR = resolve(import.meta.dirname, '..', '..', '.data', 'fixtures');
 
 export const ffmpegPath = locateTool('ffmpeg', '');
@@ -20,15 +11,10 @@ export const ffprobePath = locateTool('ffprobe', '');
 export const ytdlpPath = locateTool('yt-dlp', '');
 
 export interface Fixtures {
-  /** 3s H.264 + AAC, 640x360. */
   readonly video: string;
-  /** 3s H.264 only, no audio track: what platforms call a GIF. */
   readonly silentVideo: string;
-  /** 2s MP3. */
   readonly audio: string;
-  /** A single JPEG frame. */
   readonly image: string;
-  /** A short animated GIF. */
   readonly gif: string;
 }
 
@@ -50,7 +36,6 @@ function run(command: string, args: string[]): Promise<void> {
 
 let cached: Fixtures | undefined;
 
-/** Builds the fixture set if it is not already on disk. */
 export async function ensureFixtures(): Promise<Fixtures> {
   if (cached) return cached;
   await mkdir(FIXTURE_DIR, { recursive: true });
@@ -181,7 +166,6 @@ export interface ProbeSummary {
   readonly height?: number;
 }
 
-/** Reads a produced file with ffprobe, so assertions are about real media. */
 export async function probeFile(path: string): Promise<ProbeSummary> {
   const output = await new Promise<string>((resolvePromise, rejectPromise) => {
     const child = spawn(
@@ -218,7 +202,6 @@ export async function probeFile(path: string): Promise<ProbeSummary> {
   };
 }
 
-/** First bytes of a file, for magic-number checks. */
 export async function magic(path: string, length = 12): Promise<Buffer> {
   const buffer = await readFile(path);
   return buffer.subarray(0, length);

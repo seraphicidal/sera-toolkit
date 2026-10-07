@@ -1,11 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ConfigError, loadConfig } from './config.js';
 
-/**
- * The settings whose meaning is more than "a number": here, the per-provider resolve
- * ceilings, whose 0 is documented as "use the shared one" and used to be refused instead.
- */
-
 const base = { NODE_ENV: 'test', LOG_LEVEL: 'silent' };
 
 describe('per-provider resolve timeouts', () => {

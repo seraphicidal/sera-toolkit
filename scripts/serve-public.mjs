@@ -1,19 +1,4 @@
 #!/usr/bin/env node
-/**
- * Runs SERA in production mode on this machine and puts it on the public internet.
- *
- * This is the deployment shape for someone who wants to host the service themselves
- * without renting anything: the API and its worker run locally with real limits, Next
- * serves the standalone production build, and a Cloudflare quick tunnel terminates TLS
- * and forwards to it. No account, no card, no inbound port forwarding.
- *
- * What is deliberately *not* exposed: the API binds to loopback only, so the single
- * public entry point is the web app, which proxies `/api` internally. A quick tunnel
- * publishes exactly one local port and nothing else on the machine.
- *
- *   node scripts/serve-public.mjs            # build if needed, then serve + tunnel
- *   node scripts/serve-public.mjs --local    # skip the tunnel, serve on localhost only
- */
 
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -27,16 +12,6 @@ const LOCAL_ONLY = process.argv.includes('--local');
 const API_PORT = 4000;
 const WEB_PORT = 3200;
 
-/* -------------------------------------------------------------------------- */
-/*  Secret                                                                    */
-/* -------------------------------------------------------------------------- */
-
-/**
- * A stable signing secret, generated once and kept out of git.
- *
- * It must survive restarts: handles minted before a restart stop validating otherwise,
- * and anyone mid-download would see their analysis expire for no visible reason.
- */
 function loadOrCreateSecret() {
   const path = join(ROOT, '.env.production.local');
   if (existsSync(path)) {
@@ -56,30 +31,20 @@ function loadOrCreateSecret() {
   return secret;
 }
 
-/* -------------------------------------------------------------------------- */
-/*  Production environment                                                    */
-/* -------------------------------------------------------------------------- */
-
 function productionEnv(secret) {
   return {
     ...process.env,
     NODE_ENV: 'production',
     SERA_SECRET: secret,
 
-    // Loopback only. The tunnel publishes the web port; the API is not reachable from
-    // outside this machine, which is also why trusting X-Forwarded-For is safe below.
     SERA_HOST: '127.0.0.1',
     SERA_PORT: String(API_PORT),
 
     SERA_DATA_DIR: join(ROOT, '.data', 'production'),
 
-    // The queue and the worker live inside the API process. On one machine a Redis hop
-    // between them would add a dependency and buy nothing.
     SERA_QUEUE_DRIVER: 'memory',
     SERA_WORKER_CONCURRENCY: '2',
 
-    // Limits for a public service running on someone's desktop: generous enough to be
-    // useful, small enough that one visitor cannot occupy the machine.
     SERA_MAX_FILESIZE_BYTES: String(2 * 1024 * 1024 * 1024),
     SERA_MAX_DURATION_SECONDS: String(3 * 60 * 60),
     SERA_MAX_ITEMS_PER_JOB: '25',
@@ -93,34 +58,19 @@ function productionEnv(secret) {
     SERA_RATE_LIMIT_JOBS_PER_MINUTE: '8',
     SERA_MAX_CONCURRENT_JOBS_PER_CLIENT: '2',
 
-    // Next forwards the visitor's address; without this every request would be
-    // attributed to the proxy and the rate limits would become one global bucket.
     SERA_TRUST_PROXY: 'true',
 
     LOG_LEVEL: 'info',
   };
 }
 
-/* -------------------------------------------------------------------------- */
-/*  Process management                                                        */
-/* -------------------------------------------------------------------------- */
-
 const children = new Set();
 let shuttingDown = false;
 let publicUrl;
 
-/** Restart budget: more crashes than this in the window means the fault is not transient. */
 const MAX_RESTARTS = 5;
 const RESTART_WINDOW_MS = 60_000;
 
-/**
- * Starts a supervised child process.
- *
- * A crash restarts that component with a backoff rather than taking the whole service
- * down — a worker that dies on one malformed video should not end the session for
- * everyone else. Repeated crashes inside a short window are treated as a real fault and
- * do stop the service, because restarting into the same failure forever hides it.
- */
 function supervise(label, command, argsFor, envFor, colour, onLine) {
   const prefix = `\u001b[${colour}m${label.padEnd(7)}\u001b[0m │ `;
   const crashes = [];
@@ -188,15 +138,6 @@ function shutdown(code = 0) {
 process.on('SIGINT', () => shutdown(0));
 process.on('SIGTERM', () => shutdown(0));
 
-/* -------------------------------------------------------------------------- */
-/*  Standalone output                                                         */
-/* -------------------------------------------------------------------------- */
-
-/**
- * Next's standalone bundle ships the server but not the static assets, which it expects
- * to find beside it. The container image does this copy in a COPY layer; here it has to
- * happen before the server starts, or every page loads without CSS.
- */
 function prepareStandalone() {
   const built = join(ROOT, 'apps', 'web', '.next');
   const source = join(built, 'standalone');
@@ -205,28 +146,20 @@ function prepareStandalone() {
     process.exit(1);
   }
 
-  // Served from a copy, not from .next itself. A running Node process keeps a handle on
-  // its own directory on Windows, and the next  then fails with EBUSY when
-  // it tries to clear the old output — so the running service would block its own
-  // redeploy.
   const runDir = join(ROOT, '.data', 'run', 'web');
   rmSync(runDir, { recursive: true, force: true });
   mkdirSync(runDir, { recursive: true });
   cpSync(source, runDir, { recursive: true });
 
-  // Next ships the server but not the static assets, which it expects beside it.
   cpSync(join(built, 'static'), join(runDir, 'apps', 'web', '.next', 'static'), {
     recursive: true,
   });
-  // Nor public/, which holds the favicon and the app icons.
   cpSync(join(ROOT, 'apps', 'web', 'public'), join(runDir, 'apps', 'web', 'public'), {
     recursive: true,
   });
 
   return join(runDir, 'apps', 'web', 'server.js');
 }
-
-/* -------------------------------------------------------------------------- */
 
 const secret = loadOrCreateSecret();
 const env = productionEnv(secret);
@@ -264,7 +197,6 @@ if (!LOCAL_ONLY) {
   if (!existsSync(cloudflared)) {
     console.error('[sera] cloudflared not found in .tools/. Serving locally only.');
   } else {
-    // Give the web server a moment to bind, so the tunnel's first probe succeeds.
     setTimeout(() => {
       if (shuttingDown) return;
       console.log('[sera] opening a public tunnel…');

@@ -4,24 +4,6 @@ import { Agent, buildConnector, request, type Dispatcher } from 'undici';
 import { seraError } from '../errors.js';
 import { isPublicAddress } from './ip.js';
 
-/**
- * An HTTP client that cannot be pointed at this server's own network.
- *
- * The guard lives in the DNS lookup the connector actually uses, not in a check
- * performed before the request. That ordering matters: validating a hostname and then
- * letting the socket resolve it again leaves a window in which the second answer
- * differs from the first, which is exactly what a DNS-rebinding attack arranges.
- * Filtering inside the lookup means the only addresses the socket can ever be given
- * are ones that passed.
- *
- * Requests go through undici's own `request`, not the global `fetch`. Node bundles a
- * private copy of undici, and it rejects a dispatcher built from the installed package
- * with `UND_ERR_INVALID_ARG` — so a guarded dispatcher handed to global `fetch` fails
- * every request rather than protecting them. Using undici directly keeps the dispatcher
- * and the client in the same copy of the library, and returns Node streams, which is
- * what the download path wants anyway.
- */
-
 export class BlockedAddressError extends Error {
   constructor(hostname: string) {
     super(`refusing to connect to ${hostname}: no public address`);
@@ -35,7 +17,6 @@ type LookupCallback = (
   family?: number,
 ) => void;
 
-/** A `net.connect`-compatible lookup that only ever yields public addresses. */
 function guardedLookup(
   hostname: string,
   options: { family?: number | undefined; all?: boolean | undefined; hints?: number | undefined },
@@ -61,14 +42,12 @@ function guardedLookup(
 }
 
 export interface SafeHttpOptions {
-  /** Permits private and loopback destinations. Development only. */
   readonly allowPrivateAddresses?: boolean;
   readonly connectTimeoutMs?: number;
   readonly headersTimeoutMs?: number;
   readonly bodyTimeoutMs?: number;
 }
 
-/** Builds a dispatcher whose sockets are restricted to public addresses. */
 export function createSafeDispatcher(options: SafeHttpOptions = {}): Dispatcher {
   const connectOptions = {
     timeout: options.connectTimeoutMs ?? 10_000,
@@ -83,7 +62,6 @@ export function createSafeDispatcher(options: SafeHttpOptions = {}): Dispatcher 
   });
 }
 
-/** Browser-like headers. No cookies, no auth, no referrer are ever sent. */
 export const DEFAULT_HEADERS: Readonly<Record<string, string>> = {
   'user-agent':
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
@@ -93,7 +71,6 @@ export const DEFAULT_HEADERS: Readonly<Record<string, string>> = {
 
 export type ResponseHeaders = Record<string, string | string[] | undefined>;
 
-/** Reads one header value, collapsing the repeated-header case. */
 export function header(headers: ResponseHeaders, name: string): string | undefined {
   const value = headers[name.toLowerCase()];
   if (Array.isArray(value)) return value[0];
@@ -104,25 +81,10 @@ export interface SafeFetchOptions {
   readonly dispatcher: Dispatcher;
   readonly method?: 'GET' | 'HEAD';
   readonly timeoutMs?: number;
-  /** Aborts once this many bytes have been read. */
   readonly maxBytes?: number;
   readonly maxRedirects?: number;
-  /**
-   * Refuses any hop this returns false for, the first included.
-   *
-   * For a fetch whose destinations were approved by host. The address guard keeps every hop
-   * off private networks; this keeps every hop on the hosts that were approved, because a
-   * redirect is a new destination and following one elsewhere would undo the approval.
-   */
   readonly allowUrl?: (url: URL) => boolean;
   readonly headers?: Readonly<Record<string, string>>;
-  /**
-   * Carries cookies a redirect sets to the next hop, on the same host only.
-   *
-   * Instagram answers a signed-in API request with a 302 back to the same URL that sets
-   * `mid`, `ig_did` and the like, and expects them on the way back; followed without them
-   * it redirects again until the hop budget runs out.
-   */
   readonly keepCookies?: boolean;
   readonly signal?: AbortSignal;
 }
@@ -130,12 +92,10 @@ export interface SafeFetchOptions {
 export interface SafeResponse {
   readonly status: number;
   readonly headers: ResponseHeaders;
-  /** The URL the response actually came from, after redirects. */
   readonly url: string;
   readonly body: Buffer;
 }
 
-/** An open response whose body has not been read yet. */
 export interface OpenResponse {
   readonly status: number;
   readonly headers: ResponseHeaders;
@@ -143,12 +103,6 @@ export interface OpenResponse {
   readonly body: Readable;
 }
 
-/**
- * Throws away a response body.
- *
- * undici raises an AbortError from `destroy()`, which surfaces as an uncaught exception
- * unless something is already listening, so the listener goes on first.
- */
 export function discard(body: Readable): void {
   body.on('error', () => undefined);
   body.destroy();
@@ -157,13 +111,6 @@ export function discard(body: Readable): void {
 const DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
 const DEFAULT_MAX_REDIRECTS = 5;
 
-/**
- * Opens a URL through the guarded dispatcher and returns the body unread.
- *
- * Redirects are followed one hop at a time so that every intermediate URL is re-checked
- * against the scheme rules, and so the hop budget is enforced here rather than by the
- * transport. Callers either buffer the body (`safeFetch`) or stream it to disk.
- */
 export async function safeOpen(url: URL, options: SafeFetchOptions): Promise<OpenResponse> {
   const maxRedirects = options.maxRedirects ?? DEFAULT_MAX_REDIRECTS;
   const timeout = AbortSignal.timeout(options.timeoutMs ?? 20_000);
@@ -176,7 +123,6 @@ export async function safeOpen(url: URL, options: SafeFetchOptions): Promise<Ope
       throw seraError('BLOCKED_ADDRESS', { detail: `redirect to ${current.protocol}` });
     }
     if (options.allowUrl && !options.allowUrl(current)) {
-      // Which hop, not where it pointed: this detail reaches the log.
       throw seraError('BLOCKED_ADDRESS', {
         detail:
           hop === 0
@@ -196,8 +142,6 @@ export async function safeOpen(url: URL, options: SafeFetchOptions): Promise<Ope
     } catch (cause) {
       if (isBlockedAddress(cause)) throw seraError('BLOCKED_ADDRESS', { cause });
       if (signal.aborted) throw seraError('TIMEOUT', { cause });
-      // A host that does not resolve is a typo, not an outage. Reporting it as a network
-      // error would offer a "Try again" that can never succeed.
       if (hasErrorCode(cause, 'ENOTFOUND')) {
         throw seraError('INVALID_URL', {
           message: "We couldn't find that site.",
@@ -236,7 +180,6 @@ export async function safeOpen(url: URL, options: SafeFetchOptions): Promise<Ope
   throw seraError('NETWORK_ERROR', { detail: 'redirect loop' });
 }
 
-/** `a=1; b=2` as a map, so a later Set-Cookie can replace one value. */
 function cookieJar(cookie: string | undefined): Map<string, string> {
   const jar = new Map<string, string>();
   for (const pair of (cookie ?? '').split(';')) {
@@ -257,10 +200,6 @@ function keepSetCookies(jar: Map<string, string>, setCookie: string | string[] |
   }
 }
 
-/**
- * The headers for one hop. A cookie goes only to the host it was given for: a redirect
- * elsewhere gets none, so a session cannot follow a redirect off its own site.
- */
 function hopHeaders(
   options: SafeFetchOptions,
   first: URL,
@@ -275,14 +214,10 @@ function hopHeaders(
   return headers;
 }
 
-/** Fetches a URL and buffers the body, refusing anything over `maxBytes`. */
 export async function safeFetch(url: URL, options: SafeFetchOptions): Promise<SafeResponse> {
   const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
   const opened = await safeOpen(url, options);
 
-  // A HEAD response reports the length of a body it does not send, so the size cap does
-  // not apply to it: checking it here would reject every file larger than the cap on a
-  // request that transfers nothing.
   if ((options.method ?? 'GET') === 'HEAD') {
     discard(opened.body);
     return {
@@ -318,7 +253,6 @@ async function readCapped(stream: Readable, maxBytes: number): Promise<Buffer> {
   return Buffer.concat(chunks);
 }
 
-/** Walks the cause chain looking for a specific errno code. */
 function hasErrorCode(error: unknown, code: string): boolean {
   const seen = new Set<unknown>();
   let current = error;

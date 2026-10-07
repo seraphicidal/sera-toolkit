@@ -12,7 +12,6 @@ import {
   type HealthLight,
 } from '@/lib/health';
 
-/** How often the light asks, while anyone can see it. */
 const POLL_MS = 60_000;
 const REQUEST_TIMEOUT_MS = 10_000;
 
@@ -36,14 +35,6 @@ async function observe() {
   }
 }
 
-/**
- * The status dot in the header.
- *
- * It asks `/health` — same-origin, through the web server's rewrite — once a minute, and
- * only while the tab is visible: a background tab asking every minute for hours is load
- * nobody is looking at. Coming back to the tab asks at once if the last answer is stale.
- * The rules for what the dot says are in `lib/health.ts`.
- */
 export function HealthIndicator() {
   const [state, dispatch] = useReducer(nextHealth, initialHealth);
   const [open, setOpen] = useState(false);
@@ -77,7 +68,6 @@ export function HealthIndicator() {
     };
   }, [poll]);
 
-  // Closes on Escape and on a click anywhere else, like any other popover.
   useEffect(() => {
     if (!open) return;
     const onKey = (event: KeyboardEvent) => {
@@ -100,8 +90,6 @@ export function HealthIndicator() {
   const lines = describeHealth(state);
 
   return (
-    // Positioned against the header on a phone, where the dot sits mid-row and a panel
-    // anchored to it would run off the left edge; against the dot from `sm` up.
     <div ref={root} className="sm:relative">
       <button
         type="button"

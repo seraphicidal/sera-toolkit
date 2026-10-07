@@ -3,14 +3,6 @@ import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createSafeDispatcher, safeFetch } from './http.js';
 
-/**
- * Cookies across redirects.
- *
- * Instagram answers a signed-in API request with a 302 back to the same URL that sets the
- * cookies it then expects, and redirects again without them. The guarded client carries
- * them when asked — and never sends a cookie to a host other than the one it was given for.
- */
-
 let server: Server;
 let port: number;
 const seen: { path: string; host: string; cookie?: string }[] = [];
@@ -24,7 +16,6 @@ beforeAll(async () => {
       ...(request.headers.cookie ? { cookie: request.headers.cookie } : {}),
     });
     if (path === '/check') {
-      // Instagram's shape: set cookies, send the client back to the same place.
       if (!request.headers.cookie?.includes('mid=')) {
         response.writeHead(302, {
           location: '/check',
@@ -38,8 +29,6 @@ beforeAll(async () => {
       return;
     }
     if (path === '/away') {
-      // A redirect to the same server under another name: another host, as far as a
-      // cookie is concerned.
       response.writeHead(302, { location: `http://localhost:${String(port)}/landed` });
       response.end();
       return;

@@ -29,11 +29,6 @@ function contextWithHead(contentType: string, contentLength?: number): ProviderC
 
 describe('classify', () => {
   it('trusts the server over the extension', () => {
-    // The rule the whole provider rests on: a link that *looks* like a file is not one
-    // until the server agrees. This regressed for GIFs specifically — the extension was
-    // checked before the content type rather than only in its absence — and a Wikimedia
-    // Commons file-description page (…/File:x.gif, served as text/html) came back as a
-    // GIF. The visitor got 150 KB of markup in a file named .gif.
     expect(classify('text/html', 'gif')).toBe('unknown');
     expect(classify('text/html', 'mp4')).toBe('unknown');
     expect(classify('text/html', 'png')).toBe('unknown');
@@ -54,7 +49,6 @@ describe('classify', () => {
   });
 
   it('falls back to the extension for generic binary types', () => {
-    // Object storage serves almost everything as octet-stream.
     expect(classify('application/octet-stream', 'mp4')).toBe('video');
     expect(classify('binary/octet-stream', 'flac')).toBe('audio');
     expect(classify('application/octet-stream', 'txt')).toBe('unknown');
@@ -77,8 +71,6 @@ describe('DirectFileProvider', () => {
   });
 
   it('refuses a media-looking URL that serves a web page', async () => {
-    // The resolver turns this into a retry through the page reader; what matters here is
-    // that the provider does not invent a download plan for markup.
     const error = await provider
       .resolve(
         new URL('https://commons.wikimedia.org/wiki/File:Rotating_earth_(large).gif'),
@@ -101,7 +93,6 @@ describe('DirectFileProvider', () => {
 
     expect(media.items[0]?.kind).toBe('gif');
     expect(media.items[0]?.container).toBe('gif');
-    // A GIF is worth offering as video; an image would not be.
     expect(media.items[0]?.plans.map((p) => p.label)).toEqual(['Original', 'MP4', 'WebM']);
   });
 

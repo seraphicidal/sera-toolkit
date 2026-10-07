@@ -11,14 +11,6 @@ import { sniffTextImposter } from '../util/sniff.js';
 import { WorkspaceManager } from '../storage/workspace.js';
 import { JobRunner } from './runner.js';
 
-/**
- * What arrives is not always what was asked for, and a job has to notice.
- *
- * Two ways that goes wrong, and neither of them looks like a failure at the time: a
- * source refuses with a 200 and a login page, and a format that existed when the list
- * was read stops existing before the bytes are asked for.
- */
-
 const run = promisify(execFile);
 const config = loadConfig({
   NODE_ENV: 'test',
@@ -66,7 +58,6 @@ const media: ResolvedMedia = {
   items: [item],
 };
 
-/** A runner whose only real dependency is the fetch it is told to perform. */
 function runnerWith(fetchOne: (plan: DownloadPlan, scratch: string) => Promise<string>): JobRunner {
   const runner = new JobRunner({
     config: { ...config, dataDir },
@@ -75,8 +66,6 @@ function runnerWith(fetchOne: (plan: DownloadPlan, scratch: string) => Promise<s
     workspaces,
   });
 
-  // The download is the seam. Everything either side of it — the plan ladder, the
-  // rename, the validation — is the code under test.
   const internals = runner as unknown as {
     fetchOne: (args: { plan: DownloadPlan; workspace: { scratchDir: string } }) => Promise<string>;
   };
@@ -92,7 +81,6 @@ const spec = {
   packaging: 'auto' as const,
 };
 
-/** A real MP4, because the runner validates its output with ffprobe. */
 async function realVideo(directory: string, name = 'media.mp4'): Promise<string> {
   const path = join(directory, name);
   await run(config.ffmpegPath, [
@@ -125,11 +113,8 @@ describe('a format that stops being available part-way through', () => {
 
     const result = await runner.run(spec, () => undefined);
 
-    // One step, not a fall to the bottom.
     expect(asked).toEqual(['1080p', '720p']);
     expect(result.sizeBytes).toBeGreaterThan(0);
-    // And the result says so, because a 720p file arriving under a 1080p request is only
-    // acceptable if nobody has to discover it by looking at the pixels.
     expect(result.delivery?.substituted).toEqual([{ requested: '1080p', actual: '720p' }]);
     expect(result.delivery?.backend).toBe('local');
   }, 60_000);
@@ -149,8 +134,6 @@ describe('a format that stops being available part-way through', () => {
   }, 60_000);
 
   it('does not step down for a failure a smaller format cannot answer', async () => {
-    // A bot challenge is about the request, not the rendition. Asking again in a
-    // smaller voice spends two more round trips to hear the same thing.
     const asked: string[] = [];
     const runner = runnerWith((chosen) => {
       asked.push(chosen.label);
@@ -164,7 +147,6 @@ describe('a format that stops being available part-way through', () => {
   }, 60_000);
 
   it('never substitutes a different kind of media', async () => {
-    // Someone who asked for video does not want an MP3 instead.
     const asked: string[] = [];
     const withAudio: ResolvedMedia = {
       ...media,
@@ -214,8 +196,6 @@ describe('a format that stops being available part-way through', () => {
 
 describe('a refusal that arrives as a 200', () => {
   it('is caught by what the bytes are, not by what they are called', async () => {
-    // A login page saved as media.mp4 has no magic number to contradict and no track to
-    // probe, so nothing else in the pipeline would have noticed.
     const runner = runnerWith(async (_chosen, scratch) => {
       const path = join(scratch, 'media.mp4');
       await writeFile(path, '<!DOCTYPE html>\n<html><head><title>Log in</title></head></html>');
@@ -232,7 +212,6 @@ describe('a refusal that arrives as a 200', () => {
     expect(sniffTextImposter(Buffer.from('  \n<html lang="en">'))).toBe('html');
     expect(sniffTextImposter(Buffer.from('﻿{"error":"login required"}'))).toBe('json');
     expect(sniffTextImposter(Buffer.from('<?xml version="1.0"?>'))).toBe('xml');
-    // And leaves real media alone, including a JPEG whose first byte is not printable.
     expect(sniffTextImposter(Buffer.from([0xff, 0xd8, 0xff, 0xe0]))).toBeUndefined();
     expect(sniffTextImposter(Buffer.from([0x00, 0x00, 0x00, 0x20, 0x66, 0x74, 0x79, 0x70]))).toBe(
       undefined,
@@ -245,7 +224,6 @@ describe('a refusal that arrives as a 200', () => {
     const result = await runner.run(spec, () => undefined);
     const bytes = await readFile(join(dataDir, spec.jobId, 'out', result.filename));
     expect(bytes.subarray(4, 8).toString('latin1')).toBe('ftyp');
-    // Nothing was substituted, so there is nothing to report about it.
     expect(result.delivery?.substituted).toBeUndefined();
   }, 60_000);
 });

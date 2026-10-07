@@ -1,13 +1,5 @@
 import { cx } from '@/lib/format';
 
-/**
- * The SERA.toolkit wordmark.
- *
- * Set in type rather than drawn as a logo: the name carries the weight, the tight
- * tracking on `SERA` gives it a mark-like density, and the muted `.toolkit` reads as the
- * qualifier it is. It stays legible at 14px in a footer and at 40px on the homepage
- * without a second asset, and it inherits the theme's ink colour automatically.
- */
 export function Wordmark({
   size = 'md',
   className,

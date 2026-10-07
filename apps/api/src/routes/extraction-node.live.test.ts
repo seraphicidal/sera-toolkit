@@ -8,22 +8,6 @@ import type { FastifyInstance } from 'fastify';
 import { loadConfig, seraError, SeraEngine, SeraError } from '@sera/engine';
 import { buildServer } from '../server.js';
 
-/**
- * The whole fallback, with the real node binary as a real child process.
- *
- * The in-process test beside this one proves the protocol. This proves the shipped
- * program: it spawns `apps/extractor/dist/index.js` the way an operator would, over a
- * real socket, against a real server whose own extraction is refused.
- *
- * It spawns `process.execPath` with a script path rather than a shell wrapper, which is
- * the fix for the `.cmd` shim that could not be spawned on Windows at all (`EINVAL`).
- * That failed for a reason worth keeping in mind: a spawn error is an extractor bug, not
- * a network one, so the router correctly declined to fall back and the fake never
- * exercised the path it was written for. The forcing function here is an injected probe
- * — the failure is produced where extraction actually happens, not by breaking the
- * process that runs it.
- */
-
 const here = fileURLToPath(new URL('.', import.meta.url));
 const repoRoot = resolvePath(here, '../../../..');
 const nodeEntry = join(repoRoot, 'apps/extractor/dist/index.js');
@@ -37,7 +21,6 @@ let apiDir: string;
 let nodeDir: string;
 let port: number;
 
-/** The refusal a datacentre gets, produced where extraction happens. */
 const blocked = () =>
   Promise.reject(seraError('SOURCE_BLOCKED', { detail: "Sign in to confirm you're not a bot" }));
 
@@ -121,7 +104,6 @@ describe('the shipped extraction node, as a child process', () => {
   });
 
   it('is refused without the token, from a real socket', async () => {
-    // Not app.inject: a real connection, the way anything on the internet would arrive.
     const response = await fetch(`http://127.0.0.1:${String(port)}/internal/extraction/claim`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -134,19 +116,10 @@ describe('the shipped extraction node, as a child process', () => {
   });
 
   it('refuses an address that is not the provider it was told, even from us', async () => {
-    // Dispatched straight into the registry, which is the internal API — the same shape
-    // a bug in the control plane's validation, or a compromised control plane, would
-    // produce. The node is somebody's home connection and the whole argument for it
-    // being safe is that it does a narrow, known job; "the other side checked" is not
-    // that argument. yt-dlp is a subprocess making its own connections, so nothing else
-    // on this machine would have stopped either of these.
     await until(() => engine.extractionNodes.status().find((node) => node.healthy), 30_000);
 
     const refusals: [string, string][] = [
-      // Caught by the address gate: a loopback literal never reaches the extractor.
       ['http://127.0.0.1:1/', 'BLOCKED_ADDRESS'],
-      // Caught by the provider gate: a public host is fine, but it is not YouTube's, so
-      // a task cannot borrow a provider's name to have some other address fetched.
       ['https://example.com/watch?v=x', 'UNSUPPORTED_SOURCE'],
     ];
 
@@ -166,10 +139,6 @@ describe('the shipped extraction node, as a child process', () => {
   it('takes a task the router hands it and answers over the wire', async () => {
     await until(() => engine.extractionNodes.status().find((n) => n.healthy), 30_000);
 
-    // The node's own extraction is the real thing; only the server's is refused. So the
-    // task it takes is answered by whatever its network can actually do, and for a URL
-    // no network can resolve that is a failure — which is the point: the failure comes
-    // back classified, over the real protocol, rather than the request hanging.
     const outcome = await engine.extractionNodes
       .dispatch({
         kind: 'resolve',
@@ -182,7 +151,6 @@ describe('the shipped extraction node, as a child process', () => {
       );
 
     expect(outcome).not.toBe(undefined);
-    // Either the node resolved it or it reported why. What must not happen is silence.
     if (outcome !== 'resolved') {
       expect(outcome).toHaveProperty('code');
     }

@@ -5,21 +5,17 @@ out/
 coverage/
 *.tsbuildinfo
 
-# Local runtime state
 .data/
 .tools/
 tmp/
 
-# Generated at deploy time from SERA_TLS_EMAIL.
 deploy/caddy.globals/
 
-# Environment
 .env
 .env.local
 .env.*.local
 !.env.example
 
-# Editor / OS
 .DS_Store
 Thumbs.db
 .idea/

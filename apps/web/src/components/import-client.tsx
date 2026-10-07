@@ -10,18 +10,8 @@ import { Downloader } from './downloader';
 import { ErrorPanel } from './error-panel';
 import { SpinnerIcon } from './icons';
 
-/**
- * Receives a post the visitor's own browser read, and hands it to the downloader.
- *
- * This page is the far end of the /import handshake: instagram.com, where the visitor is
- * signed in, opens it and posts the one post it is showing. The bytes never touch a SERA
- * session — there isn't one — and what arrives is checked by the server before anything is
- * fetched. Opened any other way, with no post to receive, the page explains what it is for
- * rather than spinning.
- */
 type Phase = 'waiting' | 'ready' | 'error' | 'idle';
 
-/** "instagram.com/p/<code>" from the post's canonical URL, for the provenance line. */
 function sourceLabel(url: string): string {
   try {
     const parsed = new URL(url);
@@ -35,9 +25,6 @@ export function ImportClient() {
   const [phase, setPhase] = useState<Phase>('waiting');
   const [info, setInfo] = useState<MediaInfo>();
   const [error, setError] = useState<JobError>();
-  // Read the fragment at most once. reading it clears the hash from history, and StrictMode runs
-  // this effect twice in development — without the guard the second run would see the cleared hash
-  // and fall through to the idle page. In production the effect runs once and this is a no-op.
   const fragment = useRef<{ read: boolean; value: ReturnType<typeof readImportFragment> }>({
     read: false,
     value: undefined,
@@ -69,16 +56,12 @@ export function ImportClient() {
       setPhase('error');
     };
 
-    // Transport v2: the bookmarklet read the post and navigated this tab here with it in the
-    // URL fragment. The mobile-safe path, and now the default — no popup, no postMessage.
     const fragmentResult = fragment.current.value;
     if (fragmentResult) {
       if (fragmentResult.ok) {
         setPhase('waiting');
         importMedia(fragmentResult.request, controller.signal).then(onResolved).catch(showError);
       } else {
-        // Refused before any POST. Off-CDN media on a crafted link would otherwise cost this
-        // browser's own address an abuse strike; an oversized fragment is a broken or hostile link.
         setError(
           fragmentResult.reason === 'too-large'
             ? {
@@ -99,9 +82,6 @@ export function ImportClient() {
       return () => controller.abort();
     }
 
-    // Transport v1: opened as a popup, post arrives over postMessage. Kept for a transition
-    // while old bookmarklets are still installed. No opener means someone navigated here
-    // directly, so explain the page at once rather than wait out the handshake timeout.
     if (!window.opener) {
       setPhase('idle');
       return () => controller.abort();
@@ -113,8 +93,6 @@ export function ImportClient() {
       .then(onResolved)
       .catch((caught: unknown) => {
         if (controller.signal.aborted) return;
-        // A message that arrived and was refused is a real error; nothing arriving at all is
-        // just a page opened without a post, which explains itself.
         if (caught instanceof ApiError) showError(caught);
         else setPhase('idle');
       });
@@ -128,8 +106,6 @@ export function ImportClient() {
   if (phase === 'ready' && info) {
     return (
       <div className="flex flex-1 flex-col justify-center gap-3 py-8">
-        {/* Provenance: a crafted /import link is now possible, so say plainly which post this is,
-            above everything, before any download. Plain text; the URL was validated server-side. */}
         <p className="text-[0.8125rem] text-[var(--color-ink-faint)]">
           From <span className="text-[var(--color-ink-muted)]">{sourceLabel(info.url)}</span>
         </p>
@@ -163,12 +139,6 @@ export function ImportClient() {
   );
 }
 
-/**
- * What this page is, for anyone who lands on it without a post to hand over.
- *
- * The one place SERA explains the visitor-import idea in the product itself: the post is read
- * by your own browser, signed in as you, and only the media is sent here.
- */
 function HowItWorks() {
   return (
     <section className="animate-fade-up mx-auto flex w-full max-w-[34rem] flex-1 flex-col justify-center gap-5 py-10 sm:py-12">
@@ -181,7 +151,6 @@ function HowItWorks() {
         the post and sends just the media here. Your Instagram login never reaches SERA.
       </p>
 
-      {/* The one thing a phone user most often misses, so it leads and stands out. */}
       <div className="rounded-[var(--radius-panel)] border border-[var(--color-accent)]/40 bg-[var(--color-accent)]/8 px-4 py-3.5">
         <p className="text-[0.9375rem] leading-relaxed text-[var(--color-ink)]">
           <span className="font-semibold">First — sign in to instagram.com in this browser.</span>{' '}

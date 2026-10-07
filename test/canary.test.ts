@@ -11,15 +11,6 @@ import { canaryCases, runCanary, smallestOption, type CanaryCase } from '../apps
 import { ensureFixtures, ffmpegPath, ffprobePath } from './helpers/fixtures.js';
 import { MediaServer } from './helpers/media-server.js';
 
-/**
- * The canary, against a real server and a real origin.
- *
- * What it has to prove: a source that works comes back as bytes, a source that does not
- * comes back with the API's own error code, nothing hangs past its timeout, and the canary
- * is never throttled or cooled down by the limits that protect the site from visitors —
- * while a request without the token, or with the wrong one, gets no such exemption.
- */
-
 const TOKEN = 'canary-token-0123456789abcdef';
 
 let origin: MediaServer;
@@ -47,7 +38,6 @@ beforeAll(async () => {
       SERA_FFMPEG_PATH: ffmpegPath,
       SERA_FFPROBE_PATH: ffprobePath,
       SERA_CANARY_TOKEN: TOKEN,
-      // Tight, so the exemption is visible within a handful of requests.
       SERA_RATE_LIMIT_RESOLVE_PER_MINUTE: '2',
     }),
   });
@@ -104,7 +94,6 @@ describe('runCanary', () => {
       token: TOKEN,
       cases: [direct('stuck', '/clip.mp4')],
       timeoutMs: 200,
-      // An API that never answers.
       fetch: (_input, init) =>
         new Promise((_resolve, reject) => {
           init?.signal?.addEventListener('abort', () => reject(new Error('aborted')));
@@ -131,7 +120,6 @@ describe('the canary exemption', () => {
   });
 
   it('earns no abuse strikes, however often a source fails', async () => {
-    // Fourteen failures that count toward a cooldown; twelve put a visitor on one.
     for (let i = 0; i < 14; i += 1) {
       const response = await resolveWith({ 'x-sera-canary': TOKEN }, 'not a link');
       expect(response.statusCode, response.body).toBe(400);
@@ -146,7 +134,6 @@ describe('the canary exemption', () => {
     expect(isCanaryToken('', TOKEN)).toBe(false);
     expect(isCanaryToken(undefined, TOKEN)).toBe(false);
     expect(isCanaryToken(['a', 'b'], TOKEN)).toBe(false);
-    // With no token configured, nothing is a canary — not even an empty header.
     expect(isCanaryToken('', '')).toBe(false);
     expect(isCanaryToken('anything', '')).toBe(false);
   });
@@ -160,7 +147,6 @@ describe('the canary links', () => {
     const cases = canaryCases(all);
     expect(cases.length).toBeGreaterThanOrEqual(5);
     expect(cases.map((entry) => entry.canary.label)).toContain('YouTube');
-    // Nothing that needs a sign-in: a session-only source would fail by design.
     expect(cases.some((entry) => entry.id.startsWith('instagram'))).toBe(false);
   });
 

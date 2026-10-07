@@ -7,51 +7,15 @@ import type { ProviderContext, ResolvedMedia } from './types.js';
 import { YtdlpProvider } from './ytdlp-base.js';
 import { declare } from './capabilities.js';
 
-/**
- * YouTube, including Shorts, Music and the youtu.be shortener.
- *
- * Extraction runs through named backends rather than one implicit path, because on a
- * cloud host there is more than one thing that can be true at once.
- *
- * `direct` is this worker, configured the way yt-dlp currently recommends: the player
- * clients that still return full format lists, and — when one is configured — a PO Token
- * Provider, which is the architecture yt-dlp's own PO-Token-Guide describes.
- *
- * `residential` is an authorized extraction backend on a connection YouTube does not
- * challenge. It is used only when `direct` reports the datacentre block, it is never
- * silent, and with nothing configured there simply is no fallback and the block is
- * reported as what it is.
- *
- * What was measured on this deployment, so the next person does not repeat it: the PO
- * Token Provider loads and is offered to the extractor, and YouTube still answers
- * `LOGIN_REQUIRED` / "Sign in to confirm you're not a bot" on the *player* request,
- * before streaming, for every player client. PO tokens address 403s on the stream, not
- * address reputation. Keeping the supported architecture is still right; expecting it to
- * lift an IP block is not.
- */
 export class YouTubeProvider extends YtdlpProvider {
   readonly id = 'youtube';
   readonly label = 'YouTube';
   readonly hosts = ['youtube.com', 'youtu.be', 'youtube-nocookie.com', 'music.youtube.com'];
   override readonly priority = 10;
 
-  /**
-   * Thumbnails are the image half. A video's cover art is a real image people want, and
-   * it is already resolved as part of every extraction — offering it costs one more
-   * option rather than a second round trip.
-   */
   override readonly capabilities: ProviderCapabilities = declare({
-    // The thumbnail is offered as an image option, so a link with no downloadable video
-    // still produces something.
     image: true,
-    // A playlist URL is expanded into its entries.
     gallery: true,
-    // Measured on this deployment, on every player client yt-dlp offers: the player
-    // request from Oracle answers "Sign in to confirm you're not a bot", and the same
-    // link from a residential address returns 53 formats up to 2160p. So a connected
-    // node is asked first rather than after a refusal nobody needs to pay for — and
-    // with no node connected the datacentre still tries, because a measurement is not
-    // a reason to invent a refusal.
     cloudExtraction: false,
   });
 
@@ -65,7 +29,6 @@ export class YouTubeProvider extends YtdlpProvider {
     }
 
     const segments = out.pathname.split('/').filter(Boolean);
-    // /shorts/<id>, /live/<id> and /embed/<id> are the same video as /watch?v=<id>.
     if (segments.length >= 2 && ['shorts', 'live', 'embed', 'v'].includes(segments[0]!)) {
       return this.watchUrl(segments[1]!, out);
     }
@@ -83,31 +46,14 @@ export class YouTubeProvider extends YtdlpProvider {
     return out;
   }
 
-  /** A list of separate works, unlike the carousels other providers expand. */
   protected override multiItemType(url: URL): MediaInfoType {
     return this.wantsPlaylist(url) ? 'playlist' : 'collection';
   }
 
-  /** A bare playlist URL is a list; a video that merely sits in one is still one video. */
   protected override wantsPlaylist(url: URL): boolean {
     return url.pathname.startsWith('/playlist') && url.searchParams.has('list');
   }
 
-  /**
-   * Two ways of asking, and the second exists for one measured reason.
-   *
-   * yt-dlp's player clients do not see the same format list. Measured from a residential
-   * connection on 2026.08.19: the default client returns 53 formats up to 2160p, and
-   * `android` returns 5 up to 360p — but they fail independently. When the first client's
-   * list does not contain what was asked for, or when it cannot obtain a PO token, a
-   * client with a different list is a different question rather than the same one asked
-   * twice. Anything else — a bot challenge, a private video — is not helped by it, and
-   * the ladder's own rules stop there.
-   *
-   * There is deliberately no "just give them the thumbnail" rung here. YouTube already
-   * offers the cover image alongside a successful extraction, and a rung that always
-   * succeeds would pre-empt the extraction node that could have returned the video.
-   */
   protected override strategies(
     _url: URL,
     context: ProviderContext,
@@ -126,9 +72,6 @@ export class YouTubeProvider extends YtdlpProvider {
       ladder.push({
         id: `ytdlp:${client}`,
         label: `the extractor, asking as ${client}`,
-        // Only these two. A bot challenge is about the address and a different client
-        // is challenged the same way — measured on Oracle, on every client yt-dlp
-        // offers — so running one there would delay the node that actually fixes it.
         answers: ['FORMAT_UNAVAILABLE', 'PO_TOKEN_REQUIRED'],
         run: (target, ctx) =>
           this.runExtractor(target, { ...ctx, config: withPlayerClient(ctx.config, client) }),
@@ -140,18 +83,11 @@ export class YouTubeProvider extends YtdlpProvider {
   protected override extractorArgs(_url: URL, context: ProviderContext): readonly string[] {
     const args: string[] = [];
 
-    // Nothing by default, because an audit of every client the extractor offers found
-    // none that beats letting it choose — and one, `tv`, that errors outright. The
-    // previous hardcoded `tv,default,web_safari` produced exactly the same 53 formats
-    // as no override at all, so it was carrying a claim it could no longer support.
-    // See SERA_YOUTUBE_PLAYER_CLIENTS for the measurements.
     const clients = context.config.youtube.playerClients;
     if (clients) args.push(`youtube:player_client=${clients}`);
 
     const provider = context.config.youtube.potProviderUrl;
     if (provider) {
-      // The address of the provider, never a token. Tokens are fetched by the plugin
-      // inside yt-dlp and never pass through this process or any log line.
       args.push(`youtubepot-bgutilhttp:base_url=${provider}`);
     }
     return args;
@@ -179,18 +115,12 @@ export class YouTubeProvider extends YtdlpProvider {
         ...media,
         metadata: {
           ...media.metadata,
-          // A diagnostic, and named so it cannot be mistaken for the routing field
-          // again: this used to be called `extractionBackend`, which is what the runner
-          // reads to decide a job belongs on another machine.
           extractionPath: 'direct',
           poTokenStatus: potStatus,
         },
       };
     } catch (error) {
       const failure = SeraError.from(error);
-      // Whether anywhere else is worth trying is the router's decision, not this
-      // provider's: the router is the only thing that knows which backends exist and
-      // which failures a different network could actually fix.
       context.logger.info(
         {
           provider: this.id,
@@ -208,16 +138,8 @@ export class YouTubeProvider extends YtdlpProvider {
   }
 }
 
-/**
- * Clients worth asking when the first one's format list came up short.
- *
- * `web_safari` and `android` were the two that returned anything at all in the audit;
- * the rest either errored outright or returned exactly what the default returned, and a
- * rung that duplicates the one above it is a wasted round trip rather than a fallback.
- */
 const ALTERNATE_CLIENTS = ['web_safari', 'android'] as const;
 
-/** The same configuration with one field changed, so a rung can ask differently. */
 function withPlayerClient(
   config: ProviderContext['config'],
   playerClients: string,
@@ -225,15 +147,6 @@ function withPlayerClient(
   return { ...config, youtube: { ...config.youtube, playerClients } };
 }
 
-/**
- * Offers each item's cover image alongside its video.
- *
- * The extraction already found it, so this is one more option on an item rather than a
- * second item — the picker groups by kind, so an Image tab appears next to Video and
- * Audio and nothing about ordering or counts changes. The container comes from the URL
- * here, and the download path corrects it from the bytes if YouTube served something
- * else, which it does: the same image is JPEG on one host and WebP on another.
- */
 function withThumbnailOption(media: ResolvedMedia): ResolvedMedia {
   return {
     ...media,

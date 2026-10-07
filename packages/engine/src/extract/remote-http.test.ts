@@ -5,18 +5,6 @@ import type { ResolvedMedia } from '../providers/types.js';
 import { RemoteOverHttp } from './remote-http.js';
 import { remoteBackends } from './remote.js';
 
-/**
- * The split every deployment with a separate worker actually runs.
- *
- * A node holds one connection to one process. On this deployment that process is the
- * API — and the worker, in its own container, is the one that does the downloads. It saw
- * no node at all, so a YouTube link resolved through the node and then failed at the
- * download step with the datacentre block. `fallbackAvailable: false` in the worker's
- * log, while the API's log had the node connecting a minute earlier.
- *
- * Nothing in the suite could see it: every other test runs both halves in one process.
- */
-
 const TOKEN = 'over-http-token';
 
 const media: ResolvedMedia = {
@@ -45,7 +33,6 @@ const media: ResolvedMedia = {
 
 let app: FastifyInstance;
 let base: string;
-/** What the fake control plane will do with the next dispatch. */
 let behaviour: 'resolve' | 'job' | 'fail' | 'slow' = 'resolve';
 let nodes: unknown[] = [];
 const seen: { method: string; path: string; body?: unknown }[] = [];
@@ -68,7 +55,6 @@ beforeAll(async () => {
 
   app.post('/internal/extraction/dispatch', (request) => {
     seen[seen.length - 1]!.body = request.body;
-    // Each dispatch is a new task, so its poll count starts again.
     polls = 0;
     return { taskId: 'task-1' };
   });
@@ -110,10 +96,6 @@ afterAll(async () => {
 
 const clientFor = () => new RemoteOverHttp(base, TOKEN, silentLogger(), 0, 10);
 
-/**
- * The status read is a background refresh, so the first look is empty by design. The test
- * waits for that refresh itself rather than a fixed delay, which a loaded CI runner outlasted.
- */
 async function withStatus(client: RemoteOverHttp): Promise<RemoteOverHttp> {
   client.status();
   await (client as unknown as { refresh(): Promise<void> }).refresh();
@@ -172,8 +154,6 @@ describe('a worker reaching the node through the API', () => {
   });
 
   it('treats an unreachable control plane as no nodes, not as an error', async () => {
-    // The conservative answer: work stays local rather than waiting on a machine that
-    // may not be there.
     const unreachable = new RemoteOverHttp('http://127.0.0.1:1', TOKEN, silentLogger(), 0, 10);
     await withStatus(unreachable);
     expect(unreachable.hasHealthyNode()).toBe(false);
@@ -193,7 +173,6 @@ describe('a worker reaching the node through the API', () => {
   });
 
   it('dispatches a job and gets the files the node uploaded', async () => {
-    // No transfer: both containers mount the same volume, so the path is enough.
     behaviour = 'job';
     const files = await clientFor().dispatchJob({
       kind: 'job',
@@ -216,8 +195,6 @@ describe('a worker reaching the node through the API', () => {
   });
 
   it('brings back the failure the node reported, not a generic one', async () => {
-    // A private video has to stay a private video across the process boundary, or the
-    // ladder's rule about definitive failures stops working on this deployment.
     behaviour = 'fail';
     await expect(
       clientFor().dispatch({

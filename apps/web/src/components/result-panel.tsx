@@ -5,15 +5,6 @@ import type { Job } from '@sera/contracts/types';
 import { CheckIcon, DownloadIcon } from './icons';
 import { formatBytes, pluralize } from '@/lib/format';
 
-/**
- * The finished state.
- *
- * The download starts on its own, because the user already asked for it — clicking a
- * second button to receive a file they just waited for is a step that exists only to
- * make the interface feel busy. The button remains for anyone whose browser blocked the
- * automatic navigation, and the individual files stay listed so a carousel can be taken
- * apart rather than unzipped.
- */
 export function ResultPanel({ job, onReset }: { readonly job: Job; readonly onReset: () => void }) {
   const result = job.result;
   const [started, setStarted] = useState(false);
@@ -21,8 +12,6 @@ export function ResultPanel({ job, onReset }: { readonly job: Job; readonly onRe
   useEffect(() => {
     if (!result || started) return;
     setStarted(true);
-    // A same-origin navigation to a Content-Disposition: attachment response. No anchor
-    // synthesis, no blob in memory: the file streams straight from the server to disk.
     window.location.assign(result.downloadPath);
   }, [result, started]);
 

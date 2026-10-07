@@ -1,17 +1,4 @@
 #!/usr/bin/env bash
-#
-# Provisions a fresh cloud instance to run SERA.toolkit publicly.
-#
-# Written against Oracle Cloud's always-free Ampere (arm64) instance but not specific to
-# it: it works on any Ubuntu or Oracle Linux host with a public IP. It installs Docker,
-# opens the instance firewall, writes a production .env, and starts the stack behind Caddy
-# with a real Let's Encrypt certificate.
-#
-#   curl -fsSL https://raw.githubusercontent.com/seraphicidal/sera-toolkit/main/deploy/provision.sh | bash
-#
-# or, from a checkout:  sudo bash deploy/provision.sh
-#
-# Safe to re-run: every step checks before acting.
 
 set -euo pipefail
 
@@ -19,11 +6,6 @@ REPO="${SERA_REPO:-https://github.com/seraphicidal/sera-toolkit.git}"
 INSTALL_DIR="${SERA_DIR:-/opt/sera}"
 COMPOSE_FILE="deploy/docker-compose.oracle.yml"
 
-# Compose resolves relative paths against the *project directory*, which defaults to the
-# folder holding the compose file — deploy/. Left implicit, that turns `.env` into
-# deploy/.env and the Caddyfile mount into deploy/deploy/Caddyfile, and both fail. Naming
-# the project directory fixes every relative path at once; absolute paths for the rest
-# mean these commands work from any working directory.
 COMPOSE=(
   docker compose
   --project-directory "$INSTALL_DIR"
@@ -37,10 +19,6 @@ die() { printf '\033[1;31m !! %s\033[0m\n' "$*" >&2; exit 1; }
 
 [ "$(id -u)" -eq 0 ] || die "run with sudo: sudo bash deploy/provision.sh"
 
-# ---------------------------------------------------------------------------
-# Packages
-# ---------------------------------------------------------------------------
-
 if command -v apt-get >/dev/null 2>&1; then
   PKG=apt
 elif command -v dnf >/dev/null 2>&1; then
@@ -53,14 +31,8 @@ log "Installing Docker"
 if command -v docker >/dev/null 2>&1; then
   echo "Docker already present: $(docker --version)"
 elif [ "$PKG" = apt ]; then
-  # Docker's own convenience script covers Debian and Ubuntu on arm64, and pins to the
-  # official repository rather than whatever the distro happens to ship.
   curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 20 https://get.docker.com | sh
 else
-  # Oracle Linux reports itself as `ol`, which get.docker.com does not recognise — it
-  # exits with "unsupported distribution" rather than installing anything. The CentOS
-  # repository is RHEL-compatible and is what Docker's own documentation points Oracle
-  # Linux users at.
   dnf install -y -q dnf-plugins-core
   dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
   dnf install -y -q docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
@@ -70,14 +42,6 @@ systemctl enable --now docker
 
 docker compose version >/dev/null 2>&1 || die "the docker compose plugin is missing"
 
-# ---------------------------------------------------------------------------
-# Instance firewall
-# ---------------------------------------------------------------------------
-#
-# Cloud images ship with everything but SSH closed. This is separate from the cloud
-# provider's own network rules — on Oracle you must ALSO add ingress rules for 80 and 443
-# to the subnet's security list, or the packets never reach this machine.
-
 log "Opening ports 80 and 443 on the instance"
 if command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active --quiet firewalld; then
   firewall-cmd --permanent --add-service=http
@@ -86,12 +50,7 @@ if command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active --quiet firewa
   echo "firewalld updated"
 elif command -v iptables >/dev/null 2>&1; then
   for port in 80 443; do
-    # The -C test has to name the rule exactly as it is inserted, conntrack match
-    # included. Omitting it made the test never match, so every re-run stacked another
-    # copy of both rules.
     if ! iptables -C INPUT -p tcp --dport "$port" -m conntrack --ctstate NEW -j ACCEPT 2>/dev/null; then
-      # Inserted at the top: the default rule set ends in a REJECT that would otherwise
-      # match first.
       iptables -I INPUT 1 -p tcp --dport "$port" -m conntrack --ctstate NEW -j ACCEPT
       echo "iptables: opened $port"
     fi
@@ -104,15 +63,10 @@ else
   warn "no firewall tool found; assuming ports are already open"
 fi
 
-# ---------------------------------------------------------------------------
-# Source
-# ---------------------------------------------------------------------------
-
 log "Fetching SERA.toolkit"
 if [ -d "$INSTALL_DIR/.git" ]; then
   git -C "$INSTALL_DIR" pull --ff-only
 else
-  # if/else, not `&& … ||`: with the shorthand a failed apt-get would fall through to dnf.
   if ! command -v git >/dev/null 2>&1; then
     if [ "$PKG" = apt ]; then apt-get install -y -qq git; else dnf install -y -q git; fi
   fi
@@ -120,25 +74,15 @@ else
 fi
 cd "$INSTALL_DIR"
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
-
 if [ ! -f .env ]; then
   log "Writing .env"
 
-  # The instance's own public address. sslip.io resolves 1-2-3-4.sslip.io to 1.2.3.4
-  # with no account and no registration, which is enough for Let's Encrypt to issue —
-  # so a public HTTPS deployment needs no domain purchase.
   PUBLIC_IP="${SERA_PUBLIC_IP:-$(curl -fsS --max-time 10 https://api.ipify.org || true)}"
   [ -n "$PUBLIC_IP" ] || die "could not determine the public IP; set SERA_PUBLIC_IP and re-run"
   DOMAIN="${SERA_DOMAIN:-${PUBLIC_IP//./-}.sslip.io}"
 
   SECRET="$(openssl rand -hex 32)"
 
-  # One concurrent conversion per core. FFmpeg will use everything it is given, so on a
-  # single-core instance a hard-coded 2 means two jobs each running at half speed and a
-  # machine with nothing left for the API.
   CORES="$(nproc 2>/dev/null || echo 1)"
   CONCURRENCY="${SERA_WORKER_CONCURRENCY:-$CORES}"
   [ "$CONCURRENCY" -lt 1 ] && CONCURRENCY=1
@@ -170,19 +114,12 @@ set -a
 . ./.env
 set +a
 
-# Caddy's ACME contact address, as a file rather than a directive, because the directive
-# cannot be made conditional. Rewritten on every run so editing .env is enough to change
-# it. See the comment at the top of deploy/Caddyfile.
 mkdir -p deploy/caddy.globals
 if [ -n "${SERA_TLS_EMAIL:-}" ]; then
   printf 'email %s\n' "$SERA_TLS_EMAIL" > deploy/caddy.globals/email.caddy
 else
   rm -f deploy/caddy.globals/email.caddy
 fi
-
-# ---------------------------------------------------------------------------
-# Convenience wrapper
-# ---------------------------------------------------------------------------
 
 log "Installing the sera command"
 cat > /usr/local/bin/sera <<WRAPPER
@@ -194,10 +131,6 @@ if [ "\${1:-}" = stats ]; then shift; exec bash "$INSTALL_DIR/deploy/stats.sh" "
 exec docker compose --project-directory "$INSTALL_DIR" --env-file "$INSTALL_DIR/.env" -f "$INSTALL_DIR/$COMPOSE_FILE" "\$@"
 WRAPPER
 chmod 755 /usr/local/bin/sera
-
-# ---------------------------------------------------------------------------
-# Launch
-# ---------------------------------------------------------------------------
 
 log "Pulling images"
 "${COMPOSE[@]}" pull
@@ -217,8 +150,6 @@ done
 
 "${COMPOSE[@]}" ps
 
-# Automatic updates: a systemd timer that deploys newly published images and rolls back
-# if the site is not healthy afterwards (deploy/auto-update.sh).
 log "Installing the update timer"
 SERA_DIR="$INSTALL_DIR" bash "$INSTALL_DIR/deploy/install-timers.sh"
 

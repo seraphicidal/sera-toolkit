@@ -13,14 +13,6 @@ const KIND_ICON = {
   unknown: ImageIcon,
 } as const;
 
-/**
- * Choosing which parts of a post to take.
- *
- * This is the screen that exists because a carousel is not one file. Everything starts
- * selected — that is what someone pasting a four-image post almost always wants — and
- * deselecting is the deliberate act. Each tile is a real checkbox rather than a styled
- * div, so the whole grid is keyboard- and screen-reader-navigable for free.
- */
 export function ItemPicker({
   info,
   selectedIds,
@@ -107,8 +99,6 @@ function ItemTile({
         aria-label={`Item ${item.index}, ${KIND_LABELS[item.kind === 'unknown' ? 'video' : item.kind]}`}
       />
 
-      {/* A plain img, not next/image: the source is a proxied API path whose dimensions
-          are unknown, so the optimizer would add a round trip and no benefit. */}
       <div className="relative aspect-4/3 w-full bg-[var(--color-sunken)]">
         {showThumbnail ? (
           <img

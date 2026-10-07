@@ -1,14 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { FRAGMENT_VERSION, PAYLOAD, readImportFragment, trustedImport } from './import-handshake';
 
-/**
- * The gate on the /import handshake, tested as pure input.
- *
- * The DOM plumbing around it is thin; what earns a test is the decision of whose post to
- * believe, because getting it wrong would let any page that can reach this window choose what
- * SERA fetches.
- */
-
 const opener = { name: 'opener' } as unknown as Window;
 const post = {
   type: PAYLOAD,
@@ -16,7 +8,6 @@ const post = {
   node: { code: 'DcOX3hWFiey', media_type: 1 },
 };
 
-/** A MessageEvent stand-in; jsdom is not loaded, and only these three fields are read. */
 const event = (over: { origin?: string; source?: unknown; data?: unknown }): MessageEvent =>
   ({
     origin: over.origin ?? 'https://www.instagram.com',
@@ -43,7 +34,6 @@ describe('trustedImport', () => {
 
   it('ignores a message from a window that is not the opener', () => {
     expect(trustedImport(event({ source: { name: 'someone-else' } }), opener)).toBeUndefined();
-    // And when there is no opener at all, nothing is ever trusted.
     expect(trustedImport(event({}), null)).toBeUndefined();
   });
 
@@ -64,11 +54,6 @@ describe('trustedImport', () => {
   });
 });
 
-/**
- * Transport v2: the post arrives in the URL fragment instead of over a popup message. The reader
- * must accept a well-formed one, refuse anything else, and — every time — clear the fragment from
- * history so the signed media links it carries do not linger in the URL.
- */
 describe('readImportFragment', () => {
   const POST = 'https://www.instagram.com/p/DcOX3hWFiey/';
   const cdn = 'https://scontent-vie1-1.cdninstagram.com/v/t51/x.jpg?oe=6AAA5674';
@@ -95,9 +80,7 @@ describe('readImportFragment', () => {
   it('reads an on-CDN post and clears the fragment from history', () => {
     const { win, replacedTo } = windowWith(frag(onCdn));
     expect(readImportFragment(win)).toEqual({ ok: true, request: onCdn });
-    // The hash is gone from the current history entry.
     expect(replacedTo()).toBe('/import');
-    // fbcdn.net is admitted too.
     expect(
       readImportFragment(windowWith(frag(image('https://instagram.xx.fbcdn.net/v/a.mp4'))).win),
     ).toEqual({ ok: true, request: image('https://instagram.xx.fbcdn.net/v/a.mp4') });
@@ -113,10 +96,10 @@ describe('readImportFragment', () => {
   it('refuses (ok:false) a post whose media is not on Instagram’s CDN, so nothing is POSTed', () => {
     for (const bad of [
       'https://evil.example/x.jpg',
-      'http://scontent.cdninstagram.com/x.jpg', // not https
-      'https://scontent.cdninstagram.com:8443/x.jpg', // a port
-      'https://user:pw@scontent.cdninstagram.com/x.jpg', // credentials
-      'https://cdninstagram.com.evil.example/x.jpg', // lookalike host
+      'http://scontent.cdninstagram.com/x.jpg',
+      'https://scontent.cdninstagram.com:8443/x.jpg',
+      'https://user:pw@scontent.cdninstagram.com/x.jpg',
+      'https://cdninstagram.com.evil.example/x.jpg',
       'not-a-url',
     ]) {
       expect(readImportFragment(windowWith(frag(image(bad))).win), bad).toEqual({

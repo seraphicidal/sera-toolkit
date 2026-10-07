@@ -16,17 +16,6 @@ import { readViaEmbed, videoBaseFromUrl } from './reddit-embed.js';
 import type { DownloadPlan, ProviderContext, ResolvedItem, ResolvedMedia } from './types.js';
 import { YtdlpProvider } from './ytdlp-base.js';
 
-/**
- * Reddit posts: images, galleries, hosted video, GIFs and direct media links.
- *
- * Reddit is the one provider here that cannot work anonymously from a server. Both the
- * page and its `.json` endpoint answer `403 Blocked` to hosted address ranges, and the
- * extractor's own answer from this deployment is "Account authentication is required".
- * That is Reddit's documented position, not a bug to route around, so this provider
- * talks to the Data API with an application-only OAuth token instead.
- *
- * With no credentials configured it says so plainly rather than failing per link.
- */
 export class RedditProvider extends YtdlpProvider {
   readonly id = 'reddit';
   readonly label = 'Reddit';
@@ -35,23 +24,10 @@ export class RedditProvider extends YtdlpProvider {
 
   private tokens: RedditTokenSource | undefined;
 
-  /**
-   * Images and galleries reach the datacentre; `v.redd.it` does not.
-   *
-   * Measured from this deployment: `i.redd.it` answers 200, `preview.redd.it` answers
-   * 403, and `v.redd.it` answers 403 for the progressive `DASH_720.mp4?source=fallback`
-   * file while serving its `DASHPlaylist.mpd` and `HLSPlaylist.m3u8` manifests with a
-   * 206. So hosted video goes through the manifest, which is the only route to it that
-   * this host can actually take — and the one that carries the audio track Reddit stores
-   * separately.
-   */
   override readonly capabilities: ProviderCapabilities = declare({
     image: true,
     carousel: true,
     gif: true,
-    // An app registration, not a person's account: the client-credentials grant. It is
-    // no longer *required* — the embed route works without one — but it is still first,
-    // because it is the supported API and it sees more.
     authenticatedMode: true,
     requiresOauth: false,
   });
@@ -72,20 +48,6 @@ export class RedditProvider extends YtdlpProvider {
     return true;
   }
 
-  /**
-   * The supported API when there is one, and what Reddit publishes for embedding when
-   * there is not.
-   *
-   * Reddit refuses hosted address ranges on every anonymous route to the *data* — the
-   * page, `.json`, `api.reddit.com`, `old.reddit.com` — and this does not argue with
-   * that. It asks a different question instead: what does Reddit hand a site that quotes
-   * one of its posts? Measured from the blocked address, `embed.reddit.com`,
-   * `/oembed` and the `.rss` feed all answer 200, `i.redd.it` serves the image, and the
-   * `v.redd.it` streaming manifests serve while only the progressive file is refused.
-   *
-   * So an installation with no app registration is no longer told "Reddit needs an
-   * account". It gets the post.
-   */
   protected override strategies(
     _url: URL,
     _context: ProviderContext,
@@ -94,9 +56,6 @@ export class RedditProvider extends YtdlpProvider {
       {
         id: 'oauth-api',
         label: "Reddit's Data API, with the operator's app registration",
-        // A `v.redd.it` URL is a media host, not a post: the API has nothing to say
-        // about it, and the job pipeline asks about one every time it re-resolves a
-        // video. The embed rung answers that from the URL alone.
         available: (ctx) => this.credentialsFrom(ctx) !== undefined,
         run: (target, ctx) => {
           if (videoBaseFromUrl(target)) {
@@ -119,8 +78,6 @@ export class RedditProvider extends YtdlpProvider {
   }
 
   private async viaApi(url: URL, context: ProviderContext): Promise<ResolvedMedia> {
-    // A bare i.redd.it link is a file, not a post; the direct provider already claimed
-    // those, so anything arriving here with a media host is a link Reddit redirected.
     const postId = postIdFrom(url);
     if (!postId) {
       throw seraError('UNSUPPORTED_SOURCE', {
@@ -139,7 +96,6 @@ export class RedditProvider extends YtdlpProvider {
     this.tokens ??= new RedditTokenSource(credentials, context.logger);
     const post = await fetchPost(postId, this.tokens, credentials);
 
-    // A crosspost carries its media on the original, not on the share.
     const source = post.crosspost_parent_list?.[0] ?? post;
     const items = itemsFrom(source, context.config.maxItemsPerJob);
     if (!items.length) {
@@ -150,9 +106,6 @@ export class RedditProvider extends YtdlpProvider {
     }
 
     const author = nonEmpty(post.author);
-    // The runner hands `url` to the extractor for a ytdlp plan. For a video post that
-    // has to be the manifest: the post page is refused to this host, and the manifest is
-    // what carries both streams.
     const extractFrom = manifestUrlFor(source) ?? url.toString();
 
     return {
@@ -177,16 +130,11 @@ export class RedditProvider extends YtdlpProvider {
     return {
       clientId,
       clientSecret,
-      // Reddit's API rules ask for a unique agent that names the application and its
-      // version. Nothing identifying about the visitor goes in it.
       userAgent: `server:sera.toolkit:v${context.config.version} (by /u/sera-toolkit)`,
     };
   }
 }
 
-/* -------------------------------------------------------------------------- */
-
-/** `/r/<sub>/comments/<id>/<slug>`, or a `redd.it/<id>` short link. */
 export function postIdFrom(url: URL): string | undefined {
   const comments = /\/comments\/([a-z0-9]+)/i.exec(url.pathname)?.[1];
   if (comments) return comments;
@@ -196,10 +144,6 @@ export function postIdFrom(url: URL): string | undefined {
   return undefined;
 }
 
-/**
- * Reddit escapes `&` in the URLs it embeds in JSON, and a URL with a literal `&amp;`
- * in its query is a 403 from the CDN.
- */
 function unescapeUrl(value: string): string {
   return value.replace(/&amp;/g, '&');
 }
@@ -220,7 +164,6 @@ function imagePlan(url: string, container: ContainerFormat, width?: number, heig
   };
 }
 
-/** Reddit records a MIME type per gallery entry; it is better than the URL's extension. */
 function containerFromMime(mime: string | undefined, url: string): ContainerFormat {
   const subtype = /^image\/([a-z0-9+.-]+)$/i.exec(mime ?? '')?.[1]?.toLowerCase();
   if (subtype === 'jpg' || subtype === 'jpeg') return 'jpg';
@@ -245,8 +188,6 @@ function galleryItems(post: RedditPost, limit: number): ResolvedItem[] {
     const media: RedditMediaMetadata | undefined = id ? metadata[id] : undefined;
     if (media?.status !== 'valid') continue;
 
-    // An animated entry carries both a GIF and an MP4; the MP4 is smaller and plays
-    // everywhere, so it leads, with the real GIF alongside it.
     const still = nonEmpty(media.s?.u);
     const gif = nonEmpty(media.s?.gif);
     const mp4 = nonEmpty(media.s?.mp4);
@@ -312,14 +253,6 @@ function galleryItems(post: RedditPost, limit: number): ResolvedItem[] {
   return items;
 }
 
-/**
- * The URL a Reddit video is actually reachable at, and how to fetch it.
- *
- * The progressive file the API points at first is refused to this host; the manifests
- * beside it are not. A manifest also carries the separate audio track, which is the
- * single most common complaint about tools that take the fallback and hand back a silent
- * video.
- */
 function videoSource(video: RedditVideo): { url: string; viaManifest: boolean } | undefined {
   const manifest = nonEmpty(video.hls_url) ?? nonEmpty(video.dash_url);
   if (manifest) return { url: unescapeUrl(manifest), viaManifest: true };
@@ -328,7 +261,6 @@ function videoSource(video: RedditVideo): { url: string; viaManifest: boolean } 
   return undefined;
 }
 
-/** The manifest a video post is assembled from, when it is one. */
 export function manifestUrlFor(post: RedditPost): string | undefined {
   const video = post.secure_media?.reddit_video ?? post.media?.reddit_video;
   const preview = post.preview?.reddit_video_preview;
@@ -342,8 +274,6 @@ function videoItem(video: RedditVideo, post: RedditPost): ResolvedItem | undefin
   const { url, viaManifest } = source;
   const isGif = video.is_gif === true;
 
-  // A manifest is a playlist, not bytes: the extractor assembles it and merges the audio.
-  // A progressive file is just a file.
   const fetchPlan: DownloadPlan['fetch'] = viaManifest
     ? { via: 'ytdlp', selector: 'best', merge: 'mp4' }
     : { via: 'direct', url };
@@ -356,8 +286,6 @@ function videoItem(video: RedditVideo, post: RedditPost): ResolvedItem | undefin
       detail: [
         'MP4',
         video.width && video.height ? `${video.width} × ${video.height}` : undefined,
-        // Reddit stores sound as a separate stream. Saying so is better than letting
-        // someone discover it after the download.
         video.has_audio === false || isGif ? 'silent' : undefined,
       ]
         .filter(Boolean)
@@ -398,7 +326,6 @@ function videoItem(video: RedditVideo, post: RedditPost): ResolvedItem | undefin
   };
 }
 
-/** Everything a post can carry, in the order Reddit lists it. */
 export function itemsFrom(post: RedditPost, limit: number): ResolvedItem[] {
   if (post.is_gallery) {
     const gallery = galleryItems(post, limit);
@@ -411,7 +338,6 @@ export function itemsFrom(post: RedditPost, limit: number): ResolvedItem[] {
     if (item) return [item];
   }
 
-  // A link post whose destination is an image Reddit itself hosts.
   const direct = nonEmpty(post.url_overridden_by_dest) ?? nonEmpty(post.url);
   if (direct && /^https:\/\/i\.redd\.it\//i.test(direct)) {
     const url = unescapeUrl(direct);
@@ -433,7 +359,6 @@ export function itemsFrom(post: RedditPost, limit: number): ResolvedItem[] {
     ];
   }
 
-  // An animated preview Reddit generated for an external GIF.
   const preview = post.preview?.reddit_video_preview;
   if (preview) {
     const item = videoItem({ ...preview, is_gif: true }, post);

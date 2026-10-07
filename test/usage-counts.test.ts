@@ -10,11 +10,6 @@ import { formatUsage } from '../apps/api/src/stats.js';
 import { ensureFixtures, ffmpegPath, ffprobePath, type Fixtures } from './helpers/fixtures.js';
 import { MediaServer } from './helpers/media-server.js';
 
-/**
- * Usage counts through the real routes: what a visitor's resolve, job and download add,
- * what the canary adds (nothing), and who may read them.
- */
-
 const ADMIN = 'admin-token-0123456789abcdef0123456789';
 const CANARY = 'canary-token-0123456789abcdef012345678';
 
@@ -68,7 +63,6 @@ async function usage(): Promise<{ days: UsageDay[]; totals: Record<string, Sourc
   return response.json();
 }
 
-/** A resolve, a job and its download, as a visitor or as the canary. */
 async function visit(headers: Record<string, string> = {}): Promise<number> {
   const resolved = await app.inject({
     method: 'POST',
@@ -96,7 +90,6 @@ async function visit(headers: Record<string, string> = {}): Promise<number> {
   expect(job.state).toBe('ready');
   const download = await app.inject({ method: 'GET', url: job.result!.downloadPath, headers });
   expect(download.statusCode).toBe(200);
-  // The bytes are counted once the response has gone out.
   await new Promise((resolve) => setTimeout(resolve, 50));
   return download.rawPayload.length;
 }
@@ -124,7 +117,6 @@ describe('a visitor', () => {
 
     const counted = await usage();
     expect(counted.totals.direct!.resolves.failed[code]).toBeGreaterThanOrEqual(1);
-    // Nothing that names the link, the origin or the visitor is anywhere in the counts.
     const raw = JSON.stringify(counted);
     expect(raw).not.toContain('missing-file');
     expect(raw).not.toContain('127.0.0.1');
@@ -200,7 +192,6 @@ describe('sera stats', () => {
 
     expect(text).toContain('SERA usage, 2026-10-03 to 2026-10-04 (UTC)');
     const row = text.split('\n').find((line) => line.startsWith('youtube'))!;
-    // Resolves counts both outcomes; the failures are listed by code, most frequent first.
     expect(row.split(/\s{2,}/)).toEqual([
       'youtube',
       '12',

@@ -1,14 +1,3 @@
-# SERA.toolkit — production stack.
-#
-# Four services: the web front end, the API, one or more workers, and Redis to connect
-# them. Only the web container publishes a port; it proxies /api internally, so the whole
-# deployment is one origin and the API is never directly reachable from outside.
-#
-#   cp .env.example .env   # then set SERA_SECRET
-#   docker compose up --build
-#
-# For a single-machine install without Redis, see docker-compose.standalone.yml.
-
 name: sera-toolkit
 
 services:
@@ -30,7 +19,6 @@ services:
     read_only: true
     tmpfs:
       - /tmp
-      # Next's fetch cache. A revalidated page is kept in memory (next.config.ts).
       - /app/apps/web/.next/cache
     security_opt:
       - no-new-privileges:true
@@ -45,14 +33,11 @@ services:
       SERA_SECRET: ${SERA_SECRET:?set SERA_SECRET in .env — see .env.example}
       SERA_QUEUE_DRIVER: redis
       SERA_REDIS_URL: redis://redis:6379
-      # Workers run in their own containers, so the API only serves HTTP.
       SERA_EMBEDDED_WORKER: 'false'
       SERA_DATA_DIR: /data
       SERA_RETENTION_SECONDS: ${SERA_RETENTION_SECONDS:-1800}
       SERA_MAX_FILESIZE_BYTES: ${SERA_MAX_FILESIZE_BYTES:-4294967296}
       SERA_MAX_DURATION_SECONDS: ${SERA_MAX_DURATION_SECONDS:-14400}
-      # The web container is the only thing in front of the API, so its address is the
-      # one X-Forwarded-For that can be trusted.
       SERA_TRUST_PROXY: 'true'
       LOG_LEVEL: ${LOG_LEVEL:-info}
     volumes:
@@ -82,7 +67,6 @@ services:
       SERA_MAX_DURATION_SECONDS: ${SERA_MAX_DURATION_SECONDS:-14400}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     volumes:
-      # The same volume as the API: the worker writes the file, the API serves it.
       - media:/data
     depends_on:
       redis:
@@ -90,20 +74,14 @@ services:
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
-    # Scale with `docker compose up --scale worker=4`.
     deploy:
       resources:
         limits:
-          # Transcoding is the one thing here that will happily eat a whole host.
           cpus: '${SERA_WORKER_CPUS:-2}'
           memory: ${SERA_WORKER_MEMORY:-2g}
 
   redis:
     image: redis:7.4-alpine
-    # noeviction, not an LRU policy: this Redis holds a work queue, not a cache. An
-    # eviction policy would drop live job records and BullMQ's bookkeeping to stay under
-    # the cap. With noeviction a full Redis refuses new writes instead, which surfaces as
-    # a job that would not start. deploy/docker-compose.oracle.yml explains it at length.
     command: >
       redis-server
       --save ''
@@ -120,6 +98,4 @@ services:
       - no-new-privileges:true
 
 volumes:
-  # Deliberately not a bind mount: this holds media that is meant to be deleted, and a
-  # named volume makes `docker compose down -v` actually remove it.
   media:

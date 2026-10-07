@@ -1,11 +1,3 @@
-/**
- * Runtime validation for everything that crosses the network boundary.
- *
- * Only the server imports this module; the browser bundle imports `@sera/contracts/types`
- * instead so it never pays for the validator. The drift guards at the bottom fail
- * the build if the two definitions ever drift apart.
- */
-
 import { z } from 'zod';
 import { checkTrim, TIMECODE_PATTERN } from './types.js';
 import type {
@@ -19,10 +11,6 @@ import type {
   PackagingMode,
   ResolveRequest,
 } from './types.js';
-
-/* -------------------------------------------------------------------------- */
-/*  Primitives                                                                */
-/* -------------------------------------------------------------------------- */
 
 export const mediaKindSchema = z.enum(['video', 'audio', 'image', 'gif', 'unknown']);
 
@@ -106,48 +94,22 @@ export const downloadOptionSchema = z.object({
   recommended: z.boolean(),
 });
 
-/* -------------------------------------------------------------------------- */
-/*  Request bodies                                                            */
-/* -------------------------------------------------------------------------- */
-
-/** Hard ceiling on submitted URL length; nothing legitimate approaches this. */
 export const MAX_URL_LENGTH = 2048;
 
-/** Hard ceiling on a user-supplied filename stem, before sanitization. */
 export const MAX_FILENAME_LENGTH = 200;
 
-/**
- * Ceiling for a signed token that embeds one URL: an option or a thumbnail.
- *
- * It scales with MAX_URL_LENGTH: base64 costs a third more, plus the JSON envelope and a
- * 43-character signature.
- */
 export const MAX_TOKEN_LENGTH = 4096;
 
-/**
- * Ceiling for a resolution token, which can embed many.
- *
- * An ordinary resolution carries one URL and stays well under MAX_TOKEN_LENGTH. An
- * imported post carries every media URL the server approved, because a job made from it
- * cannot re-resolve — and a 20-slide mixed carousel of Instagram's signed CDN URLs
- * measures about 24,000 characters. It was 4,096, which would have refused every
- * carousel at the moment someone pressed Download. The import endpoint refuses to mint a
- * token over this, so the ceiling is enforced where the token is made rather than
- * discovered where it is used.
- */
 export const MAX_INFO_TOKEN_LENGTH = 40_000;
 
-/** Ceiling on slides accepted in one imported post, before `maxItemsPerJob` applies. */
 export const MAX_IMPORTED_ITEMS = 50;
 
-/** Ceiling on how many options one job may combine. */
 export const MAX_OPTIONS_PER_JOB = 64;
 
 export const resolveRequestSchema = z.object({
   url: z.string().trim().min(1, 'Enter a link.').max(MAX_URL_LENGTH, 'That link is too long.'),
 });
 
-/* A null is how Instagram spells "absent", and the drift-free types spell it undefined. */
 function withoutNulls(value: unknown): unknown {
   if (value === null) return undefined;
   if (Array.isArray(value)) return value.map(withoutNulls);
@@ -167,7 +129,6 @@ const importedCandidateSchema = z.object({
   height: z.number().int().nonnegative().max(20_000).optional(),
 });
 
-/** One slide. Unknown keys are stripped, which is what keeps viewer data out. */
 const importedMediaSchema = z.object({
   id: z.string().max(64).optional(),
   code: z.string().max(64).optional(),
@@ -201,10 +162,6 @@ const timecode = z
   .max(9)
   .regex(TIMECODE_PATTERN, 'Use m:ss or h:mm:ss for the trim times.');
 
-/**
- * A trim, checked for shape and order here; against the media's real length in the job
- * service, which has it from the signed option. Both use `checkTrim`.
- */
 export const trimRequestSchema = z
   .object({ start: timecode.optional(), end: timecode.optional() })
   .superRefine((trim, context) => {
@@ -212,7 +169,6 @@ export const trimRequestSchema = z
     if (!checked.ok) context.addIssue({ code: 'custom', message: checked.message });
   });
 
-/** A language code as yt-dlp reports it: letters, digits, `-` and `_`, never leading with `-`. */
 export const subtitleRequestSchema = z
   .object({
     lang: z
@@ -238,29 +194,11 @@ export const createJobRequestSchema = z.object({
   subtitles: subtitleRequestSchema.optional(),
 });
 
-/* -------------------------------------------------------------------------- */
-/*  Drift guards                                                              */
-/* -------------------------------------------------------------------------- */
-
-/**
- * True only when `A` and `B` are the same type.
- * Used for the unions, where a single identity check is exactly right.
- */
 type Exact<A, B> =
   (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 
-/** Fails to compile unless the argument resolves to `true`. */
 type Assert<T extends true> = T;
 
-/**
- * Structural equality for object types: same keys, same optionality, same value types.
- *
- * The identity check above cannot be used for these. `detail?: string` and
- * `detail?: string | undefined` describe the same values but are not the same
- * declaration, and zod always infers the second spelling — so an identity check reports
- * drift on every optional field and would have to be switched off, taking the real
- * guarantee with it. Comparing the three properties that matter keeps the guard useful.
- */
 type OptionalKeys<T> = { [K in keyof T]-?: object extends Pick<T, K> ? K : never }[keyof T];
 
 type Mutual<A, B> = [Exclude<A, B>] extends [never]
@@ -300,13 +238,6 @@ type _CreateJobMatches = Assert<
   >
 >;
 
-/*
- * One direction only, deliberately: what the server parses must fit the type the engine
- * reads. The node nests readonly arrays two levels deep, which the structural guard above
- * cannot compare without a Writable that recurses, and the property worth enforcing is
- * this one anyway.
- */
 type _ImportFits = Assert<z.infer<typeof importRequestSchema> extends ImportRequest ? true : false>;
 
-/** Strips `readonly` so inferred zod shapes can be compared against the public types. */
 type Writable<T> = { -readonly [K in keyof T]: T[K] };

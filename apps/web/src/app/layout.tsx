@@ -14,14 +14,12 @@ export const metadata: Metadata = {
   description:
     'Paste a link and get the media. A universal downloader and converter for publicly accessible video, audio, images and GIFs.',
   applicationName: 'SERA.toolkit',
-  // The manifest (app/manifest.ts) is linked by Next itself.
   icons: {
     icon: [{ url: '/icon.svg', type: 'image/svg+xml' }],
     apple: '/icons/apple-touch-icon.png',
   },
   appleWebApp: { capable: true, title: 'SERA', statusBarStyle: 'default' },
   robots: { index: true, follow: true },
-  // No analytics, no third-party fonts, no external anything.
   other: { referrer: 'no-referrer' },
 };
 
@@ -38,7 +36,6 @@ export default function RootLayout({ children }: { readonly children: React.Reac
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
-        {/* Runs before first paint so dark mode never flashes white. */}
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
       <body className="min-h-dvh antialiased">
@@ -52,7 +49,6 @@ export default function RootLayout({ children }: { readonly children: React.Reac
         <div className="mx-auto flex min-h-dvh w-full max-w-[46rem] flex-col px-5 sm:px-6">
           <header className="relative flex items-center justify-between gap-4 py-5">
             <HeaderHomeLink />
-            {/* `ml-auto` keeps the controls on the right when there is no wordmark. */}
             <div className="ml-auto flex items-center gap-2 sm:gap-3">
               <HealthIndicator />
               <Link
@@ -78,8 +74,6 @@ export default function RootLayout({ children }: { readonly children: React.Reac
               >
                 How this works
               </Link>
-              {/* Unobtrusive, but present: knowing the build is what makes a bug report
-                  actionable. */}
               <span className="tabular text-[var(--color-ink-faint)]/70">v{SERA_VERSION}</span>
             </div>
           </footer>

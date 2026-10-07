@@ -19,14 +19,6 @@ import {
 } from './helpers/fixtures.js';
 import { MediaServer } from './helpers/media-server.js';
 
-/**
- * Trimming, through the real pipeline, read back with ffprobe.
- *
- * The fixture video is 3 s of H.264 with a single keyframe, at 0 — so a cut from 0:01 cannot
- * be a copy without starting a second early, and has to be re-encoded, while a cut from 0:00
- * or of the audio is accurate as a copy. Every output's length is measured, not assumed.
- */
-
 let origin: MediaServer;
 let fixtures: Fixtures;
 let app: FastifyInstance;
@@ -95,7 +87,6 @@ async function runJob(payload: Record<string, unknown>): Promise<Job> {
   }
 }
 
-/** Downloads a finished job's file and measures it. */
 async function measure(job: Job) {
   const response = await app.inject({ method: 'GET', url: job.result!.downloadPath });
   expect(response.statusCode).toBe(200);
@@ -183,7 +174,6 @@ describe('what the server refuses', () => {
   it('times past the end of the media, measured from the signed option', async () => {
     const info = await resolveUrl(origin.url('/clip.mp4'));
     const video = option(info, 'video', 'Original');
-    // Only when the resolution knew the length; a link without one is checked at the cut.
     if (info.items[0]?.duration !== undefined) {
       expect(
         await refused({ infoId: info.id, optionIds: [video.id], trim: { start: '5:00' } }),
@@ -235,19 +225,15 @@ describe('the pieces', () => {
 
   it("trusts yt-dlp's section only when it is readable and the right length", () => {
     const video = { video: {} };
-    // A 7 s cut that came back 7 s, or close: kept.
     expect(sectionIsUsable({ ...video, durationSeconds: 7.04 }, { start: 5, end: 12 })).toBe(true);
-    // Debian's FFmpeg 5.1 with Vimeo's DASH streams: a second long, or no file at all.
     expect(sectionIsUsable({ ...video, durationSeconds: 0.995 }, { start: 5, end: 12 })).toBe(
       false,
     );
     expect(sectionIsUsable(undefined, { start: 5, end: 12 })).toBe(false);
     expect(sectionIsUsable({ durationSeconds: 7 }, { start: 5, end: 12 })).toBe(false);
-    // To the end: measured against the item's length when it is known.
     expect(sectionIsUsable({ ...video, durationSeconds: 55 }, { start: 5 }, 60)).toBe(true);
     expect(sectionIsUsable({ ...video, durationSeconds: 20 }, { start: 5 }, 60)).toBe(false);
     expect(sectionIsUsable({ ...video, durationSeconds: 20 }, { start: 5 })).toBe(true);
-    // A long cut may be a tenth off: keyframes and fragment edges.
     expect(sectionIsUsable({ ...video, durationSeconds: 595 }, { start: 0, end: 600 })).toBe(true);
   });
 
@@ -256,13 +242,11 @@ describe('the pieces', () => {
     await mkdir(watched, { recursive: true });
     let stalls = 0;
     const stop = watchGrowth(watched, 300, () => (stalls += 1));
-    // Growing every 100 ms: never a stall, however long it takes.
     for (let i = 0; i < 8; i += 1) {
       await appendFile(join(watched, 'media.part'), 'x'.repeat(1024));
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
     expect(stalls).toBe(0);
-    // Then nothing for longer than the limit: one stall, reported once.
     await new Promise((resolve) => setTimeout(resolve, 700));
     expect(stalls).toBe(1);
     stop();

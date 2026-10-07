@@ -6,18 +6,6 @@ import type { Logger } from '../logging.js';
 import type { ResolvedMedia } from '../providers/types.js';
 import type { ExtractionBackend, NetworkClass } from './router.js';
 
-/**
- * Work handed to an extraction node on another network.
- *
- * The node dials out and asks for work; nothing listens on it and nothing routable
- * reaches it. That is the whole security story: a residential machine that accepts no
- * connections cannot be turned into an open proxy, however the credential is handled.
- *
- * Two kinds of work, and it has to be both. A media URL YouTube signs is bound to the
- * address that asked for it — the same URL answers 206 at home and 403 on the server —
- * so a resolution taken on one network and a download taken on another do not compose.
- * A node that resolves a link owns the download too.
- */
 export type RemoteTaskKind = 'resolve' | 'job';
 
 export interface RemoteTask {
@@ -25,22 +13,12 @@ export interface RemoteTask {
   readonly kind: RemoteTaskKind;
   readonly url: string;
   readonly providerId: string;
-  /** When set, only a node on this kind of connection may take it. */
   readonly networkClass?: NetworkClass;
-  /** For a job: which plan to produce, by the same key the local runner uses. */
   readonly planKeys?: readonly string[];
   readonly filename?: string;
-  /** For a job: the part of its one item to keep, in seconds. The node does the cutting. */
   readonly trim?: TrimRange;
-  /**
-   * What the node must hold beyond the code to run the task: `instagram-session` for a post
-   * only an account can read. Sent as a requirement, never as the credential itself, which
-   * stays on the node.
-   */
   readonly requires?: readonly NodeFeature[];
-  /** Nodes not to give it to: those that already tried it and could not. */
   readonly avoid?: readonly string[];
-  /** For a job: a subtitle track to embed or deliver, fetched by the node with the media. */
   readonly subtitles?: {
     readonly lang: string;
     readonly auto: boolean;
@@ -50,15 +28,8 @@ export interface RemoteTask {
   readonly createdAt: number;
 }
 
-/**
- * What a job can ask of a node beyond downloading, each a field a node from before it was
- * added would not know to read. Such a node would not refuse the task; it would ignore the
- * field and deliver the wrong file — the whole video for a trim, no subtitles for an embed —
- * so a node says which it understands, and a task needing one only goes to a node that does.
- */
 export type NodeFeature = 'trim' | 'subtitles' | 'instagram-session';
 
-/** The features a task cannot be done correctly without. */
 export function requiredFeatures(
   task: Pick<RemoteTask, 'trim' | 'subtitles' | 'requires'>,
 ): NodeFeature[] {
@@ -76,7 +47,6 @@ export interface RemoteProgress {
 }
 
 interface Waiter {
-  /** Which node is waiting, so a task is only ever handed to a node that accepts it. */
   readonly node: NodeRecord;
   readonly resolve: (task: RemoteTask | undefined) => void;
   readonly timer: NodeJS.Timeout;
@@ -87,43 +57,31 @@ interface NodeRecord {
   providers: string[];
   capacity: number;
   networkClass: NetworkClass;
-  /** What the node said it understands; none for a node from before features existed. */
   features: string[];
   seen: number;
 }
 
 interface Pending {
-  /**
-   * The task as it is currently offered. Replaced, under a new id, when a lease lapses:
-   * the id is what a node reports against, so the old one going dead is what makes a late
-   * report from a node that went silent land nowhere.
-   */
   task: RemoteTask;
   readonly settle: (outcome: {
     media?: ResolvedMedia;
     files?: readonly RemoteFile[];
     error?: SeraError;
   }) => void;
-  /** Files uploaded so far for a `job` task, in the order the node sent them. */
   readonly files: RemoteFile[];
   readonly onProgress?: (progress: RemoteProgress) => void;
-  /** Told which node took it, so a caller can try another if this one fails. */
   readonly onClaimed?: (nodeId: string) => void;
   readonly timer: NodeJS.Timeout;
   cancelled: boolean;
   claimedAt?: number;
-  /** Which node took it, so concurrency is counted per node rather than in total. */
   claimedBy?: string;
-  /** Until when the claiming node holds it without being heard from again. */
   leaseUntil?: number;
   leaseTimer?: NodeJS.Timeout;
 }
 
-/** What a completed `job` task produces: files already written to shared storage. */
 export interface RemoteFile {
   readonly name: string;
   readonly mimeType: string;
-  /** Absolute path under the data directory, written by the upload endpoint. */
   readonly path: string;
 }
 
@@ -138,20 +96,11 @@ export interface NodeStatus {
   readonly healthy: boolean;
 }
 
-/**
- * What the router and the job runner need from "somewhere a node can be reached".
- *
- * Two things satisfy it. `ExtractionNodeRegistry` is the real one, in the process the
- * node dialled. `RemoteOverHttp` is the same thing seen from another process — which
- * the worker needs, because a node holds one connection to one process and on this
- * deployment that process is the API.
- */
 export interface RemoteExtraction {
   status(): NodeStatus[];
   availableProviders(networkClass?: NetworkClass): string[];
   hasHealthyNode(networkClass?: NetworkClass): boolean;
   networkClasses(): NetworkClass[];
-  /** Whether a live node declared this feature — and, given one, takes this provider. */
   hasFeature(feature: NodeFeature, providerId?: string, except?: readonly string[]): boolean;
   dispatch(
     task: Omit<RemoteTask, 'id' | 'createdAt'>,
@@ -167,14 +116,6 @@ export interface RemoteExtraction {
   ): Promise<readonly RemoteFile[]>;
 }
 
-/**
- * The dispatch point between the API and however many extraction nodes are connected.
- *
- * Deliberately not a queue in Redis. Remote work is only ever attempted when the local
- * network has already refused, it is bounded by the node's own capacity, and a task that
- * outlives its node should die rather than sit in durable storage waiting to surprise
- * someone. Everything here is in memory and expires.
- */
 export class ExtractionNodeRegistry implements RemoteExtraction {
   private readonly queue: RemoteTask[] = [];
   private readonly waiting: Waiter[] = [];
@@ -183,31 +124,11 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
 
   constructor(
     private readonly logger: Logger,
-    /** A node that has not asked for work in this long is not counted as available. */
     private readonly staleAfterMs = 90_000,
-    /** How long a task may wait for a node before the caller gives up on it. */
     private readonly taskTimeoutMs = 15 * 60_000,
-    /**
-     * How long a node may hold a task it claimed without being heard from about it.
-     *
-     * A claim is answered over a long-poll, and a connection that dies at that moment
-     * takes the task with it: the node never sees it, and the task used to sit claimed
-     * until the fifteen-minute timeout, holding that node's only slot. Silence for this
-     * long puts it back in the queue for any live node.
-     *
-     * 45 seconds. A working node reports on a task within a second of taking it and every
-     * second after (its heartbeat), and each of those reports is given 30 seconds before
-     * the node abandons the request — so one heartbeat lost to a slow or dropped request,
-     * and the next one landing, both fit inside it. It is also comfortably under the 90
-     * seconds after which a node stops being offered work at all, so a task stuck on a dead
-     * node moves before that node is written off, rather than minutes later.
-     */
     private readonly leaseMs = 45_000,
   ) {}
 
-  /* ----------------------------------------------------------- node side */
-
-  /** Records that a node is alive and asking for work. */
   register(
     nodeId: string,
     providers: readonly string[],
@@ -234,15 +155,6 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
     return record;
   }
 
-  /**
-   * Whether this node may take this task.
-   *
-   * Four questions — the fourth, whether it understands everything the task asks for, came
-   * later: an outdated phone node took trimmed and subtitled jobs and ignored both. Three
-   * questions and the first two used to be asked in only one of the two places a
-   * task can reach a node. A task queued while a node was already waiting went out with
-   * neither check, so a node told to do YouTube alone could be handed Instagram.
-   */
   private accepts(node: NodeRecord, task: RemoteTask): boolean {
     if (node.providers.length && !node.providers.includes(task.providerId)) return false;
     if (task.networkClass && task.networkClass !== node.networkClass) return false;
@@ -259,12 +171,6 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
     return count;
   }
 
-  /**
-   * Hands out one task, waiting up to `holdMs` for one to appear.
-   *
-   * The long hold is what makes this a heartbeat as well as a queue: a node that is
-   * asking is a node that is alive, and no separate ping is needed.
-   */
   claim(
     nodeId: string,
     providers: readonly string[],
@@ -297,7 +203,6 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
     });
   }
 
-  /** Whether the caller has given up, so a node can stop working on it. */
   isCancelled(taskId: string): boolean {
     const pending = this.pending.get(taskId);
     return !pending || pending.cancelled;
@@ -317,7 +222,6 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
     return true;
   }
 
-  /** Records one uploaded file. Order is preserved, which a carousel depends on. */
   acceptFile(taskId: string, file: RemoteFile): boolean {
     const pending = this.pending.get(taskId);
     if (!pending) return false;
@@ -326,7 +230,6 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
     return true;
   }
 
-  /** Settles a `job` task with everything the node uploaded for it. */
   completeJob(taskId: string): boolean {
     const pending = this.pending.get(taskId);
     if (!pending) return false;
@@ -346,8 +249,6 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
     pending.settle({ error });
     return true;
   }
-
-  /* ----------------------------------------------------------- API side */
 
   status(): NodeStatus[] {
     const now = Date.now();
@@ -372,7 +273,6 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
     );
   }
 
-  /** Providers at least one live node will take, optionally on one kind of connection. */
   availableProviders(networkClass?: NetworkClass): string[] {
     const providers = new Set<string>();
     for (const node of this.live(networkClass)) {
@@ -385,7 +285,6 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
     return this.live(networkClass).length > 0;
   }
 
-  /** The kinds of connection currently represented, so a backend exists per network. */
   networkClasses(): NetworkClass[] {
     return [...new Set(this.live().map((node) => node.networkClass))];
   }
@@ -399,7 +298,6 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
     );
   }
 
-  /** Queues a resolve and waits for a node to answer it. */
   dispatch(
     task: Omit<RemoteTask, 'id' | 'createdAt'>,
     options: {
@@ -416,13 +314,10 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
     });
   }
 
-  /** Queues a download and waits for the files the node uploads for it. */
   dispatchJob(
     task: Omit<RemoteTask, 'id' | 'createdAt'>,
     options: { onProgress?: (progress: RemoteProgress) => void; signal?: AbortSignal } = {},
   ): Promise<readonly RemoteFile[]> {
-    // Nodes are connected, but none can do what this job asks: say so now, rather than
-    // after the task timeout spent waiting for a node that is not coming.
     const required = requiredFeatures(task);
     const nodes = this.live(task.networkClass).filter(
       (node) => !node.providers.length || node.providers.includes(task.providerId),
@@ -464,7 +359,6 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
           files?: readonly RemoteFile[];
           error?: SeraError;
         }): void => {
-          // By the task's current id: a lapsed lease will have given it a new one.
           const id = pending.task.id;
           if (this.pending.get(id) !== pending) return;
           clearTimeout(pending.timer);
@@ -502,7 +396,6 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
 
         options.signal?.addEventListener('abort', () => {
           pending.cancelled = true;
-          // Remove it if no node has taken it yet; a node that has will see the flag.
           const queued = this.queue.indexOf(pending.task);
           if (queued !== -1) this.queue.splice(queued, 1);
           finish({ error: seraError('CANCELLED') });
@@ -514,13 +407,6 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
     );
   }
 
-  /**
-   * Gives queued work to whichever waiting node will take it.
-   *
-   * Both sides are matched here, not just the front of each list: a node holding a
-   * request open for YouTube keeps holding it while an Instagram task goes to a node
-   * that wants Instagram, instead of being handed work it declared it would not do.
-   */
   private wakeOne(): void {
     for (const waiter of [...this.waiting]) {
       const index = this.queue.findIndex((task) => this.accepts(waiter.node, task));
@@ -545,12 +431,9 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
     }
   }
 
-  /** The claiming node has been heard from about this task; it keeps it a while longer. */
   private renew(pending: Pending): void {
     if (pending.claimedBy === undefined) return;
     pending.leaseUntil = Date.now() + this.leaseMs;
-    // One timer per task, re-armed for what is left when it fires early, rather than
-    // cleared and set again on every heartbeat.
     if (!pending.leaseTimer) this.armLease(pending, this.leaseMs);
   }
 
@@ -568,17 +451,6 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
     pending.leaseTimer.unref();
   }
 
-  /**
-   * Takes a task back from a node that went quiet and offers it again.
-   *
-   * It goes back under a new id. Everything a node sends is addressed by task id, so the
-   * old id simply stops existing: a late progress report is told the task is cancelled,
-   * which stops that node working on it; a late upload is refused and deleted; a late
-   * result or failure is not accepted. None of it can reach the visitor's job, which only
-   * the node holding the new id can now settle. Files the silent node did upload are
-   * dropped from the task — the next node produces a whole set — and their upload
-   * directory is left to the workspace reaper.
-   */
   private requeue(pending: Pending): void {
     const previous = pending.task;
     const silentNode = pending.claimedBy;
@@ -603,20 +475,15 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
       'extraction node went silent on a task; offering it again',
     );
 
-    // To the front: it has waited longer than anything queued behind it.
     this.queue.unshift(pending.task);
     this.wakeOne();
   }
 }
 
-/** Task ids double as the node's capability for a task, so they are random and unguessable. */
 function newTaskId(): string {
   return randomUUID().replace(/-/g, '');
 }
 
-/**
- * The router's view of a set of extraction nodes: one backend, however many machines.
- */
 export function remoteBackend(
   registry: RemoteExtraction,
   networkClass: NetworkClass = 'residential',
@@ -637,19 +504,10 @@ export function remoteBackend(
   };
 }
 
-/** One backend per kind of connection currently connected. */
 export function remoteBackends(registry: RemoteExtraction): ExtractionBackend[] {
   return registry.networkClasses().map((networkClass) => remoteBackend(registry, networkClass));
 }
 
-/**
- * A node holding an account for a provider, as a backend the router can ask.
- *
- * For a post the server cannot read without one — an Instagram photo post — and no node of
- * this deployment holds it either unless its operator put a session in that node's own
- * environment. The task names the feature; whichever live node declared it takes the task,
- * so a laptop that is off leaves the work to the phone, and the other way round.
- */
 export function sessionBackend(
   registry: RemoteExtraction,
   feature: NodeFeature,
@@ -662,9 +520,6 @@ export function sessionBackend(
       return registry.availableProviders();
     },
     isHealthy: () => registry.hasFeature(feature),
-    // A node that fails without a final answer — out of date, or its session expired — is
-    // not asked again for this post; the next node holding the session is, while there is
-    // one. A phone on old code must not stand between a post and a laptop that can read it.
     resolve: async (url, providerId, signal) => {
       const tried: string[] = [];
       for (;;) {

@@ -7,15 +7,6 @@ import type {
   MediaInfo,
 } from '@sera/contracts/types';
 
-/**
- * The browser's view of the API.
- *
- * Every request is same-origin, because the Next server rewrites `/api/*` to the
- * backend. The client therefore has no base URL to configure and no CORS to negotiate,
- * and the page's CSP can forbid outbound connections outright.
- */
-
-/** A failure that already carries a sentence worth showing someone. */
 export class ApiError extends Error {
   readonly code: JobError['code'];
   readonly hint?: string;
@@ -45,7 +36,6 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
       headers: { 'content-type': 'application/json', ...init?.headers },
     });
   } catch {
-    // A thrown fetch is a transport failure; the server never got the request.
     throw new ApiError(NETWORK_FAILURE);
   }
 
@@ -76,14 +66,6 @@ export function resolveMedia(url: string, signal?: AbortSignal): Promise<MediaIn
   });
 }
 
-/**
- * Hands the API a post the visitor's own browser read.
- *
- * The one resolve that does not start from a pasted link: the bytes describing the post come
- * from the visitor's signed-in session on instagram.com, so this server never holds one. What
- * comes back is an ordinary `MediaInfo` — the server admitted only Instagram's CDN and signed
- * what it admitted, so from here on an imported post is downloaded like anything else.
- */
 export function importMedia(request: ImportRequest, signal?: AbortSignal): Promise<MediaInfo> {
   return call<MediaInfo>('/api/media/import', {
     method: 'POST',

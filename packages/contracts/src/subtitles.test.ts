@@ -1,11 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createJobRequestSchema } from './schemas.js';
 
-/**
- * The subtitle request the form sends: a language code safe for a command line, a format,
- * and never "embed" without the video to embed it in.
- */
-
 const job = (subtitles: unknown) =>
   createJobRequestSchema.safeParse({ infoId: 'info', optionIds: ['option'], subtitles });
 

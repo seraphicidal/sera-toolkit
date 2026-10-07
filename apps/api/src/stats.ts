@@ -1,12 +1,5 @@
 import { formatBytes, type SourceUsage, type UsageDay } from '@sera/engine';
 
-/**
- * The usage counts as a table for a terminal: one row per source over the whole period,
- * then one row per day. `sudo sera stats` prints this.
- *
- *   Source          Resolves  failed  Downloads  failed  Delivered  Failures
- *   youtube              120       4         80       2     1.2 GB  SOURCE_BLOCKED 3, …
- */
 export function formatUsage(
   days: readonly UsageDay[],
   totals: Record<string, SourceUsage>,
@@ -54,7 +47,6 @@ function columns(usage: SourceUsage): string[] {
   ];
 }
 
-/** Every failure code, resolves and downloads together, most frequent first. */
 function failures(usage: SourceUsage): string {
   const codes: Record<string, number> = {};
   for (const failed of [usage.resolves.failed, usage.downloads.failed]) {
@@ -83,7 +75,6 @@ function sum(all: readonly SourceUsage[]): SourceUsage {
   return { resolves, downloads, bytes };
 }
 
-/** Left-aligns the first and last columns, right-aligns the numbers between. */
 function table(header: readonly string[], rows: readonly (readonly string[])[]): string[] {
   const widths = header.map((title, column) =>
     Math.max(title.length, ...rows.map((row) => (row[column] ?? '').length)),

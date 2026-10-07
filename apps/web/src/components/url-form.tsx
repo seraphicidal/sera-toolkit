@@ -4,13 +4,6 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ClipboardIcon, CloseIcon, LinkIcon, SpinnerIcon } from './icons';
 import { cx } from '@/lib/format';
 
-/**
- * The one control the product is built around.
- *
- * There is no source picker and no format picker here, because at this point the user
- * has not told us anything we could use to populate one. They paste a link; everything
- * else is decided after we know what is behind it.
- */
 export function UrlForm({
   value,
   onChange,
@@ -28,11 +21,8 @@ export function UrlForm({
   const [canPaste, setCanPaste] = useState(false);
 
   useEffect(() => {
-    // The paste shortcut is only offered where the browser will actually allow it;
-    // showing a button that always fails is worse than not showing one.
     setCanPaste(typeof navigator !== 'undefined' && 'clipboard' in navigator);
 
-    // Focusing on a phone opens the keyboard and hides the page, so it is desktop-only.
     if (window.matchMedia('(min-width: 640px)').matches) inputRef.current?.focus();
   }, []);
 
@@ -50,7 +40,6 @@ export function UrlForm({
       inputRef.current?.focus();
       onSubmit(text);
     } catch {
-      // Permission denied or an empty clipboard; the field is still there to type into.
       inputRef.current?.focus();
     }
   };
@@ -88,8 +77,6 @@ export function UrlForm({
           placeholder="Paste a link…"
           value={value}
           onChange={(event) => onChange(event.target.value)}
-          // 16px is not a style choice: iOS Safari zooms the whole page when a focused input
-          // is smaller, which throws the layout off the moment someone taps the field.
           className="min-w-0 flex-1 bg-transparent py-4 text-base text-[var(--color-ink)] outline-none placeholder:text-[var(--color-ink-faint)]"
         />
 

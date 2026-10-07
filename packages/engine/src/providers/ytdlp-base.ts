@@ -26,78 +26,38 @@ import type {
   ResolvedMedia,
 } from './types.js';
 
-/**
- * The shared implementation nearly every provider is built from.
- *
- * yt-dlp already normalizes several hundred sites into one metadata shape, so a provider
- * that adds nothing beyond a host list is three lines. Subclasses override only where a
- * platform genuinely differs: how a carousel is exposed, whether a playlist should be
- * expanded, or what a "GIF" means on that site.
- */
 export abstract class YtdlpProvider implements MediaProvider {
   abstract readonly id: string;
   abstract readonly label: string;
   abstract readonly hosts: readonly string[];
   readonly priority: number = 100;
 
-  /**
-   * What most extractor-backed providers do. A provider whose platform differs — photos
-   * it cannot reach, audio it has none of — overrides this rather than leaving the
-   * client to find out one link at a time.
-   */
   readonly capabilities: ProviderCapabilities = declare();
 
   canHandle(_url: URL, host: string): boolean {
     return hostMatchesAny(host, this.hosts);
   }
 
-  /** Identity by default; subclasses canonicalize the URL forms their platform serves. */
   normalize(url: URL): URL {
     return url;
   }
 
-  /** Whether a URL should be expanded into its entries rather than treated as one item. */
   protected wantsPlaylist(_url: URL): boolean {
     return false;
   }
 
-  /**
-   * Site-specific tuning passed to yt-dlp as `--extractor-args`.
-   *
-   * These were declared by providers and then dropped on the floor: nothing forwarded
-   * them to the probe, so YouTube's own comment about keeping 1080p visible described
-   * something that was not happening.
-   */
   protected extractorArgs(_url: URL, _context: ProviderContext): readonly string[] {
     return [];
   }
 
-  /** Hook for platforms whose "GIF" posts are really short silent videos. */
   protected treatsSilentShortVideoAsGif(): boolean {
     return false;
   }
 
-  /**
-   * What a multi-entry result means for this URL.
-   *
-   * yt-dlp represents both an Instagram carousel and a YouTube playlist as `_type:
-   * "playlist"`, but they are different things to a person: a carousel is one post with
-   * several attachments, while a playlist is a list of separate works. Providers that
-   * expand true playlists override this; carousels keep the default.
-   */
   protected multiItemType(_url: URL): MediaInfoType {
     return 'collection';
   }
 
-  /**
-   * The ways this provider knows to ask, in the order to ask them.
-   *
-   * One rung by default, because for most of the several hundred sites yt-dlp
-   * normalizes there is nothing else to try. A provider with a published embed
-   * endpoint, an official API or a second extractor overrides this and gets the whole
-   * ladder for free — including the rule that a private or deleted post ends it rather
-   * than being asked four more times.
-   */
   protected strategies(_url: URL, _context: ProviderContext): readonly ExtractionStrategy[] {
     return [
       {
@@ -110,8 +70,6 @@ export abstract class YtdlpProvider implements MediaProvider {
 
   async resolve(url: URL, context: ProviderContext): Promise<ResolvedMedia> {
     const ladder = this.strategies(url, context);
-    // One rung is the common case, and it should look in the log exactly as it did
-    // before the ladder existed: no strategy line, no ceremony.
     if (ladder.length === 1) return ladder[0]!.run(url, context);
 
     const outcome = await runStrategies(ladder, url, context, {
@@ -127,7 +85,6 @@ export abstract class YtdlpProvider implements MediaProvider {
       : outcome.media;
   }
 
-  /** The default rung: yt-dlp, tuned by whatever this provider declares. */
   protected async runExtractor(url: URL, context: ProviderContext): Promise<ResolvedMedia> {
     const proxy = context.config.proxyFor(this.id);
     const info = await context.probe(url.toString(), {
@@ -152,13 +109,6 @@ export abstract class YtdlpProvider implements MediaProvider {
       if (item) items.push(item);
     });
 
-    // The tuning that produced this format list has to produce the download too.
-    //
-    // These were reaching the probe and stopping there: a provider could ask for the
-    // player clients that expose 1080p, list them for the visitor, and then fetch with
-    // whatever the extractor defaults to — a different client, a different format list,
-    // and for YouTube a different answer about whether the request is allowed at all.
-    // The args travel with the plan so both halves of a job agree.
     const args = this.extractorArgs(url, context);
     if (args.length) {
       for (const [index, item] of items.entries()) {
@@ -208,7 +158,6 @@ export abstract class YtdlpProvider implements MediaProvider {
     };
   }
 
-  /** Turns one yt-dlp entry into an item with its full option list. */
   protected toItem(
     entry: YtdlpInfo,
     index: number,
@@ -282,23 +231,11 @@ export abstract class YtdlpProvider implements MediaProvider {
   }
 }
 
-/* -------------------------------------------------------------------------- */
-/*  Helpers shared by every provider                                          */
-/* -------------------------------------------------------------------------- */
-
-/**
- * Flattens an info object into the entries that carry media.
- *
- * A carousel arrives as a playlist of entries; a plain video arrives as one object with
- * no entries at all. Treating both as "a list of things to offer" is what lets one code
- * path serve a single MP4 and a four-item Instagram post.
- */
 export function collectEntries(info: YtdlpInfo): YtdlpInfo[] {
   if (!info.entries?.length) return [info];
   const out: YtdlpInfo[] = [];
   for (const entry of info.entries) {
     if (!entry) continue;
-    // Nested playlists appear on channel pages; one level of flattening is enough.
     if (entry.entries?.length) {
       for (const nested of entry.entries) if (nested) out.push(nested);
     } else {
@@ -308,10 +245,6 @@ export function collectEntries(info: YtdlpInfo): YtdlpInfo[] {
   return out.length ? out : [info];
 }
 
-/**
- * Chooses a thumbnail that is large enough to look sharp but small enough to fetch
- * quickly, preferring yt-dlp's own ranking when it supplies one.
- */
 export function pickThumbnail(info: YtdlpInfo): string | undefined {
   const direct = str(info.thumbnail);
   const candidates = (info.thumbnails ?? []).filter((t): t is YtdlpThumbnail & { url: string } =>
@@ -321,7 +254,6 @@ export function pickThumbnail(info: YtdlpInfo): string | undefined {
 
   const score = (t: YtdlpThumbnail & { url: string }): number => {
     const width = num(t.width) ?? 0;
-    // 640px covers the preview card on a high-DPI display without fetching a poster.
     const distance = Math.abs(width - 640);
     return (num(t.preference) ?? 0) * 1000 - distance;
   };
@@ -338,7 +270,6 @@ export function parseTimestamp(info: YtdlpInfo): string | undefined {
   return undefined;
 }
 
-/** A small, non-identifying set of facts worth showing on the preview card. */
 export function buildMetadata(
   info: YtdlpInfo,
 ): Record<string, string | number | boolean> | undefined {

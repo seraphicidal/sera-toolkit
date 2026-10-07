@@ -1,11 +1,5 @@
 import { YtdlpProvider } from './ytdlp-base.js';
 
-/**
- * Facebook videos, reels and watch pages.
- *
- * Only publicly visible posts resolve. Anything behind a login fails as
- * `PRIVATE_CONTENT`, which is the intended behaviour rather than a gap to work around.
- */
 export class FacebookProvider extends YtdlpProvider {
   readonly id = 'facebook';
   readonly label = 'Facebook';

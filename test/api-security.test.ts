@@ -9,15 +9,6 @@ import { buildServer } from '../apps/api/src/server.js';
 import { ensureFixtures, ffmpegPath, ffprobePath, type Fixtures } from './helpers/fixtures.js';
 import { MediaServer } from './helpers/media-server.js';
 
-/**
- * The API treated as hostile input.
- *
- * These are the checks that matter when the service is on the open internet: that a
- * signed handle cannot be edited into a different request, that a filename cannot name a
- * path, that nothing internal leaks into a response body, and that the address guard
- * cannot be talked around.
- */
-
 let engine: SeraEngine;
 let app: FastifyInstance;
 let origin: MediaServer;
@@ -68,8 +59,6 @@ async function resolveClip(): Promise<MediaInfo> {
   expect(response.statusCode).toBe(200);
   return response.json<MediaInfo>();
 }
-
-/* -------------------------------------------------------------------------- */
 
 describe('URL handling', () => {
   it('refuses schemes that are not http or https', async () => {
@@ -128,7 +117,6 @@ describe('signed handles', () => {
   });
 
   it('refuses options that belong to a different resolution', async () => {
-    // Otherwise a valid token becomes a wrapper for an arbitrary fetch.
     const clip = await resolveClip();
     const photoResponse = await app.inject({
       method: 'POST',
@@ -180,8 +168,6 @@ describe('file serving', () => {
         method: 'GET',
         url: `/api/jobs/${encodeURIComponent(id)}`,
       });
-      // 404 from the id check, or 414 when the router rejects an absurd path first —
-      // both are refusals, and the earlier one is cheaper.
       expect([404, 414], `${id} -> ${response.statusCode}`).toContain(response.statusCode);
     }
   });
@@ -265,16 +251,11 @@ describe('responses', () => {
     expect(body).not.toContain('yt-dlp');
     expect(body).not.toContain('Error:');
 
-    // Stronger than sniffing the body for stack-frame text, which also matches
-    // ordinary English: the error object carries exactly the fields the contract
-    // allows, so nothing internal can ride along in an extra one.
     const error = response.json<{ error: Record<string, unknown> }>().error;
     expect(Object.keys(error).sort()).toEqual(['code', 'hint', 'message', 'retryable']);
   });
 
   it('treats a host that does not resolve as a typo, not a retryable outage', () => {
-    // .invalid never resolves, by RFC. Offering "Try again" here would be a button
-    // that can only ever fail.
     return app
       .inject({
         method: 'POST',
@@ -302,7 +283,6 @@ describe('responses', () => {
       url: '/api/jobs',
       payload: { infoId: info.id, optionIds: [info.items[0]!.options[0]!.id] },
     });
-    // The URL lives in the signed handle, not in the job the client can read back.
     expect(created.body).not.toContain('127.0.0.1');
     expect(created.body).not.toContain('clip.mp4');
   });
@@ -340,19 +320,14 @@ describe('health', () => {
 
 describe('thumbnail proxy', () => {
   it('accepts a signed token long enough to carry a real CDN URL', async () => {
-    // Fastify's default maxParamLength is 100 characters. A thumbnail token embedding a
-    // platform CDN URL is comfortably longer, and the symptom of getting this wrong is
-    // silent: the UI falls back to a placeholder icon and nothing looks broken.
     const info = await resolveClip();
-    expect(info.thumbnail).toBeUndefined(); // a bare MP4 has no thumbnail
+    expect(info.thumbnail).toBeUndefined();
 
     const longUrl = `https://cdn.example.com/${'a'.repeat(120)}/thumb.jpg`;
     const path = engine.resolver.thumbnailPath(longUrl);
     expect(path.length).toBeGreaterThan(150);
 
     const response = await app.inject({ method: 'GET', url: path });
-    // The origin does not exist, so the fetch fails — but it must reach the handler
-    // rather than being rejected by the router as an over-long parameter.
     expect(response.statusCode).not.toBe(414);
     expect(response.json().error.code).not.toBe('NOT_FOUND');
   });

@@ -13,12 +13,6 @@ import {
   type UsageRedis,
 } from './counts.js';
 
-/**
- * Usage counts: what one event increments, how a day reads back, and how long it is kept.
- * The stored field is all there is — a source id, a kind, an outcome — so the tests check
- * that nothing else can get into it.
- */
-
 describe('what an event increments', () => {
   it('a resolve or a download, by outcome and error code', () => {
     expect(usageField({ source: 'youtube', kind: 'resolve', ok: true })).toEqual({
@@ -114,7 +108,6 @@ describe('counting in memory', () => {
 });
 
 describe('counting in Redis', () => {
-  /** Just enough Redis: hashes, and the TTL each key was given. */
   function fakeRedis() {
     const hashes = new Map<string, Map<string, number>>();
     const ttls = new Map<string, number>();

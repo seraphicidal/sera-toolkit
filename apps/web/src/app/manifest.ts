@@ -1,12 +1,5 @@
 import type { MetadataRoute } from 'next';
 
-/**
- * The web app manifest, served at /manifest.webmanifest.
- *
- * It makes the site installable on a phone, and the share target is the reason to install
- * it: once installed, SERA appears in the system share sheet, so a video can go from the
- * YouTube or TikTok app to SERA without copying a link. Everything it names is same-origin.
- */
 export default function manifest(): MetadataRoute.Manifest {
   return {
     id: '/',
@@ -16,8 +9,6 @@ export default function manifest(): MetadataRoute.Manifest {
     start_url: '/',
     scope: '/',
     display: 'standalone',
-    // The light canvas. A manifest takes one colour; the theme-color meta tags in the
-    // layout give the browser the dark one as well.
     background_color: '#fbfbfa',
     theme_color: '#fbfbfa',
     icons: [

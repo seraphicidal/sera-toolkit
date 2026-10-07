@@ -1,4 +1,3 @@
-# Installed by deploy/install-timers.sh. Started by sera-alert.timer.
 [Unit]
 Description=SERA: notify through ntfy.sh when the deployment changes state
 Wants=network-online.target

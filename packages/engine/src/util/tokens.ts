@@ -1,16 +1,6 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { seraError } from '../errors.js';
 
-/**
- * Option and resolution ids are signed, self-contained tokens rather than keys into a
- * server-side table.
- *
- * Two things fall out of that. The API and the workers share no state, so they scale
- * independently and survive each other's restarts. And because the payload is signed,
- * a client cannot edit a token to point the download pipeline at a URL the resolver
- * never approved — forging one requires the server secret.
- */
-
 const SEPARATOR = '.';
 
 function b64url(buf: Buffer): string {
@@ -21,9 +11,7 @@ function hmac(secret: Buffer, data: string): Buffer {
   return createHmac('sha256', secret).update(data).digest();
 }
 
-/** Every signed payload carries its own expiry. */
 export interface SignedPayload {
-  /** Expiry, epoch seconds. */
   readonly e: number;
 }
 
@@ -41,15 +29,6 @@ export function signToken<T extends object>(
   return `${encoded}${SEPARATOR}${b64url(hmac(secret, encoded))}`;
 }
 
-/**
- * Verifies a token's signature and decodes it, leaving its expiry to the caller.
- *
- * For the caller that has to know what an expired token was before it can say so usefully.
- * Everything else wants `verifyToken`, which refuses one outright.
- *
- * The signature is checked before the payload is parsed, so malformed JSON from an
- * attacker never reaches `JSON.parse`, and comparison is constant-time.
- */
 export function readToken<T extends object>(token: string, secret: Buffer): T & SignedPayload {
   const index = token.indexOf(SEPARATOR);
   if (index <= 0 || index === token.length - 1) {
@@ -80,7 +59,6 @@ export function readToken<T extends object>(token: string, secret: Buffer): T & 
   return payload;
 }
 
-/** Verifies and decodes a token, refusing one past its expiry. */
 export function verifyToken<T extends object>(
   token: string,
   secret: Buffer,
@@ -93,7 +71,6 @@ export function verifyToken<T extends object>(
   return payload;
 }
 
-/** Opaque, unguessable id for a job. */
 export function newJobId(): string {
   return randomUUID().replace(/-/g, '');
 }

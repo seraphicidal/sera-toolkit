@@ -1,5 +1,3 @@
-/** SERA.toolkit engine — the media pipeline, shared by the API and the workers. */
-
 export { loadConfig, locateTool, ConfigError, VERSION, type EngineConfig } from './config.js';
 export { SeraEngine, type EngineOptions } from './engine.js';
 export { SeraError, seraError, MESSAGES, HINTS } from './errors.js';

@@ -1,4 +1,3 @@
-# Installed by deploy/install-timers.sh.
 [Unit]
 Description=SERA: check health for alerts every 5 minutes
 

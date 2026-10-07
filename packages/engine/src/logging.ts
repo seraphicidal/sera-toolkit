@@ -1,27 +1,13 @@
 import { pino } from 'pino';
 
-/**
- * The logger type used across the engine.
- *
- * Derived from `pino`'s return type rather than written out, so the level generics stay
- * in step with whatever the options below actually produce.
- */
 export type Logger = ReturnType<typeof pino>;
 
 export interface LoggerOptions {
   readonly level: string;
-  /** Pretty-prints in development; production always emits newline-delimited JSON. */
   readonly pretty?: boolean;
   readonly name?: string;
 }
 
-/**
- * Builds the service logger.
- *
- * The redaction list is the privacy policy in code: full URLs, client addresses and
- * anything resembling a token never reach the log, because a media downloader's logs
- * would otherwise be a record of what everyone watched.
- */
 export const REDACTED_PATHS: readonly string[] = [
   'req.headers.authorization',
   'req.headers.cookie',
@@ -29,16 +15,12 @@ export const REDACTED_PATHS: readonly string[] = [
   'req.remoteAddress',
   'req.remotePort',
   'res.headers["set-cookie"]',
-  // A full URL says which video a person asked for. `logSafeUrl` is how one gets logged.
   'url',
   'sourceUrl',
   'mediaUrl',
   '*.mediaUrl',
   'token',
   '*.token',
-  // Credentials an operator may configure. Not one of these is ever handed to a logger
-  // deliberately; the list exists so that a future object spread — the only way it would
-  // ever happen — cannot leak one.
   'cookie',
   '*.cookie',
   'sessionId',
@@ -51,9 +33,6 @@ export const REDACTED_PATHS: readonly string[] = [
   '*.proxy',
   'authorization',
   '*.authorization',
-  // A post a visitor's browser sent, and the job made from it. The media URLs inside work
-  // for anyone holding them until they expire, so they are kept out like credentials;
-  // `logSafeUrl` of the post is what gets logged instead.
   'imported',
   '*.imported',
 ];
@@ -86,17 +65,10 @@ export function createLogger(options: LoggerOptions): Logger {
   return pino(base);
 }
 
-/** A logger that discards everything, for tests. */
 export function silentLogger(): Logger {
   return pino({ level: 'silent' });
 }
 
-/**
- * Reduces a URL to just its origin and a coarse path shape.
- *
- * Job logs need enough to correlate a failure with a site without recording which video
- * a person asked for, so `https://youtube.com/watch?v=abc` logs as `youtube.com/watch`.
- */
 export function logSafeUrl(url: URL | string): string {
   try {
     const parsed = typeof url === 'string' ? new URL(url) : url;

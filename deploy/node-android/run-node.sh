@@ -1,18 +1,4 @@
 #!/data/data/com.termux/files/usr/bin/bash
-# SERA.toolkit — keeps an extraction node running on an Android phone (Termux).
-#
-# A supervisor, checking every 30 seconds:
-#   - runs the node, and starts it again 15 seconds after it exits;
-#   - stops it while the phone is off Wi-Fi or unplugged, if ~/.sera-node/node.conf says so
-#     (ONLY_ON_WIFI, ONLY_WHILE_CHARGING; read through the Termux:API app), and starts it
-#     again when they hold;
-#   - refreshes yt-dlp to the version pinned on main at start and every 24 hours, unless
-#     ~/.sera-node/ytdlp-updates.paused exists.
-# It holds a Termux wake lock so Android does not suspend it with the screen off.
-#
-# Started at boot by ~/.termux/boot/sera-node (setup.sh installs it), or by hand:
-#   ~/sera-toolkit/deploy/node-android/run-node.sh &
-# Logs: ~/.sera-node/node.log (the node), supervisor.log, ytdlp-update.log.
 set -u
 
 DIR="${SERA_NODE_DIR:-$HOME/sera-toolkit}"
@@ -26,7 +12,6 @@ mkdir -p "$STATE"
 
 say() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 
-# One supervisor at a time: Termux:Boot and a hand start would otherwise run two nodes.
 if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
   say "already running as $(cat "$PIDFILE")"
   exit 0
@@ -59,9 +44,6 @@ shutdown() {
 }
 trap shutdown TERM INT HUP
 
-# Termux:API answers through the companion app; without it the commands hang, hence the
-# timeout. A condition that cannot be checked counts as not met, so "only on Wi-Fi" never
-# quietly becomes "on mobile data too".
 api() { timeout 15 "$@" 2>/dev/null; }
 
 conditions_hold() {
@@ -103,13 +85,11 @@ start_node() {
 }
 
 command -v termux-wake-lock >/dev/null && termux-wake-lock
-# Keep one previous log of each; start fresh so neither grows forever.
 for file in "$LOG" "$STATE/ytdlp-update.log"; do
   [ -f "$file" ] && mv -f "$file" "$file.old"
 done
 say "supervisor started (Wi-Fi only: $ONLY_ON_WIFI, charging only: $ONLY_WHILE_CHARGING)"
 
-# What the log last said the node was doing, so each change is written once, not every check.
 state=''
 report() {
   [ "$state" = "$1" ] && return
@@ -141,7 +121,6 @@ while :; do
     stop_node
   fi
 
-  # In the background and waited on, so a TERM is handled now rather than after the sleep.
   sleep "$CHECK_SECONDS" &
   wait $!
 done

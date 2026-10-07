@@ -10,25 +10,25 @@ describe('isPublicAddress', () => {
 
   it('rejects every range that reaches infrastructure rather than the internet', () => {
     const blocked = [
-      '127.0.0.1', // loopback
+      '127.0.0.1',
       '127.1.2.3',
       '0.0.0.0',
-      '10.0.0.5', // private
+      '10.0.0.5',
       '172.16.31.9',
       '172.31.255.254',
       '192.168.1.1',
-      '169.254.169.254', // cloud metadata
+      '169.254.169.254',
       '169.254.0.1',
-      '100.64.0.1', // carrier-grade NAT
-      '198.18.0.1', // benchmarking
-      '224.0.0.1', // multicast
+      '100.64.0.1',
+      '198.18.0.1',
+      '224.0.0.1',
       '255.255.255.255',
-      '::1', // v6 loopback
+      '::1',
       '::',
-      'fe80::1', // link-local
-      'fc00::1', // unique local
+      'fe80::1',
+      'fc00::1',
       'fd12:3456::1',
-      'ff02::1', // multicast
+      'ff02::1',
     ];
     for (const address of blocked) {
       expect(isPublicAddress(address), address).toBe(false);
@@ -36,7 +36,6 @@ describe('isPublicAddress', () => {
   });
 
   it('rejects loopback however it is spelled in IPv6', () => {
-    // The classic bypass: the same address in a notation the check forgot about.
     expect(isPublicAddress('::ffff:127.0.0.1')).toBe(false);
     expect(isPublicAddress('::ffff:7f00:1')).toBe(false);
     expect(isPublicAddress('::FFFF:127.0.0.1')).toBe(false);

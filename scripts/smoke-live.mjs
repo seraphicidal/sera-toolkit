@@ -1,21 +1,8 @@
 #!/usr/bin/env node
-/**
- * Live smoke check: resolves real URLs through the real extractor.
- *
- * Metadata only by default — nothing is downloaded — so it is safe to run often and it
- * answers the one question the offline suite cannot: does the current yt-dlp still
- * return what the providers expect from these sites today.
- *
- *   node scripts/smoke-live.mjs                     # the default URL set
- *   node scripts/smoke-live.mjs <url> [<url> ...]   # specific links
- */
 
 import { loadConfig, MediaResolver, SeraError } from '../packages/engine/dist/index.js';
 
-const DEFAULT_URLS = [
-  // Creative Commons, stable, and a good exercise of the format list.
-  'https://www.youtube.com/watch?v=aqz-KE-bpKQ',
-];
+const DEFAULT_URLS = ['https://www.youtube.com/watch?v=aqz-KE-bpKQ'];
 
 const urls = process.argv.slice(2).length ? process.argv.slice(2) : DEFAULT_URLS;
 
@@ -47,7 +34,6 @@ for (const url of urls) {
         `  item ${item.index}  ${item.kind}${item.duration ? ` · ${Math.round(item.duration)}s` : ''}`,
       );
       for (const option of item.options) {
-        // `detail` already carries the size; printing it again would just be noise.
         console.log(
           `      ${option.recommended ? '*' : ' '} ${option.kind.padEnd(5)} ${option.container.padEnd(5)} ${option.label.padEnd(14)} ${option.detail ?? ''}`,
         );

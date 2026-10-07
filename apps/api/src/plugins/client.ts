@@ -3,30 +3,13 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
 import type { SeraEngine } from '@sera/engine';
 
-/**
- * Derives a stable, non-reversible key for one client.
- *
- * Rate limiting and per-client concurrency both need to tell callers apart, and the
- * obvious way to do that is to key on the IP address. Storing addresses would make the
- * service's logs a record of who downloaded what, so the address is HMAC'd with the
- * server secret and only the digest is kept. It is stable for as long as the process
- * runs and meaningless outside it.
- */
-
 declare module 'fastify' {
   interface FastifyRequest {
-    /** Opaque per-client identifier. Safe to log. */
     clientKey: string;
-    /**
-     * The server's own canary (deploy/canary.sh), proven by `x-sera-canary`. Exempt from
-     * rate limits and abuse strikes, and left out of usage counts: it is the deployment
-     * checking itself, not a visitor.
-     */
     canary: boolean;
   }
 }
 
-/** Whether a presented token is the configured one, in constant time. Never true for an empty one. */
 export function matchesToken(presented: unknown, configured: string): boolean {
   if (!configured || typeof presented !== 'string') return false;
   const a = Buffer.from(presented);
@@ -34,16 +17,10 @@ export function matchesToken(presented: unknown, configured: string): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-/** Whether a presented canary token is the configured one, in constant time. */
 export function isCanaryToken(presented: unknown, configured: string): boolean {
   return matchesToken(presented, configured);
 }
 
-/**
- * The abuse guard as a route should use it: the canary never earns a strike or a
- * cooldown, so a source that is genuinely down cannot lock the canary out of noticing
- * when it comes back.
- */
 export function abuseGuardFor(engine: SeraEngine, request: FastifyRequest) {
   const { abuse } = engine;
   const key = request.clientKey;

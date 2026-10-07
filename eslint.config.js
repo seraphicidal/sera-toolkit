@@ -5,8 +5,6 @@ import tseslint from 'typescript-eslint';
 import prettier from 'eslint-config-prettier';
 import globals from 'globals';
 
-// ESLint's own defineConfig, which typescript-eslint now recommends over its deprecated
-// tseslint.config(). Shared configs go in as they are; no spreading needed.
 export default defineConfig(
   globalIgnores([
     '**/node_modules/**',
@@ -53,6 +51,7 @@ export default defineConfig(
       ],
       'no-console': ['error', { allow: ['warn', 'error'] }],
       eqeqeq: ['error', 'always', { null: 'ignore' }],
+      'no-empty': ['error', { allowEmptyCatch: true }],
       'no-restricted-syntax': [
         'error',
         {
@@ -75,9 +74,6 @@ export default defineConfig(
   },
 
   {
-    // Tests are excluded from the emitting projects so they stay out of dist/, which
-    // means the project service cannot find a config that includes them. They have their
-    // own non-emitting project instead, named explicitly here.
     files: [
       'packages/**/*.test.ts',
       'apps/api/**/*.test.ts',
@@ -103,8 +99,6 @@ export default defineConfig(
   },
 
   {
-    // The web tests resolve the way the browser bundle does, so they are checked
-    // against the app's own project rather than the Node one.
     files: ['apps/web/**/*.test.ts', 'apps/web/**/*.test.tsx'],
     languageOptions: {
       parserOptions: {

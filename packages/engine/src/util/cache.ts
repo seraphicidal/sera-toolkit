@@ -1,11 +1,3 @@
-/**
- * A small time-and-size bounded cache.
- *
- * Used for resolutions, so that submitting a job moments after analyzing a link does not
- * hit the provider twice. Entries are short-lived by design: a media URL that is cached
- * for long enough to be convenient is also cached for long enough to be a record of what
- * someone looked at.
- */
 export class TtlCache<V> {
   private readonly entries = new Map<string, { value: V; expiresAt: number }>();
 
@@ -21,7 +13,6 @@ export class TtlCache<V> {
       this.entries.delete(key);
       return undefined;
     }
-    // Refresh recency so the eviction order is least-recently-used.
     this.entries.delete(key);
     this.entries.set(key, entry);
     return entry.value;

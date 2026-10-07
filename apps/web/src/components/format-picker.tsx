@@ -18,14 +18,6 @@ const KIND_ICON = {
   gif: GifIcon,
 } as const;
 
-/**
- * Format and quality.
- *
- * Only kinds the source actually has are shown, and the quality list is only rendered
- * when there is more than one — a control with a single option is a decision the user
- * did not need to be shown. The detail line under the select is where honesty lives:
- * it says what will really be produced, including whether a size is an estimate.
- */
 export function FormatPicker({
   info,
   selectedIds,
@@ -44,8 +36,6 @@ export function FormatPicker({
   const kinds = availableKinds(info);
   const labels = qualityLabels(info, kind, selectedIds);
 
-  // The detail shown under the select comes from the first selected item that offers
-  // this exact choice, so it describes what the user is actually about to get.
   const describing = info.items
     .filter((item) => selectedIds.has(item.id))
     .flatMap((item) => optionsOfKind(item, kind))
@@ -81,7 +71,6 @@ export function FormatPicker({
                       : 'text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]',
                   )}
                 >
-                  {/* Three formats on a phone leave no room for "Thumbnail" beside an icon. */}
                   <Icon size={16} className={cx(kinds.length > 2 && 'max-[399px]:hidden')} />
                   {kindLabel(info, candidate)}
                 </button>

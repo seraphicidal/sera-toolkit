@@ -18,14 +18,6 @@ import { pictureBlock, squareCover, tagAudio } from '../packages/engine/src/conv
 import { ensureFixtures, ffmpegPath, ffprobePath, type Fixtures } from './helpers/fixtures.js';
 import { MediaServer } from './helpers/media-server.js';
 
-/**
- * Tags and cover art in audio files, read back with ffprobe.
- *
- * Each output is checked for what a music player reads: the title, artist and album tags,
- * and a picture — an attached JPEG stream in MP3 and M4A, a FLAC picture block in Opus —
- * square, because that is what was asked for.
- */
-
 const run = promisify(execFile);
 const tools = { ffmpegPath, ffprobePath, timeoutMs: 60_000 };
 
@@ -39,7 +31,6 @@ interface Probed {
   audioCodec?: string;
 }
 
-/** Tags from the container and the audio stream, keys lower-cased; the picture stream. */
 async function inspect(path: string): Promise<Probed> {
   const { stdout } = await run(ffprobePath, [
     '-v',
@@ -140,10 +131,8 @@ describe('tagAudio', () => {
       expect(probed.tags.title).toBe(tags.title);
       expect(probed.tags.artist).toBe('Forss');
       expect(probed.tags.album).toBe('Soulhack');
-      // The audio itself is copied, never re-encoded.
       expect(probed.audioCodec).toBe(ext === 'mp3' ? 'mp3' : ext === 'm4a' ? 'aac' : 'opus');
       if (ext === 'opus') {
-        // Newer FFmpeg reads the picture block back as a picture stream; older shows the tag.
         const block = probed.tags.metadata_block_picture;
         expect(probed.picture ?? { width: block && block.length > 1000 ? 600 : 0 }).toMatchObject({
           width: 600,
@@ -171,11 +160,11 @@ describe('tagAudio', () => {
       offset += 4;
       return value;
     };
-    expect(u32()).toBe(3); // front cover
+    expect(u32()).toBe(3);
     const mimeLength = u32();
     expect(block.subarray(offset, offset + mimeLength).toString()).toBe('image/jpeg');
     offset += mimeLength;
-    expect(u32()).toBe(0); // no description
+    expect(u32()).toBe(0);
     expect([u32(), u32(), u32(), u32()]).toEqual([600, 600, 24, 0]);
     expect(u32()).toBe(jpeg.length);
     expect(block.subarray(offset).equals(jpeg)).toBe(true);
