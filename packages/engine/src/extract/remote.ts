@@ -15,6 +15,7 @@ export interface RemoteTask {
   readonly providerId: string;
   readonly networkClass?: NetworkClass;
   readonly planKeys?: readonly string[];
+  readonly items?: readonly RemoteTaskItem[];
   readonly filename?: string;
   readonly trim?: TrimRange;
   readonly requires?: readonly NodeFeature[];
@@ -28,14 +29,20 @@ export interface RemoteTask {
   readonly createdAt: number;
 }
 
-export type NodeFeature = 'trim' | 'subtitles' | 'instagram-session';
+export interface RemoteTaskItem {
+  readonly index: number;
+  readonly sourceId?: string;
+}
+
+export type NodeFeature = 'trim' | 'subtitles' | 'items' | 'instagram-session';
 
 export function requiredFeatures(
-  task: Pick<RemoteTask, 'trim' | 'subtitles' | 'requires'>,
+  task: Pick<RemoteTask, 'trim' | 'subtitles' | 'items' | 'requires'>,
 ): NodeFeature[] {
   const required: NodeFeature[] = [...(task.requires ?? [])];
   if (task.trim) required.push('trim');
   if (task.subtitles) required.push('subtitles');
+  if (task.items?.some((item, position) => item.index !== position)) required.push('items');
   return required;
 }
 
@@ -329,7 +336,11 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
     ) {
       return Promise.reject(
         seraError('PROVIDER_UNAVAILABLE', {
-          message: `${required.includes('trim') ? 'Trimming' : 'Subtitles'} cannot be done for this source right now. The full download still works.`,
+          message: required.includes('trim')
+            ? 'Trimming cannot be done for this source right now. The full download still works.'
+            : required.includes('subtitles')
+              ? 'Subtitles cannot be done for this source right now. The full download still works.'
+              : 'Downloading only some items of this post cannot be done right now. Selecting all of them still works.',
           detail: `remote: no connected node declares ${required.join(', ')}`,
         }),
       );

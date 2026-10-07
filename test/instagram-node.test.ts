@@ -6,7 +6,7 @@ import type { FastifyInstance } from 'fastify';
 import type { MediaInfo, ServiceInfo } from '@sera/contracts/types';
 import { loadConfig, seraError, SeraEngine, type ResolvedMedia } from '@sera/engine';
 import { buildServer } from '../apps/api/src/server.js';
-import { nodeFeatures, nodeProviders } from '../apps/extractor/src/node.js';
+import { nodeFeatures, nodeProviders, taskSelections } from '../apps/extractor/src/node.js';
 
 const TOKEN = 'instagram-node-token-0123456789';
 const POST = 'https://www.instagram.com/p/DcOX3hWFiey/';
@@ -145,11 +145,24 @@ describe('a node', () => {
     const without = { instagram: { configured: false } } as Parameters<typeof nodeFeatures>[0];
     const withSession = { instagram: { configured: true } } as Parameters<typeof nodeFeatures>[0];
 
-    expect(nodeFeatures(without)).toEqual(['trim', 'subtitles']);
-    expect(nodeFeatures(withSession)).toEqual(['trim', 'subtitles', 'instagram-session']);
+    expect(nodeFeatures(without)).toEqual(['trim', 'subtitles', 'items']);
+    expect(nodeFeatures(withSession)).toEqual(['trim', 'subtitles', 'items', 'instagram-session']);
 
     expect(nodeProviders(['youtube'], without)).toEqual(['youtube']);
     expect(nodeProviders(['youtube'], withSession)).toEqual(['youtube', 'instagram']);
     expect(nodeProviders([], withSession)).toEqual([]);
+  });
+
+  it('downloads the slide that was picked, not the one in the same position', () => {
+    expect(
+      taskSelections(
+        { planKeys: ['image/jpg/original'], items: [{ index: 8, sourceId: 's9' }] },
+        9,
+      ),
+    ).toEqual([{ itemIndex: 8, sourceId: 's9', planKey: 'image/jpg/original' }]);
+    expect(taskSelections({ planKeys: ['a', 'b'] }, 9)).toEqual([
+      { itemIndex: 0, planKey: 'a' },
+      { itemIndex: 1, planKey: 'b' },
+    ]);
   });
 });

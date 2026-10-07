@@ -22,6 +22,7 @@ interface RemoteTask {
   readonly url: string;
   readonly providerId: string;
   readonly planKeys?: readonly string[];
+  readonly items?: readonly { readonly index: number; readonly sourceId?: string }[];
   readonly filename?: string;
   readonly trim?: { readonly start: number; readonly end?: number };
   readonly subtitles?: {
@@ -32,7 +33,25 @@ interface RemoteTask {
   };
 }
 
-export const NODE_FEATURES: readonly NodeFeature[] = ['trim', 'subtitles'];
+export const NODE_FEATURES: readonly NodeFeature[] = ['trim', 'subtitles', 'items'];
+
+export function taskSelections(
+  task: Pick<RemoteTask, 'planKeys' | 'items'>,
+  itemCount: number,
+): JobSpec['selections'] {
+  const keys = task.planKeys ?? [];
+  return keys.map((planKey, position) => {
+    const item = task.items?.length === keys.length ? task.items[position] : undefined;
+    if (item) {
+      return {
+        itemIndex: item.index,
+        ...(item.sourceId ? { sourceId: item.sourceId } : {}),
+        planKey,
+      };
+    }
+    return { itemIndex: itemCount > position ? position : 0, planKey };
+  });
+}
 
 export function nodeFeatures(config: Pick<EngineConfig, 'instagram'>): NodeFeature[] {
   return [
@@ -262,10 +281,7 @@ export class ExtractionNode {
       abort.signal,
     );
 
-    const selections = (task.planKeys ?? []).map((planKey, index) => ({
-      itemIndex: media.items.length > index ? index : 0,
-      planKey,
-    }));
+    const selections = taskSelections(task, media.items.length);
     if (!selections.length) throw new Error('job task carried no plan keys');
 
     const trim = taskTrim(task);

@@ -126,6 +126,10 @@ export class JobRunner {
           url: spec.url,
           providerId: spec.provider,
           planKeys: matched.map(({ plan }) => planKey(plan)),
+          items: matched.map(({ item }) => ({
+            index: item.index,
+            ...(item.sourceId ? { sourceId: item.sourceId } : {}),
+          })),
           ...(spec.filename ? { filename: spec.filename } : {}),
           ...(spec.trim ? { trim: spec.trim } : {}),
           ...(spec.subtitles ? { subtitles: spec.subtitles } : {}),

@@ -10,7 +10,7 @@ import type { ResolvedMedia } from '../providers/types.js';
 import { WorkspaceManager } from '../storage/workspace.js';
 import { MediaResolver } from '../resolver.js';
 import { JobRunner } from './runner.js';
-import type { ExtractionNodeRegistry, RemoteFile } from '../extract/remote.js';
+import type { ExtractionNodeRegistry, RemoteFile, RemoteTask } from '../extract/remote.js';
 
 const run = promisify(execFile);
 
@@ -80,11 +80,11 @@ afterEach(async () => {
 
 describe('a job follows the backend that resolved it', () => {
   it('sends the download to the node whose resolution produced the plans', async () => {
-    const dispatched: { planKeys?: readonly string[]; url?: string }[] = [];
+    const dispatched: Pick<RemoteTask, 'planKeys' | 'items' | 'url'>[] = [];
 
     const remote: Partial<ExtractionNodeRegistry> = {
       dispatchJob: async (task): Promise<readonly RemoteFile[]> => {
-        dispatched.push({ planKeys: task.planKeys, url: task.url });
+        dispatched.push({ planKeys: task.planKeys, items: task.items, url: task.url });
         const path = join(dataDir, 'from-node.mp4');
         await run(config.ffmpegPath, [
           '-v',
@@ -116,6 +116,7 @@ describe('a job follows the backend that resolved it', () => {
 
     expect(dispatched).toHaveLength(1);
     expect(dispatched[0]?.planKeys).toEqual(['video/mp4/1080p']);
+    expect(dispatched[0]?.items).toEqual([{ index: 0 }]);
     expect(result.filename).toBe('from-node.mp4');
   });
 
