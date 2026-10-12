@@ -190,7 +190,7 @@ export default async function AboutPage() {
           for conversion, both of which do the genuinely hard work here.
         </p>
         <p className="text-[0.875rem] text-[var(--color-ink-faint)]">
-          Run it yourself with Docker, or from source. The README covers both.
+          Run it yourself with Docker, or from source.
         </p>
       </Section>
 

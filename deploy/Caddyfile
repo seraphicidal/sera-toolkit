@@ -5,7 +5,8 @@
 {$SERA_DOMAIN} {
 	encode zstd gzip
 
-	handle /internal/extraction/* {
+	@api path /internal/extraction/* /api/* /health /ready
+	handle @api {
 		reverse_proxy api:4000 {
 			transport http {
 				read_timeout 30m

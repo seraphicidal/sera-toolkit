@@ -1,4 +1,9 @@
-import type { JobState, MediaKind } from '@sera/contracts/types';
+import {
+  formatTimecode,
+  isTerminalJobState,
+  type JobState,
+  type MediaKind,
+} from '@sera/contracts/types';
 
 const UNITS = ['B', 'KB', 'MB', 'GB', 'TB'] as const;
 
@@ -10,18 +15,17 @@ export function formatBytes(bytes: number | undefined): string {
     value /= 1024;
     unit += 1;
   }
-  const digits = unit === 0 ? 0 : value < 10 ? 1 : 0;
+  if (unit < UNITS.length - 1 && Math.round(value) >= 1024) {
+    value /= 1024;
+    unit += 1;
+  }
+  const digits = unit === 0 || Math.round(value * 10) >= 100 ? 0 : 1;
   return `${value.toFixed(digits)} ${UNITS[unit]}`;
 }
 
 export function formatDuration(seconds: number | undefined): string {
   if (seconds === undefined || !Number.isFinite(seconds) || seconds < 0) return '';
-  const total = Math.round(seconds);
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  const s = total % 60;
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+  return formatTimecode(seconds);
 }
 
 export function formatEta(seconds: number | undefined): string {
@@ -48,7 +52,7 @@ export function pluralize(count: number, singular: string, plural = `${singular}
 }
 
 export function isRunning(state: JobState): boolean {
-  return !['ready', 'failed', 'cancelled', 'expired'].includes(state);
+  return !isTerminalJobState(state);
 }
 
 export function cx(...parts: (string | false | null | undefined)[]): string {

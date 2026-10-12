@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ClipboardIcon, CloseIcon, LinkIcon, SpinnerIcon } from './icons';
 import { cx } from '@/lib/format';
+import { firstHttpUrl } from '@/lib/share';
 
 export function UrlForm({
   value,
@@ -29,16 +30,20 @@ export function UrlForm({
   const submit = (event: FormEvent): void => {
     event.preventDefault();
     const trimmed = value.trim();
-    if (trimmed && !busy) onSubmit(trimmed);
+    if (!trimmed || busy || disabled) return;
+    const cleaned = firstHttpUrl(trimmed) ?? trimmed;
+    if (cleaned !== value) onChange(cleaned);
+    onSubmit(cleaned);
   };
 
   const paste = async (): Promise<void> => {
     try {
-      const text = (await navigator.clipboard.readText()).trim();
-      if (!text) return;
-      onChange(text);
+      const trimmed = (await navigator.clipboard.readText()).trim();
+      if (!trimmed) return;
+      const cleaned = firstHttpUrl(trimmed) ?? trimmed;
+      onChange(cleaned);
       inputRef.current?.focus();
-      onSubmit(text);
+      onSubmit(cleaned);
     } catch {
       inputRef.current?.focus();
     }
@@ -66,7 +71,7 @@ export function UrlForm({
           ref={inputRef}
           id="sera-url"
           name="url"
-          type="url"
+          type="text"
           inputMode="url"
           autoComplete="off"
           autoCorrect="off"
@@ -80,7 +85,7 @@ export function UrlForm({
           className="min-w-0 flex-1 bg-transparent py-4 text-base text-[var(--color-ink)] outline-none placeholder:text-[var(--color-ink-faint)]"
         />
 
-        {value && !busy && (
+        {value && !busy && !disabled && (
           <button
             type="button"
             onClick={() => {

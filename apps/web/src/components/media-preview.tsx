@@ -14,10 +14,10 @@ const KIND_ICON = {
 } as const;
 
 export function MediaPreview({ info }: { readonly info: MediaInfo }) {
-  const [thumbnailFailed, setThumbnailFailed] = useState(false);
+  const [failedThumbnail, setFailedThumbnail] = useState<string>();
   const primary = info.items[0];
   const Icon = KIND_ICON[primary?.kind ?? 'unknown'];
-  const showThumbnail = Boolean(info.thumbnail) && !thumbnailFailed;
+  const showThumbnail = Boolean(info.thumbnail) && failedThumbnail !== info.thumbnail;
 
   const subtitle = [
     info.author,
@@ -45,7 +45,7 @@ export function MediaPreview({ info }: { readonly info: MediaInfo }) {
               alt=""
               loading="lazy"
               decoding="async"
-              onError={() => setThumbnailFailed(true)}
+              onError={() => setFailedThumbnail(info.thumbnail)}
               className="size-full object-cover"
             />
           ) : (

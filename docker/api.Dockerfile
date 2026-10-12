@@ -8,6 +8,7 @@ COPY packages/contracts/package.json packages/contracts/
 COPY packages/engine/package.json packages/engine/
 COPY apps/api/package.json apps/api/
 COPY apps/worker/package.json apps/worker/
+COPY apps/extractor/package.json apps/extractor/
 COPY apps/web/package.json apps/web/
 
 RUN --mount=type=cache,target=/root/.npm \

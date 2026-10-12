@@ -50,6 +50,7 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
   const [info, setInfo] = useState<MediaInfo | undefined>(initialInfo);
   const [error, setError] = useState<JobError | undefined>();
   const [jobId, setJobId] = useState<string | undefined>();
+  const [initialJob, setInitialJob] = useState<Job | undefined>();
 
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() =>
     initialInfo ? seedFrom(initialInfo).selectedIds : new Set(),
@@ -70,12 +71,23 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   const analyzeAbort = useRef<AbortController | undefined>(undefined);
-  const { job } = useJob(jobId);
+  const sessionRef = useRef(0);
+  const { job } = useJob(jobId, initialJob);
+
+  useEffect(
+    () => () => {
+      sessionRef.current += 1;
+      analyzeAbort.current?.abort();
+    },
+    [],
+  );
 
   const reset = useCallback(() => {
+    sessionRef.current += 1;
     analyzeAbort.current?.abort();
     setError(undefined);
     setJobId(undefined);
+    setInitialJob(undefined);
     setFilename('');
     setTrimStart('');
     setTrimEnd('');
@@ -100,6 +112,7 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
   }, [initialInfo]);
 
   const analyze = useCallback(async (raw: string) => {
+    sessionRef.current += 1;
     analyzeAbort.current?.abort();
     const controller = new AbortController();
     analyzeAbort.current = controller;
@@ -108,6 +121,7 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
     setError(undefined);
     setInfo(undefined);
     setJobId(undefined);
+    setInitialJob(undefined);
 
     try {
       const resolved = await resolveMedia(raw, controller.signal);
@@ -172,34 +186,35 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
 
   const singleItem =
     info && selection?.fileCount === 1
-      ? info.items.find((item) => selectedIds.has(item.id))
+      ? (info.items.find((item) => item.options.some((o) => o.id === selection.optionIds[0])) ??
+        info.items.find((item) => selectedIds.has(item.id)))
       : undefined;
 
   const subtitles = subtitleChoices(
     singleItem,
     singleItem?.options.find((option) => option.id === selection?.optionIds[0]),
   );
-  const subtitlesRequested = subtitleRequest(
+
+  const canTrim = Boolean(singleItem && (kind === 'video' || kind === 'audio'));
+  const rawTrim: TrimSummary = useMemo(
+    () =>
+      canTrim && singleItem
+        ? summarizeTrim(trimStart, trimEnd, singleItem.duration, selection?.totalBytes)
+        : { state: 'none' },
+    [canTrim, singleItem, trimStart, trimEnd, selection?.totalBytes],
+  );
+  const rawSubtitlesRequested = subtitleRequest(
     subtitles,
     subtitleTrack,
     subtitleFormat,
     subtitlesOnly,
   );
-
-  const trimItem =
-    singleItem && (kind === 'video' || kind === 'audio') && !subtitlesRequested
-      ? singleItem
-      : undefined;
-  const trim: TrimSummary = useMemo(
-    () =>
-      trimItem
-        ? summarizeTrim(trimStart, trimEnd, trimItem.duration, selection?.totalBytes)
-        : { state: 'none' },
-    [trimItem, trimStart, trimEnd, selection?.totalBytes],
-  );
+  const subtitlesRequested = rawTrim.state !== 'none' ? undefined : rawSubtitlesRequested;
+  const trim: TrimSummary = subtitlesRequested ? { state: 'none' } : rawTrim;
 
   const start = useCallback(async () => {
     if (!info || !selection?.optionIds.length) return;
+    const session = ++sessionRef.current;
     setPhase('submitting');
     setError(undefined);
 
@@ -212,9 +227,15 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
         ...(trim.state === 'ok' ? { trim: trim.request } : {}),
         ...(subtitlesRequested ? { subtitles: subtitlesRequested } : {}),
       });
+      if (sessionRef.current !== session) {
+        void cancelJob(created.id);
+        return;
+      }
+      setInitialJob(created);
       setJobId(created.id);
       setPhase('running');
     } catch (caught) {
+      if (sessionRef.current !== session) return;
       setError(
         caught instanceof ApiError
           ? {
@@ -230,7 +251,7 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
   }, [info, selection, packaging, filename, trim, subtitlesRequested]);
 
   useEffect(() => {
-    if (!job) return;
+    if (!job || !jobId || job.id !== jobId) return;
     if (job.state === 'ready') {
       setPhase('done');
       if (job.result && info) {
@@ -251,19 +272,29 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
       setError(job.error ?? { code: 'INTERNAL', message: 'The download failed.', retryable: true });
       setPhase('ready');
       setJobId(undefined);
+      setInitialJob(undefined);
     }
-  }, [job, info]);
+  }, [job, jobId, info]);
 
   const cancel = useCallback(() => {
+    sessionRef.current += 1;
     if (jobId) void cancelJob(jobId);
     setJobId(undefined);
+    setInitialJob(undefined);
     setPhase('ready');
   }, [jobId]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key !== 'Escape') return;
-      if (phase === 'running') cancel();
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      if (
+        event.target instanceof HTMLElement &&
+        event.target.matches('input, select, textarea, [contenteditable="true"]')
+      ) {
+        event.target.blur();
+        return;
+      }
+      if (phase === 'running' || phase === 'submitting') cancel();
       else if (phase === 'ready' || phase === 'done') reset();
     };
     window.addEventListener('keydown', onKeyDown);
@@ -308,9 +339,11 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
           onChange={(next) => {
             setUrl(next);
             if (info || error) {
+              sessionRef.current += 1;
               setInfo(undefined);
               setError(undefined);
               setJobId(undefined);
+              setInitialJob(undefined);
               setPhase('idle');
             }
           }}
@@ -363,7 +396,7 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
                 onLabelChange={setLabel}
               />
 
-              {subtitles && trim.state !== 'ok' && (
+              {subtitles && (
                 <SubtitleFields
                   choices={subtitles}
                   track={subtitleTrack}
@@ -372,26 +405,37 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
                   onFormatChange={setSubtitleFormat}
                   only={subtitlesOnly}
                   onOnlyChange={setSubtitlesOnly}
+                  disabled={trim.state !== 'none'}
                 />
               )}
 
               <AdvancedOptions
-                open={showAdvanced}
-                onToggle={() => setShowAdvanced((open) => !open)}
+                open={showAdvanced || trim.state === 'invalid'}
+                onToggle={() => {
+                  if (trim.state === 'invalid') return;
+                  setShowAdvanced((open) => !open);
+                }}
                 filename={filename}
                 onFilenameChange={setFilename}
                 packaging={packaging}
                 onPackagingChange={setPackaging}
                 multiple={(selection?.fileCount ?? 0) > 1}
                 trim={
-                  trimItem
+                  canTrim && singleItem
                     ? {
                         start: trimStart,
                         end: trimEnd,
-                        onStartChange: setTrimStart,
-                        onEndChange: setTrimEnd,
+                        onStartChange: (next) => {
+                          if (next.trim()) setSubtitleTrack('');
+                          setTrimStart(next);
+                        },
+                        onEndChange: (next) => {
+                          if (next.trim()) setSubtitleTrack('');
+                          setTrimEnd(next);
+                        },
                         summary: trim,
-                        endPlaceholder: endPlaceholder(trimItem.duration),
+                        endPlaceholder: endPlaceholder(singleItem.duration),
+                        disabled: Boolean(subtitlesRequested),
                       }
                     : undefined
                 }
@@ -434,6 +478,32 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
   );
 }
 
+const PACKAGING_OPTIONS: readonly (readonly [PackagingMode, string])[] = [
+  ['auto', 'Automatic'],
+  ['zip', 'One ZIP'],
+  ['individual', 'Separate files'],
+];
+
+function stepRadio<T>(
+  event: React.KeyboardEvent<HTMLButtonElement>,
+  values: readonly T[],
+  index: number,
+  onSelect: (value: T) => void,
+): void {
+  let offset = 0;
+  if (event.key === 'ArrowRight' || event.key === 'ArrowDown') offset = 1;
+  else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') offset = -1;
+  if (!offset || !values.length) return;
+  event.preventDefault();
+  const nextIndex = (index + offset + values.length) % values.length;
+  const nextValue = values[nextIndex];
+  if (nextValue === undefined) return;
+  onSelect(nextValue);
+  event.currentTarget.parentElement
+    ?.querySelectorAll<HTMLButtonElement>('[role="radio"]')
+    [nextIndex]?.focus();
+}
+
 function AdvancedOptions({
   open,
   onToggle,
@@ -458,6 +528,7 @@ function AdvancedOptions({
     readonly onEndChange: (value: string) => void;
     readonly summary: TrimSummary;
     readonly endPlaceholder: string;
+    readonly disabled?: boolean;
   };
 }) {
   return (
@@ -504,30 +575,40 @@ function AdvancedOptions({
               <legend className="mb-1.5 text-xs font-medium tracking-wide text-[var(--color-ink-faint)] uppercase">
                 Packaging
               </legend>
-              <div className="flex gap-1 rounded-xl bg-[var(--color-sunken)] p-1">
-                {(
-                  [
-                    ['auto', 'Automatic'],
-                    ['zip', 'One ZIP'],
-                    ['individual', 'Separate files'],
-                  ] as const
-                ).map(([value, text]) => (
-                  <button
-                    key={value}
-                    type="button"
-                    role="radio"
-                    aria-checked={packaging === value}
-                    onClick={() => onPackagingChange(value)}
-                    className={cx(
-                      'flex-1 cursor-pointer rounded-lg px-2 py-2 text-[0.8125rem] font-medium transition-all duration-150',
-                      packaging === value
-                        ? 'bg-[var(--color-surface)] text-[var(--color-ink)] shadow-[0_1px_2px_oklch(0_0_0/0.06)]'
-                        : 'text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]',
-                    )}
-                  >
-                    {text}
-                  </button>
-                ))}
+              <div
+                role="radiogroup"
+                aria-label="Packaging"
+                className="flex gap-1 rounded-xl bg-[var(--color-sunken)] p-1"
+              >
+                {PACKAGING_OPTIONS.map(([value, text], index) => {
+                  const selected = packaging === value;
+                  return (
+                    <button
+                      key={value}
+                      type="button"
+                      role="radio"
+                      aria-checked={selected}
+                      tabIndex={selected ? 0 : -1}
+                      onClick={() => onPackagingChange(value)}
+                      onKeyDown={(event) =>
+                        stepRadio(
+                          event,
+                          PACKAGING_OPTIONS.map(([mode]) => mode),
+                          index,
+                          onPackagingChange,
+                        )
+                      }
+                      className={cx(
+                        'flex-1 cursor-pointer rounded-lg px-2 py-2 text-[0.8125rem] font-medium transition-all duration-150',
+                        selected
+                          ? 'bg-[var(--color-surface)] text-[var(--color-ink)] shadow-[0_1px_2px_oklch(0_0_0/0.06)]'
+                          : 'text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]',
+                      )}
+                    >
+                      {text}
+                    </button>
+                  );
+                })}
               </div>
             </fieldset>
           )}
@@ -550,6 +631,7 @@ function SubtitleFields({
   onFormatChange,
   only,
   onOnlyChange,
+  disabled,
 }: {
   readonly choices: SubtitleChoices;
   readonly track: string;
@@ -558,6 +640,7 @@ function SubtitleFields({
   readonly onFormatChange: (value: SubtitleFormat) => void;
   readonly only: boolean;
   readonly onOnlyChange: (value: boolean) => void;
+  readonly disabled?: boolean;
 }) {
   const formats: readonly (readonly [SubtitleFormat, string])[] = [
     ...(choices.canEmbed ? ([['embed', 'In the video']] as const) : []),
@@ -572,9 +655,10 @@ function SubtitleFields({
       </label>
       <select
         id="sera-subtitles"
-        value={track}
+        value={disabled ? '' : track}
+        disabled={disabled}
         onChange={(event) => onTrackChange(event.target.value)}
-        className={cx(FIELD_INPUT, 'cursor-pointer')}
+        className={cx(FIELD_INPUT, disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer')}
       >
         <option value="">None</option>
         {choices.tracks.map((candidate) => (
@@ -583,43 +667,61 @@ function SubtitleFields({
           </option>
         ))}
       </select>
-      {choices.tracks.some((candidate) => trackValue(candidate) === track) && (
-        <>
-          <div
-            role="radiogroup"
-            aria-label="Subtitle format"
-            className="flex gap-1 rounded-xl bg-[var(--color-sunken)] p-1"
-          >
-            {formats.map(([value, text]) => (
-              <button
-                key={value}
-                type="button"
-                role="radio"
-                aria-checked={format === value}
-                onClick={() => onFormatChange(value)}
-                className={cx(
-                  'flex-1 cursor-pointer rounded-lg px-2 py-2 text-[0.8125rem] font-medium transition-all duration-150',
-                  format === value
-                    ? 'bg-[var(--color-surface)] text-[var(--color-ink)] shadow-[0_1px_2px_oklch(0_0_0/0.06)]'
-                    : 'text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]',
-                )}
-              >
-                {text}
-              </button>
-            ))}
-          </div>
-          {format !== 'embed' && (
-            <label className="flex cursor-pointer items-center gap-2 text-[0.8125rem] text-[var(--color-ink-muted)]">
-              <input
-                type="checkbox"
-                checked={only}
-                onChange={(event) => onOnlyChange(event.target.checked)}
-                className="size-4 cursor-pointer accent-[var(--color-accent)]"
-              />
-              Only the subtitles
-            </label>
-          )}
-        </>
+      {disabled ? (
+        <p className="text-xs text-[var(--color-ink-faint)]">
+          Subtitles cannot be combined with trimming.
+        </p>
+      ) : (
+        choices.tracks.some((candidate) => trackValue(candidate) === track) && (
+          <>
+            <div
+              role="radiogroup"
+              aria-label="Subtitle format"
+              className="flex gap-1 rounded-xl bg-[var(--color-sunken)] p-1"
+            >
+              {formats.map(([value, text], index) => {
+                const selected = format === value;
+                return (
+                  <button
+                    key={value}
+                    type="button"
+                    role="radio"
+                    aria-checked={selected}
+                    tabIndex={selected ? 0 : -1}
+                    onClick={() => onFormatChange(value)}
+                    onKeyDown={(event) =>
+                      stepRadio(
+                        event,
+                        formats.map(([fmt]) => fmt),
+                        index,
+                        onFormatChange,
+                      )
+                    }
+                    className={cx(
+                      'flex-1 cursor-pointer rounded-lg px-2 py-2 text-[0.8125rem] font-medium transition-all duration-150',
+                      selected
+                        ? 'bg-[var(--color-surface)] text-[var(--color-ink)] shadow-[0_1px_2px_oklch(0_0_0/0.06)]'
+                        : 'text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]',
+                    )}
+                  >
+                    {text}
+                  </button>
+                );
+              })}
+            </div>
+            {format !== 'embed' && (
+              <label className="flex cursor-pointer items-center gap-2 text-[0.8125rem] text-[var(--color-ink-muted)]">
+                <input
+                  type="checkbox"
+                  checked={only}
+                  onChange={(event) => onOnlyChange(event.target.checked)}
+                  className="size-4 cursor-pointer accent-[var(--color-accent)]"
+                />
+                Only the subtitles
+              </label>
+            )}
+          </>
+        )
       )}
     </fieldset>
   );
@@ -632,8 +734,9 @@ function TrimFields({
   onEndChange,
   summary,
   endPlaceholder: placeholder,
+  disabled,
 }: NonNullable<Parameters<typeof AdvancedOptions>[0]['trim']>) {
-  const invalid = summary.state === 'invalid';
+  const invalid = !disabled && summary.state === 'invalid';
   return (
     <fieldset>
       <legend className={FIELD_LABEL}>Trim</legend>
@@ -649,11 +752,12 @@ function TrimFields({
             autoComplete="off"
             value={start}
             maxLength={9}
+            disabled={disabled}
             onChange={(event) => onStartChange(event.target.value)}
             placeholder="0:00"
             aria-invalid={invalid}
             aria-describedby="sera-trim-summary"
-            className={FIELD_INPUT}
+            className={cx(FIELD_INPUT, disabled && 'cursor-not-allowed opacity-60')}
           />
         </div>
         <div>
@@ -667,11 +771,12 @@ function TrimFields({
             autoComplete="off"
             value={end}
             maxLength={9}
+            disabled={disabled}
             onChange={(event) => onEndChange(event.target.value)}
             placeholder={placeholder}
             aria-invalid={invalid}
             aria-describedby="sera-trim-summary"
-            className={FIELD_INPUT}
+            className={cx(FIELD_INPUT, disabled && 'cursor-not-allowed opacity-60')}
           />
         </div>
       </div>
@@ -683,18 +788,22 @@ function TrimFields({
           invalid ? 'text-[var(--color-danger)]' : 'text-[var(--color-ink-faint)]',
         )}
       >
-        {summary.state === 'invalid'
-          ? summary.message
-          : summary.state === 'ok'
-            ? [
-                summary.keptSeconds !== undefined
-                  ? `Keeps ${formatDuration(summary.keptSeconds)}`
-                  : 'Keeps the part between these times',
-                summary.estimatedBytes ? `about ${formatBytes(summary.estimatedBytes)}` : undefined,
-              ]
-                .filter(Boolean)
-                .join(' · ')
-            : 'Optional: start and end as m:ss or h:mm:ss.'}
+        {disabled
+          ? "Trimming isn't available when downloading subtitles."
+          : summary.state === 'invalid'
+            ? summary.message
+            : summary.state === 'ok'
+              ? [
+                  summary.keptSeconds !== undefined
+                    ? `Keeps ${formatDuration(summary.keptSeconds)}`
+                    : 'Keeps the part between these times',
+                  summary.estimatedBytes
+                    ? `about ${formatBytes(summary.estimatedBytes)}`
+                    : undefined,
+                ]
+                  .filter(Boolean)
+                  .join(' · ')
+              : 'Optional: start and end as m:ss or h:mm:ss.'}
       </p>
     </fieldset>
   );

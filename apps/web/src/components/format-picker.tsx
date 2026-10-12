@@ -54,7 +54,7 @@ export function FormatPicker({
             className="grid grid-flow-col gap-1 rounded-xl bg-[var(--color-sunken)] p-1"
             style={{ gridTemplateColumns: `repeat(${kinds.length}, minmax(0, 1fr))` }}
           >
-            {kinds.map((candidate) => {
+            {kinds.map((candidate, index) => {
               const Icon = KIND_ICON[candidate];
               const selected = candidate === kind;
               return (
@@ -63,7 +63,22 @@ export function FormatPicker({
                   type="button"
                   role="radio"
                   aria-checked={selected}
+                  tabIndex={selected ? 0 : -1}
                   onClick={() => onKindChange(candidate)}
+                  onKeyDown={(event) => {
+                    let offset = 0;
+                    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') offset = 1;
+                    else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') offset = -1;
+                    if (!offset) return;
+                    event.preventDefault();
+                    const nextIndex = (index + offset + kinds.length) % kinds.length;
+                    const nextKind = kinds[nextIndex];
+                    if (!nextKind) return;
+                    onKindChange(nextKind);
+                    event.currentTarget.parentElement
+                      ?.querySelectorAll<HTMLButtonElement>('[role="radio"]')
+                      [nextIndex]?.focus();
+                  }}
                   className={cx(
                     'flex min-w-0 cursor-pointer items-center justify-center gap-2 rounded-lg px-1.5 py-2.5 text-[0.8125rem] font-medium transition-all duration-150 min-[400px]:px-3',
                     selected
@@ -118,7 +133,7 @@ export function FormatPicker({
         </p>
       )}
 
-      {labels.length === 1 && describing?.filesizeBytes !== undefined && (
+      {selectedIds.size === 1 && labels.length === 1 && describing?.filesizeBytes !== undefined && (
         <p className="-mt-1 text-[0.8125rem] text-[var(--color-ink-muted)]">
           {describing.filesizeIsApproximate ? 'About ' : ''}
           {formatBytes(describing.filesizeBytes)}

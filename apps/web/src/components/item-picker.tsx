@@ -10,7 +10,7 @@ const KIND_ICON = {
   audio: AudioIcon,
   image: ImageIcon,
   gif: GifIcon,
-  unknown: ImageIcon,
+  unknown: VideoIcon,
 } as const;
 
 export function ItemPicker({

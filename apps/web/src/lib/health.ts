@@ -95,17 +95,19 @@ export function showsLight(state: HealthState): boolean {
   return state.light !== 'unknown';
 }
 
-export function summarizeHealth(state: HealthState): string {
+export function headlineHealth(state: HealthState): string {
   switch (state.light) {
     case 'green':
-      return 'Service status: everything is working';
+      return 'Everything is working';
     case 'amber':
-      return 'Service status: partly working';
+      return 'Partly working';
     case 'red':
-      return state.failures >= FAILURES_BEFORE_DOWN
-        ? 'Service status: not reachable'
-        : 'Service status: not working';
+      return state.failures >= FAILURES_BEFORE_DOWN ? 'Not reachable' : 'Not working';
     case 'unknown':
-      return 'Service status: checking';
+      return 'Checking';
   }
+}
+
+export function summarizeHealth(state: HealthState): string {
+  return `Service status: ${headlineHealth(state).toLowerCase()}`;
 }

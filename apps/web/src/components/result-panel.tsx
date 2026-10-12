@@ -1,24 +1,36 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Job } from '@sera/contracts/types';
 import { CheckIcon, DownloadIcon } from './icons';
 import { formatBytes, pluralize } from '@/lib/format';
 
 export function ResultPanel({ job, onReset }: { readonly job: Job; readonly onReset: () => void }) {
   const result = job.result;
-  const [started, setStarted] = useState(false);
+  const startedFor = useRef<string | undefined>(undefined);
+  const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
-    if (!result || started) return;
-    setStarted(true);
+    if (
+      !result ||
+      startedFor.current === result.downloadPath ||
+      !result.downloadPath.startsWith('/api/')
+    ) {
+      return;
+    }
+    startedFor.current = result.downloadPath;
     window.location.assign(result.downloadPath);
-  }, [result, started]);
+  }, [result]);
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(timer);
+  }, []);
 
   if (!result) return null;
 
   const expires = new Date(result.expiresAt);
-  const minutesLeft = Math.max(0, Math.round((expires.getTime() - Date.now()) / 60_000));
+  const minutesLeft = Math.max(0, Math.round((expires.getTime() - now) / 60_000));
 
   return (
     <section

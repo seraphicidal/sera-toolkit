@@ -1,4 +1,5 @@
 import type { SVGProps } from 'react';
+import { cx } from '@/lib/format';
 
 type IconProps = SVGProps<SVGSVGElement> & { readonly size?: number };
 
@@ -64,7 +65,7 @@ export const AlertIcon = (props: IconProps) => (
   </Icon>
 );
 
-export const SpinnerIcon = ({ size = 20, ...props }: IconProps) => (
+export const SpinnerIcon = ({ size = 20, className, ...props }: IconProps) => (
   <svg
     width={size}
     height={size}
@@ -72,7 +73,7 @@ export const SpinnerIcon = ({ size = 20, ...props }: IconProps) => (
     fill="none"
     aria-hidden="true"
     focusable="false"
-    className="animate-spin-slow"
+    className={cx('animate-spin-slow', className)}
     {...props}
   >
     <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth={1.6} opacity={0.22} />

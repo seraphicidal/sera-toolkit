@@ -20,21 +20,37 @@ export function applyTheme(preference: ThemePreference): void {
   }
 }
 
-const OPTIONS: { value: ThemePreference; label: string; Icon: typeof SunIcon }[] = [
+const OPTIONS: readonly {
+  readonly value: ThemePreference;
+  readonly label: string;
+  readonly Icon: typeof SunIcon;
+}[] = [
   { value: 'light', label: 'Light', Icon: SunIcon },
   { value: 'system', label: 'System', Icon: MonitorIcon },
   { value: 'dark', label: 'Dark', Icon: MoonIcon },
 ];
+
+function readStoredTheme(): ThemePreference {
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    return stored === 'light' || stored === 'dark' || stored === 'system' ? stored : 'system';
+  } catch {
+    return 'system';
+  }
+}
+
+function writeStoredTheme(value: ThemePreference): void {
+  try {
+    localStorage.setItem(STORAGE_KEY, value);
+  } catch {}
+}
 
 export function ThemeToggle() {
   const [preference, setPreference] = useState<ThemePreference>('system');
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    const stored = localStorage.getItem(STORAGE_KEY) as ThemePreference | null;
-    const initial: ThemePreference =
-      stored === 'light' || stored === 'dark' || stored === 'system' ? stored : 'system';
-    setPreference(initial);
+    setPreference(readStoredTheme());
     setReady(true);
 
     const media = window.matchMedia('(prefers-color-scheme: dark)');
@@ -47,7 +63,7 @@ export function ThemeToggle() {
 
   const choose = (value: ThemePreference): void => {
     setPreference(value);
-    localStorage.setItem(STORAGE_KEY, value);
+    writeStoredTheme(value);
     applyTheme(value);
   };
 
@@ -57,7 +73,7 @@ export function ThemeToggle() {
       aria-label="Colour theme"
       className="inline-flex items-center gap-0.5 rounded-full border border-[var(--color-line)] bg-[var(--color-surface)] p-0.5"
     >
-      {OPTIONS.map(({ value, label, Icon }) => {
+      {OPTIONS.map(({ value, label, Icon }, index) => {
         const selected = ready && preference === value;
         return (
           <button
@@ -65,9 +81,24 @@ export function ThemeToggle() {
             type="button"
             role="radio"
             aria-checked={selected}
+            tabIndex={selected ? 0 : -1}
             aria-label={label}
             title={label}
             onClick={() => choose(value)}
+            onKeyDown={(event) => {
+              let offset = 0;
+              if (event.key === 'ArrowRight' || event.key === 'ArrowDown') offset = 1;
+              else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') offset = -1;
+              if (!offset) return;
+              event.preventDefault();
+              const nextIndex = (index + offset + OPTIONS.length) % OPTIONS.length;
+              const nextOption = OPTIONS[nextIndex];
+              if (!nextOption) return;
+              choose(nextOption.value);
+              event.currentTarget.parentElement
+                ?.querySelectorAll<HTMLButtonElement>('[role="radio"]')
+                [nextIndex]?.focus();
+            }}
             className={cx(
               'grid size-7 cursor-pointer place-items-center rounded-full transition-colors duration-150',
               selected

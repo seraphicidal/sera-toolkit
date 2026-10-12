@@ -6,6 +6,7 @@ import { bookmarkletSource, buildBookmarklet } from '@/lib/bookmarklet';
 export function BookmarkletLink() {
   const ref = useRef<HTMLAnchorElement>(null);
   const manualRef = useRef<HTMLTextAreaElement>(null);
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [href, setHref] = useState('');
   const [source, setSource] = useState('');
   const [copied, setCopied] = useState(false);
@@ -18,6 +19,9 @@ export function BookmarkletLink() {
     ref.current?.setAttribute('href', built);
     setHref(built);
     setSource(bookmarkletSource(origin));
+    return () => {
+      if (copyTimer.current) clearTimeout(copyTimer.current);
+    };
   }, []);
 
   useEffect(() => {
@@ -32,7 +36,8 @@ export function BookmarkletLink() {
       setManual(false);
       setNudge(false);
       setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      if (copyTimer.current) clearTimeout(copyTimer.current);
+      copyTimer.current = setTimeout(() => setCopied(false), 2000);
     };
     try {
       await navigator.clipboard.writeText(href);

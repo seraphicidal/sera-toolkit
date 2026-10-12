@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { HealthReport } from '@sera/contracts/types';
 import {
   describeHealth,
+  headlineHealth,
   initialHealth,
   isHealthReport,
   nextHealth,
@@ -128,12 +129,25 @@ describe('describeHealth', () => {
   });
 });
 
+describe('headlineHealth', () => {
+  it('writes the popover heading for every state', () => {
+    expect(headlineHealth(initialHealth)).toBe('Checking');
+    expect(headlineHealth(run(up(report('ok'))))).toBe('Everything is working');
+    expect(headlineHealth(run(up(report('degraded', ['queue']))))).toBe('Partly working');
+    expect(headlineHealth(run(up(report('error', ['yt-dlp']))))).toBe('Not working');
+    expect(headlineHealth(run(down, down))).toBe('Not reachable');
+  });
+});
+
 describe('summarizeHealth', () => {
   it('gives the light an accessible name for every state', () => {
     expect(summarizeHealth(initialHealth)).toBe('Service status: checking');
     expect(summarizeHealth(run(up(report('ok'))))).toBe('Service status: everything is working');
     expect(summarizeHealth(run(up(report('degraded', ['queue']))))).toBe(
       'Service status: partly working',
+    );
+    expect(summarizeHealth(run(up(report('error', ['yt-dlp']))))).toBe(
+      'Service status: not working',
     );
     expect(summarizeHealth(run(down, down))).toBe('Service status: not reachable');
   });

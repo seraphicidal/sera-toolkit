@@ -4,6 +4,7 @@ import { useCallback, useEffect, useId, useReducer, useRef, useState } from 'rea
 import { cx } from '@/lib/format';
 import {
   describeHealth,
+  headlineHealth,
   initialHealth,
   isHealthReport,
   nextHealth,
@@ -71,7 +72,12 @@ export function HealthIndicator() {
   useEffect(() => {
     if (!open) return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false);
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        setOpen(false);
+      }
     };
     const onPointer = (event: PointerEvent) => {
       if (!root.current?.contains(event.target as Node)) setOpen(false);
@@ -85,8 +91,7 @@ export function HealthIndicator() {
   }, [open]);
 
   const summary = summarizeHealth(state);
-  const status = summary.slice(summary.indexOf(':') + 2);
-  const headline = status.charAt(0).toUpperCase() + status.slice(1);
+  const headline = headlineHealth(state);
   const lines = describeHealth(state);
 
   return (

@@ -1,13 +1,13 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
-import type { JobError, MediaInfo } from '@sera/contracts/types';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type { ImportRequest, JobError, MediaInfo } from '@sera/contracts/types';
 import Link from 'next/link';
 import { ApiError, importMedia } from '@/lib/api';
 import { openImportChannel, readImportFragment } from '@/lib/import-handshake';
 import { BookmarkletLink } from './bookmarklet-link';
 import { Downloader } from './downloader';
-import { ErrorPanel } from './error-panel';
+import { ErrorPanel, type ErrorAction } from './error-panel';
 import { SpinnerIcon } from './icons';
 
 type Phase = 'waiting' | 'ready' | 'error' | 'idle';
@@ -25,42 +25,53 @@ export function ImportClient() {
   const [phase, setPhase] = useState<Phase>('waiting');
   const [info, setInfo] = useState<MediaInfo>();
   const [error, setError] = useState<JobError>();
+  const [savedRequest, setSavedRequest] = useState<ImportRequest>();
+  const abortRef = useRef<AbortController | undefined>(undefined);
   const fragment = useRef<{ read: boolean; value: ReturnType<typeof readImportFragment> }>({
     read: false,
     value: undefined,
   });
 
-  useEffect(() => {
+  const runImport = useCallback((request: ImportRequest) => {
+    abortRef.current?.abort();
     const controller = new AbortController();
+    abortRef.current = controller;
+
+    setSavedRequest(request);
+    setError(undefined);
+    setPhase('waiting');
+
+    importMedia(request, controller.signal)
+      .then((resolved) => {
+        if (controller.signal.aborted) return;
+        setInfo(resolved);
+        setPhase('ready');
+      })
+      .catch((caught: unknown) => {
+        if (controller.signal.aborted) return;
+        setError(
+          caught instanceof ApiError
+            ? {
+                code: caught.code,
+                message: caught.message,
+                ...(caught.hint ? { hint: caught.hint } : {}),
+                retryable: caught.retryable,
+              }
+            : { code: 'INTERNAL', message: 'Something went wrong.', retryable: true },
+        );
+        setPhase('error');
+      });
+  }, []);
+
+  useEffect(() => {
     if (!fragment.current.read) {
       fragment.current = { read: true, value: readImportFragment(window) };
     }
 
-    const onResolved = (resolved: MediaInfo): void => {
-      if (controller.signal.aborted) return;
-      setInfo(resolved);
-      setPhase('ready');
-    };
-    const showError = (caught: unknown): void => {
-      if (controller.signal.aborted) return;
-      setError(
-        caught instanceof ApiError
-          ? {
-              code: caught.code,
-              message: caught.message,
-              ...(caught.hint ? { hint: caught.hint } : {}),
-              retryable: caught.retryable,
-            }
-          : { code: 'INTERNAL', message: 'Something went wrong.', retryable: true },
-      );
-      setPhase('error');
-    };
-
     const fragmentResult = fragment.current.value;
     if (fragmentResult) {
       if (fragmentResult.ok) {
-        setPhase('waiting');
-        importMedia(fragmentResult.request, controller.signal).then(onResolved).catch(showError);
+        runImport(fragmentResult.request);
       } else {
         setError(
           fragmentResult.reason === 'too-large'
@@ -79,29 +90,28 @@ export function ImportClient() {
         );
         setPhase('error');
       }
-      return () => controller.abort();
+      return () => abortRef.current?.abort();
     }
 
     if (!window.opener) {
       setPhase('idle');
-      return () => controller.abort();
+      return () => abortRef.current?.abort();
     }
 
     const channel = openImportChannel(window);
     channel.received
-      .then((request) => importMedia(request, controller.signal))
-      .then(onResolved)
-      .catch((caught: unknown) => {
-        if (controller.signal.aborted) return;
-        if (caught instanceof ApiError) showError(caught);
-        else setPhase('idle');
+      .then((request) => {
+        runImport(request);
+      })
+      .catch(() => {
+        setPhase('idle');
       });
 
     return () => {
       channel.close();
-      controller.abort();
+      abortRef.current?.abort();
     };
-  }, []);
+  }, [runImport]);
 
   if (phase === 'ready' && info) {
     return (
@@ -115,14 +125,20 @@ export function ImportClient() {
   }
 
   if (phase === 'error' && error) {
+    const canRetry = error.retryable && savedRequest !== undefined;
+    const actions: ErrorAction[] = [
+      ...(canRetry
+        ? [{ label: 'Try again', primary: true, onClick: () => runImport(savedRequest) }]
+        : []),
+      {
+        label: 'Back to SERA',
+        primary: !canRetry,
+        onClick: () => (window.location.href = '/'),
+      },
+    ];
     return (
       <div className="flex flex-1 flex-col justify-center py-8">
-        <ErrorPanel
-          error={error}
-          actions={[
-            { label: 'Back to SERA', primary: true, onClick: () => (window.location.href = '/') },
-          ]}
-        />
+        <ErrorPanel error={error} actions={actions} />
       </div>
     );
   }

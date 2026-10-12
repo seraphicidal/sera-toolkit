@@ -14,7 +14,9 @@ export interface UseJobResult {
 }
 
 export function useJob(jobId: string | undefined, initial?: Job): UseJobResult {
-  const [job, setJob] = useState<Job | undefined>(initial);
+  const [job, setJob] = useState<Job | undefined>(() =>
+    jobId && initial?.id === jobId ? initial : undefined,
+  );
   const [following, setFollowing] = useState(false);
   const activeId = useRef<string | undefined>(undefined);
 
@@ -32,11 +34,13 @@ export function useJob(jobId: string | undefined, initial?: Job): UseJobResult {
   useEffect(() => {
     if (!jobId) {
       activeId.current = undefined;
+      setJob(undefined);
       setFollowing(false);
       return;
     }
 
     activeId.current = jobId;
+    setJob((prev) => (prev?.id === jobId ? prev : initial?.id === jobId ? initial : undefined));
     setFollowing(true);
 
     let stopped = false;
@@ -117,7 +121,15 @@ export function useJob(jobId: string | undefined, initial?: Job): UseJobResult {
       if (graceTimer) clearTimeout(graceTimer);
       controller.abort();
     };
-  }, [jobId, apply]);
+  }, [jobId, initial, apply]);
 
-  return { job, following };
+  const currentJob = jobId
+    ? job?.id === jobId
+      ? job
+      : initial?.id === jobId
+        ? initial
+        : undefined
+    : undefined;
+
+  return { job: currentJob, following };
 }
