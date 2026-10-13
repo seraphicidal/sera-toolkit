@@ -11,16 +11,14 @@ export const metadata: Metadata = {
 export const revalidate = 60;
 
 interface PatchRecord {
-  readonly version: string;
+  readonly id: string;
   readonly title: string;
-  readonly date: string;
   readonly stats: {
     readonly files: number;
     readonly insertions: number;
     readonly deletions: number;
     readonly total: number;
   };
-  readonly highlights: readonly string[];
   readonly categories: readonly {
     readonly name: string;
     readonly items: readonly string[];
@@ -29,23 +27,14 @@ interface PatchRecord {
 
 const PATCHES: readonly PatchRecord[] = [
   {
-    version: 'Update 1.1',
+    id: 'acceleration-actions',
     title: 'Download Acceleration, Connection Pipelining & Quick Actions',
-    date: 'October 13, 2026',
     stats: {
       files: 10,
       insertions: 265,
       deletions: 55,
       total: 320,
     },
-    highlights: [
-      'Multi-fragment concurrent stream acceleration in yt-dlp with expanded 64KB extraction buffers.',
-      'Auto-threaded FFmpeg media transcoding across all available hardware cores.',
-      'Reduced filesystem context switching and syscall overhead with 512KB write stream buffers.',
-      'HTTP keep-alive connection reuse and pipelining enabled on safe internal dispatchers.',
-      'Mobile one-tap Paste & Analyze, Cmd/Ctrl + Enter download shortcut, and format kind persistence.',
-      'One-click download link copying with instant feedback, per-file copy links, and native in-browser media previews.',
-    ],
     categories: [
       {
         name: 'Download & Conversion Acceleration',
@@ -70,22 +59,14 @@ const PATCHES: readonly PatchRecord[] = [
     ],
   },
   {
-    version: 'Audit Pass 3',
+    id: 'security-boundaries',
     title: 'SSRF, Token Boundaries, ReDoS & System Security',
-    date: 'October 13, 2026',
     stats: {
       files: 47,
       insertions: 878,
       deletions: 136,
       total: 1014,
     },
-    highlights: [
-      'Hardened IPv6 transition ranges (IPv4-compatible ::/96, SIIT ::ffff:0:0:0/96, local NAT64 64:ff9b:1::/48, Teredo 2001::/23, 6to4 2002::/16) and expanded IPv4-mapped address unwrapping.',
-      'Eliminated cross-purpose token confusion across thumbnail, info, and option signed tokens.',
-      'Replaced exponential regex robots.txt wildcard matching with a linear-time O(|pattern| + |path|) wildcard matcher.',
-      'Enforced constant-time SHA-256 token verification, rightmost X-Forwarded-For hop inspection, and trailing-dot hostname canonicalization.',
-      'Restricted FFmpeg and ffprobe protocol whitelists to local files and pipes, blocking HLS/concat container SSRF.',
-    ],
     categories: [
       {
         name: 'Cybersecurity & Boundaries',
@@ -124,21 +105,14 @@ const PATCHES: readonly PatchRecord[] = [
     ],
   },
   {
-    version: 'Audit Pass 2',
+    id: 'architecture-streams',
     title: 'Engine Architecture, Concurrency & Stream Safety',
-    date: 'October 13, 2026',
     stats: {
       files: 34,
       insertions: 458,
       deletions: 170,
       total: 628,
     },
-    highlights: [
-      'Refactored memory queue with bounded concurrency and drain synchronization.',
-      'Guarded child process execution with signal listeners and clean process group termination.',
-      'Hardened stream pipelines against unhandled rejections during premature client disconnection.',
-      'Prevented memory leaks in SSE event streams with heartbeat pings and auto-cleanup listeners.',
-    ],
     categories: [
       {
         name: 'Streaming & Lifecycle',
@@ -160,22 +134,14 @@ const PATCHES: readonly PatchRecord[] = [
     ],
   },
   {
-    version: 'Audit Pass 1',
+    id: 'state-resiliency',
     title: 'State Races, UX Resiliency & Accessibility',
-    date: 'October 12, 2026',
     stats: {
       files: 21,
       insertions: 684,
       deletions: 157,
       total: 841,
     },
-    highlights: [
-      'Fixed stale job state reuse across consecutive downloads in useJob and Downloader.',
-      'Corrected SpinnerIcon CSS class merging so loading spinners animate properly.',
-      'Guarded localStorage access with try/catch to prevent SecurityError crashes in private browsing.',
-      'Resolved global Escape key listener conflicts between popovers, inputs, and download cancellation.',
-      'Added full keyboard navigation, ARIA live regions, and semantic roles across format and packaging controls.',
-    ],
     categories: [
       {
         name: 'Component State & UX',
@@ -217,49 +183,30 @@ export default function PatchNotesPage() {
 
       <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatCard label="Total Lines Changed" value={totalLines.toLocaleString()} accent />
-        <StatCard label="Audit Passes" value={String(PATCHES.length)} />
+        <StatCard label="Releases" value={String(PATCHES.length)} />
         <StatCard label="Code Insertions" value={`+${totalInsertions.toLocaleString()}`} />
         <StatCard label="Code Deletions" value={`−${totalDeletions.toLocaleString()}`} />
       </section>
 
       {PATCHES.map((patch) => (
         <section
-          key={patch.version}
+          key={patch.id}
           className="flex flex-col gap-5 rounded-[var(--radius-panel)] border border-[var(--color-line)] bg-[var(--color-surface)] p-5 shadow-[var(--shadow-lift)] sm:p-6"
         >
           <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-[var(--color-line)] pb-4">
-            <div>
-              <span className="text-xs font-semibold tracking-wider text-[var(--color-accent)] uppercase">
-                {patch.version}
-              </span>
-              <h2 className="text-lg font-medium text-[var(--color-ink)]">{patch.title}</h2>
-            </div>
-            <div className="text-right">
-              <span className="text-xs text-[var(--color-ink-faint)]">{patch.date}</span>
-              <p className="tabular text-xs font-medium text-[var(--color-ink-muted)]">
-                {patch.stats.files} files · {patch.stats.total} lines (+{patch.stats.insertions} / −
-                {patch.stats.deletions})
-              </p>
-            </div>
+            <h2 className="text-lg font-medium text-[var(--color-ink)]">{patch.title}</h2>
+            <p className="tabular text-xs font-medium text-[var(--color-ink-muted)]">
+              {patch.stats.files} files · {patch.stats.total} lines (+{patch.stats.insertions} / −
+              {patch.stats.deletions})
+            </p>
           </div>
 
-          <div className="flex flex-col gap-2">
-            <h3 className="text-xs font-semibold tracking-wide text-[var(--color-ink-faint)] uppercase">
-              Highlights
-            </h3>
-            <ul className="list-disc space-y-1.5 pl-5 text-[0.875rem] leading-relaxed text-[var(--color-ink)]">
-              {patch.highlights.map((highlight, index) => (
-                <li key={index}>{highlight}</li>
-              ))}
-            </ul>
-          </div>
-
-          <div className="flex flex-col gap-4 pt-2">
+          <div className="flex flex-col gap-4">
             {patch.categories.map((category) => (
               <div key={category.name} className="flex flex-col gap-1.5">
-                <h4 className="text-xs font-medium text-[var(--color-ink-muted)]">
+                <h3 className="text-xs font-medium text-[var(--color-ink-muted)]">
                   {category.name}
-                </h4>
+                </h3>
                 <ul className="list-disc space-y-1 pl-5 text-[0.8125rem] leading-relaxed text-[var(--color-ink-muted)]">
                   {category.items.map((item, index) => (
                     <li key={index}>{item}</li>
@@ -270,17 +217,6 @@ export default function PatchNotesPage() {
           </div>
         </section>
       ))}
-
-      <section className="flex flex-col gap-3 rounded-[var(--radius-panel)] border border-[var(--color-line)] bg-[var(--color-sunken)] p-5 text-[0.875rem] text-[var(--color-ink-muted)]">
-        <h2 className="text-xs font-semibold tracking-wide text-[var(--color-ink-faint)] uppercase">
-          Verification & Guarantee
-        </h2>
-        <p>
-          Every release passes strict automated verification suites with zero runtime third-party
-          dependencies, strict TypeScript adherence, and full regression testing across SSRF, ReDoS,
-          and lifecycle bounds.
-        </p>
-      </section>
 
       <div className="flex items-center justify-between border-t border-[var(--color-line)] pt-6">
         <Link

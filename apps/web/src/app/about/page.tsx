@@ -197,12 +197,12 @@ export default async function AboutPage() {
       <Section title="Patch notes">
         <ul className="flex flex-col gap-1.5 text-[0.875rem]">
           <Limit
-            label="Latest update (Update 1.1)"
+            label="Latest update"
             value="Download acceleration, connection pipelining & quick actions"
           />
           <Limit
-            label="Security & hardening passes"
-            value="3 audits · 102 file touches · 2,483 lines changed"
+            label="Total changes"
+            value="4 releases · 112 file touches · 2,803 lines changed"
           />
         </ul>
         <ul className="mt-1 list-disc space-y-1.5 pl-5 text-[0.875rem]">
