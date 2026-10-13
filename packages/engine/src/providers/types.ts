@@ -9,6 +9,7 @@ import type {
 import type { ConversionSpec } from '../convert/ffmpeg.js';
 import type { EngineConfig } from '../config.js';
 import type { Logger } from '../logging.js';
+import type { OpenResponse } from '../security/http.js';
 import type { YtdlpInfo } from '../extract/ytdlp-types.js';
 
 export interface MediaProvider {
@@ -56,6 +57,15 @@ export interface ProviderContext {
   readonly head: (
     url: URL,
   ) => Promise<{ status: number; contentType?: string; contentLength?: number; url: string }>;
+  readonly open?: (
+    url: URL,
+    options?: {
+      readonly method?: 'GET' | 'HEAD';
+      readonly followRedirects?: boolean;
+      readonly timeoutMs?: number;
+      readonly signal?: AbortSignal;
+    },
+  ) => Promise<OpenResponse>;
 }
 
 export type FetchPlan =

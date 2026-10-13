@@ -30,15 +30,15 @@ import {
   type ImportedEntry,
   type MediaHostPolicy,
 } from './providers/instagram-media.js';
-import type {
-  DownloadPlan,
-  ProviderContext,
-  ResolvedItem,
-  ResolvedMedia,
+import {
+  type DownloadPlan,
+  type ProviderContext,
+  type ResolvedItem,
+  type ResolvedMedia,
+  planKey,
 } from './providers/types.js';
-import { planKey } from './providers/types.js';
 import { EgressGuard } from './security/egress.js';
-import { createSafeDispatcher, header, safeFetch } from './security/http.js';
+import { createSafeDispatcher, header, safeFetch, safeOpen } from './security/http.js';
 import { hostMatchesAny, normalizeUrl, parseUserUrl } from './security/url.js';
 import { TtlCache } from './util/cache.js';
 import { readToken, signToken, verifyToken } from './util/tokens.js';
@@ -533,6 +533,16 @@ export class MediaResolver {
           ...(Number.isFinite(length) && length > 0 ? { contentLength: length } : {}),
           url: response.url,
         };
+      },
+      open: async (url, options) => {
+        return safeOpen(url, {
+          dispatcher: this.dispatcher,
+          method: options?.method ?? 'GET',
+          followRedirects: options?.followRedirects ?? true,
+          timeoutMs: options?.timeoutMs ?? this.config.resolveTimeoutSeconds * 1000,
+          allowUrl,
+          ...(options?.signal ? { signal: options.signal } : signal ? { signal } : {}),
+        });
       },
     };
   }

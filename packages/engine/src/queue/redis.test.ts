@@ -189,6 +189,19 @@ describe.skipIf(!REDIS_URL)('RedisJobBackend against a live Redis', () => {
     expect((await backend.get('b7'))?.state).toBe('cancelled');
   });
 
+  it('interleaves concurrent cancel and progress patches atomically without overwriting cancellation', async () => {
+    await backend.submit(record('b10'));
+    await Promise.all([
+      backend.patch('b10', { progress: { percent: 10 } }),
+      backend.patch('b10', { state: 'cancelled', step: 'Cancelled' }),
+      backend.patch('b10', { progress: { percent: 50 }, step: 'Downloading' }),
+      backend.patch('b10', { progress: { percent: 90 }, step: 'Downloading' }),
+    ]);
+    const finalRecord = await backend.get('b10');
+    expect(finalRecord?.state).toBe('cancelled');
+    expect(finalRecord?.progress.percent).toBeGreaterThanOrEqual(10);
+  });
+
   it('carries a cancellation to a second process', async () => {
     const worker = new RedisJobBackend(REDIS_URL!, silentLogger());
     try {

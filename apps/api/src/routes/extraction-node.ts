@@ -131,7 +131,12 @@ function sanitizeUploadedFilename(requested: string): string {
 
 interface Dispatched {
   state: 'pending' | 'done' | 'failed';
-  progress?: { percent: number; step: string };
+  progress?: {
+    percent: number;
+    step: string;
+    bytesDownloaded?: number;
+    bytesTotal?: number;
+  };
   claimedBy?: string;
   media?: unknown;
   files?: readonly { name: string; mimeType: string; path: string }[];
@@ -352,8 +357,20 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
 
         const task = parsed.data;
         const options = {
-          onProgress: (progress: { percent: number; step: string }) => {
-            entry.progress = { percent: progress.percent, step: progress.step };
+          onProgress: (progress: {
+            percent: number;
+            step: string;
+            bytesDownloaded?: number;
+            bytesTotal?: number;
+          }) => {
+            entry.progress = {
+              percent: progress.percent,
+              step: progress.step,
+              ...(progress.bytesDownloaded !== undefined
+                ? { bytesDownloaded: progress.bytesDownloaded }
+                : {}),
+              ...(progress.bytesTotal !== undefined ? { bytesTotal: progress.bytesTotal } : {}),
+            };
           },
           onClaimed: (nodeId: string) => {
             entry.claimedBy = nodeId;

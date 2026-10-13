@@ -1,6 +1,6 @@
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
-import type { FastifyInstance, FastifyReply } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { createJobRequestSchema } from '@sera/contracts';
 import type { SeraEngine } from '@sera/engine';
 import { contentDispositionValue, mimeTypeFor, seraError, SeraError } from '@sera/engine';
@@ -87,35 +87,73 @@ export function registerJobRoutes(app: FastifyInstance, engine: SeraEngine): voi
     return reply;
   });
 
-  app.get<{ Params: { id: string } }>('/api/jobs/:id/download', async (request, reply) => {
-    const id = assertJobId(request.params.id);
-    const manifest = await engine.workspaces.readManifest(id);
-    if (!manifest) throw seraError('NOT_FOUND', { message: 'That download has expired.' });
-    return sendFile(
-      engine,
-      reply,
-      id,
-      manifest.primary,
-      !request.canary && request.method !== 'HEAD',
-    );
+  app.route<{ Params: { id: string } }>({
+    method: ['GET', 'HEAD'],
+    url: '/api/jobs/:id/download',
+    handler: async (request, reply) => {
+      const id = assertJobId(request.params.id);
+      const manifest = await engine.workspaces.readManifest(id);
+      if (!manifest) throw seraError('NOT_FOUND', { message: 'That download has expired.' });
+      return sendFile(engine, request, reply, id, manifest.primary, !request.canary);
+    },
   });
 
-  app.get<{ Params: { id: string; name: string } }>(
-    '/api/jobs/:id/files/:name',
-    async (request, reply) => {
+  app.route<{ Params: { id: string; name: string } }>({
+    method: ['GET', 'HEAD'],
+    url: '/api/jobs/:id/files/:name',
+    handler: async (request, reply) => {
       const id = assertJobId(request.params.id);
       const manifest = await engine.workspaces.readManifest(id);
       if (!manifest) throw seraError('NOT_FOUND', { message: 'That download has expired.' });
 
       const name = request.params.name;
       if (!manifest.files.some((file) => file.name === name)) throw seraError('NOT_FOUND');
-      return sendFile(engine, reply, id, name, !request.canary && request.method !== 'HEAD');
+      return sendFile(engine, request, reply, id, name, !request.canary);
     },
-  );
+  });
+}
+
+interface ByteRange {
+  start: number;
+  end: number;
+}
+
+function parseRange(header: string, size: number): ByteRange | 'unsatisfiable' | undefined {
+  if (size === 0) return 'unsatisfiable';
+  const match = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
+  if (!match) return undefined;
+  const startStr = match[1];
+  const endStr = match[2];
+  if (!startStr && !endStr) return undefined;
+  if (!startStr) {
+    if (!endStr) return undefined;
+    const suffix = parseInt(endStr, 10);
+    if (isNaN(suffix) || suffix <= 0) return 'unsatisfiable';
+    const start = Math.max(0, size - suffix);
+    return { start, end: size - 1 };
+  }
+  const start = parseInt(startStr, 10);
+  if (isNaN(start) || start < 0 || start >= size) return 'unsatisfiable';
+  if (!endStr) {
+    return { start, end: size - 1 };
+  }
+  const end = parseInt(endStr, 10);
+  if (isNaN(end) || end < start) return 'unsatisfiable';
+  return { start, end: Math.min(end, size - 1) };
+}
+
+function matchesIfRange(ifRange: string | undefined, etag: string, lastModified: string): boolean {
+  if (!ifRange) return true;
+  const trimmed = ifRange.trim();
+  if (trimmed === etag || trimmed === etag.replace(/^W\//, '')) return true;
+  const ifDate = Date.parse(trimmed);
+  const lmDate = Date.parse(lastModified);
+  return !isNaN(ifDate) && !isNaN(lmDate) && ifDate === lmDate;
 }
 
 async function sendFile(
   engine: SeraEngine,
+  request: FastifyRequest,
   reply: FastifyReply,
   jobId: string,
   filename: string,
@@ -123,6 +161,57 @@ async function sendFile(
 ): Promise<FastifyReply> {
   const path = await engine.workspaces.resolveFile(jobId, filename);
   const info = await stat(path);
+  const etag = `"${info.size.toString(16)}-${Math.floor(info.mtimeMs).toString(16)}"`;
+  const lastModified = info.mtime.toUTCString();
+
+  reply
+    .header('content-type', mimeTypeFor(filename))
+    .header('content-disposition', contentDispositionValue(filename))
+    .header('cache-control', 'private, no-store')
+    .header('x-content-type-options', 'nosniff')
+    .header('content-security-policy', "default-src 'none'; sandbox")
+    .header('accept-ranges', 'bytes')
+    .header('etag', etag)
+    .header('last-modified', lastModified);
+
+  if (request.method === 'HEAD') {
+    return reply.header('content-length', info.size).status(200).send();
+  }
+
+  const rangeHeader = request.headers.range;
+  const rawIfRange = request.headers['if-range'];
+  const ifRange = Array.isArray(rawIfRange) ? rawIfRange[0] : rawIfRange;
+  const hasRange = typeof rangeHeader === 'string' && matchesIfRange(ifRange, etag, lastModified);
+
+  if (hasRange) {
+    const range = parseRange(rangeHeader, info.size);
+    if (range === 'unsatisfiable') {
+      return reply.status(416).header('content-range', `bytes */${info.size}`).send();
+    }
+    if (range) {
+      const { start, end } = range;
+      const chunkSize = end - start + 1;
+      if (counted) {
+        reply.raw.once('finish', () => {
+          void engine.jobs
+            .get(jobId)
+            .then((job) =>
+              engine.usage.record({
+                source: job?.provider ?? 'other',
+                kind: 'bytes',
+                bytes: chunkSize,
+              }),
+            )
+            .catch(() => undefined);
+        });
+      }
+      return reply
+        .status(206)
+        .header('content-range', `bytes ${start}-${end}/${info.size}`)
+        .header('content-length', chunkSize)
+        .send(createReadStream(path, { start, end }));
+    }
+  }
 
   if (counted) {
     reply.raw.once('finish', () => {
@@ -139,12 +228,5 @@ async function sendFile(
     });
   }
 
-  return reply
-    .header('content-type', mimeTypeFor(filename))
-    .header('content-length', info.size)
-    .header('content-disposition', contentDispositionValue(filename))
-    .header('cache-control', 'private, no-store')
-    .header('x-content-type-options', 'nosniff')
-    .header('content-security-policy', "default-src 'none'; sandbox")
-    .send(createReadStream(path));
+  return reply.status(200).header('content-length', info.size).send(createReadStream(path));
 }
