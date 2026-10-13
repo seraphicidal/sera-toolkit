@@ -1,6 +1,5 @@
 import { Queue, Worker, type Job as BullJob } from 'bullmq';
 import { Redis } from 'ioredis';
-import { isTerminalJobState } from '@sera/contracts/types';
 import type { Logger } from '../logging.js';
 import {
   isActive,
@@ -16,6 +15,38 @@ export const QUEUE_NAME = 'sera-jobs';
 const RECORD_PREFIX = 'sera:job:';
 const CLIENT_PREFIX = 'sera:client:';
 const UPDATE_CHANNEL = 'sera:job-updates';
+
+const PATCH_LUA = `
+local raw = redis.call('get', KEYS[1])
+if not raw then return nil end
+local current = cjson.decode(raw)
+if current.state == 'ready' or current.state == 'failed' or current.state == 'cancelled' or current.state == 'expired' then
+  return raw
+end
+local patch = cjson.decode(ARGV[1])
+for k, v in pairs(patch) do
+  if k ~= 'progress' then current[k] = v end
+end
+if patch.progress then
+  if not current.progress then current.progress = {} end
+  local maxPercent = current.progress.percent or 0
+  if patch.progress.percent and patch.progress.percent > maxPercent then
+    maxPercent = patch.progress.percent
+  end
+  for pk, pv in pairs(patch.progress) do
+    current.progress[pk] = pv
+  end
+  current.progress.percent = maxPercent
+end
+current.updatedAt = ARGV[4]
+local encoded = cjson.encode(current)
+redis.call('set', KEYS[1], encoded, 'EX', ARGV[2])
+redis.call('publish', ARGV[3], encoded)
+if current.state ~= 'queued' and current.state ~= 'resolving' and current.state ~= 'downloading' and current.state ~= 'merging' and current.state ~= 'converting' and current.state ~= 'packaging' and current.state ~= 'finalizing' then
+  redis.call('srem', KEYS[2] .. current.clientKey, current.id)
+end
+return encoded
+`;
 
 export class RedisJobBackend implements JobBackend {
   readonly driver = 'redis' as const;
@@ -88,56 +119,22 @@ export class RedisJobBackend implements JobBackend {
 
   async patch(id: string, patch: JobPatch): Promise<JobRecord | undefined> {
     const key = RECORD_PREFIX + id;
-    for (let attempt = 0; attempt < 20; attempt += 1) {
-      await this.connection.watch(key);
-      const raw = await this.connection.get(key);
-      if (!raw) {
-        await this.connection.unwatch();
-        return undefined;
-      }
-
-      let current: JobRecord;
-      try {
-        current = JSON.parse(raw) as JobRecord;
-      } catch {
-        await this.connection.unwatch();
-        return undefined;
-      }
-
-      if (isTerminalJobState(current.state)) {
-        await this.connection.unwatch();
-        return current;
-      }
-
-      const next: JobRecord = {
-        ...current,
-        ...patch,
-        ...(patch.progress
-          ? {
-              progress: {
-                ...patch.progress,
-                percent: Math.max(current.progress.percent, patch.progress.percent),
-              },
-            }
-          : {}),
-        updatedAt: new Date().toISOString(),
-      };
-
-      const serialized = JSON.stringify(next);
-      const multi = this.connection.multi();
-      multi.set(key, serialized, 'EX', this.recordTtlSeconds);
-      multi.publish(UPDATE_CHANNEL, serialized);
-      if (!isActive(next.state)) {
-        multi.srem(CLIENT_PREFIX + next.clientKey, next.id);
-      }
-
-      const results = await multi.exec();
-      if (results === null) {
-        continue;
-      }
-      return next;
+    const res = await this.connection.eval(
+      PATCH_LUA,
+      2,
+      key,
+      CLIENT_PREFIX,
+      JSON.stringify(patch),
+      this.recordTtlSeconds,
+      UPDATE_CHANNEL,
+      new Date().toISOString(),
+    );
+    if (typeof res !== 'string') return undefined;
+    try {
+      return JSON.parse(res) as JobRecord;
+    } catch {
+      return undefined;
     }
-    return this.get(id);
   }
 
   ready(): Promise<void> {
