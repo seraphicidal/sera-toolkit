@@ -200,7 +200,7 @@ function buildArgs(request: ConvertRequest, source: ProbeResult): string[] {
     '-i',
     request.input,
     '-threads',
-    '2',
+    '0',
     '-max_muxing_queue_size',
     '1024',
   ];

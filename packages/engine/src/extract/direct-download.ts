@@ -84,9 +84,14 @@ export async function downloadDirect(
   });
 
   try {
-    await pipeline(opened.body, meter, createWriteStream(request.destination), {
-      ...(request.signal ? { signal: request.signal } : {}),
-    });
+    await pipeline(
+      opened.body,
+      meter,
+      createWriteStream(request.destination, { highWaterMark: 512 * 1024 }),
+      {
+        ...(request.signal ? { signal: request.signal } : {}),
+      },
+    );
   } catch (cause) {
     await rm(request.destination, { force: true }).catch(() => undefined);
     if (cause instanceof SeraError) throw cause;

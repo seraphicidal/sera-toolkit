@@ -39,13 +39,33 @@ import { UrlForm } from './url-form';
 
 type Phase = 'idle' | 'analyzing' | 'ready' | 'submitting' | 'running' | 'done';
 
+const PREFERRED_KIND_KEY = 'sera-preferred-kind';
+
+function getPreferredKind(): SelectableKind | undefined {
+  try {
+    const saved = localStorage.getItem(PREFERRED_KIND_KEY);
+    if (saved === 'video' || saved === 'audio' || saved === 'image' || saved === 'gif') {
+      return saved;
+    }
+  } catch {}
+  return undefined;
+}
+
+function setPreferredKind(kind: SelectableKind): void {
+  try {
+    localStorage.setItem(PREFERRED_KIND_KEY, kind);
+  } catch {}
+}
+
 function seedFrom(info: MediaInfo): {
   kind: SelectableKind;
   selectedIds: Set<string>;
   label: string | undefined;
 } {
-  const kind = initialKind(info);
   const selectedIds = new Set(info.items.map((item) => item.id));
+  const available = availableKinds(info, selectedIds);
+  const preferred = getPreferredKind();
+  const kind = preferred && available.includes(preferred) ? preferred : initialKind(info);
   return { kind, selectedIds, label: qualityLabels(info, kind, selectedIds)[0] };
 }
 
@@ -141,8 +161,11 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
       const resolved = await resolveMedia(raw, controller.signal);
       if (controller.signal.aborted) return;
 
-      const startingKind = initialKind(resolved);
       const everyItem = new Set(resolved.items.map((item) => item.id));
+      const available = availableKinds(resolved, everyItem);
+      const preferred = getPreferredKind();
+      const startingKind =
+        preferred && available.includes(preferred) ? preferred : initialKind(resolved);
 
       setInfo(resolved);
       setKind(startingKind);
@@ -308,20 +331,35 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key !== 'Escape' || event.defaultPrevented) return;
-      if (
-        event.target instanceof HTMLElement &&
-        event.target.matches('input, select, textarea, [contenteditable="true"]')
-      ) {
-        event.target.blur();
+      if (event.key === 'Escape' && !event.defaultPrevented) {
+        if (
+          event.target instanceof HTMLElement &&
+          event.target.matches('input, select, textarea, [contenteditable="true"]')
+        ) {
+          event.target.blur();
+          return;
+        }
+        if (phase === 'running' || phase === 'submitting') cancel();
+        else if (phase === 'ready' || phase === 'done' || phase === 'analyzing') reset();
         return;
       }
-      if (phase === 'running' || phase === 'submitting') cancel();
-      else if (phase === 'ready' || phase === 'done' || phase === 'analyzing') reset();
+      if (
+        (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) ||
+        (event.key === 'Enter' &&
+          !(
+            event.target instanceof HTMLElement &&
+            event.target.matches('input, select, textarea, button, [contenteditable="true"]')
+          ))
+      ) {
+        if (phase === 'ready' && selection?.optionIds.length && trim.state !== 'invalid') {
+          event.preventDefault();
+          void start();
+        }
+      }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [phase, cancel, reset]);
+  }, [phase, cancel, reset, selection, trim.state, start]);
 
   const busy = phase === 'analyzing';
   const working = phase === 'running' || phase === 'submitting';
@@ -408,7 +446,10 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
                 info={info}
                 selectedIds={selectedIds}
                 kind={kind}
-                onKindChange={setKind}
+                onKindChange={(nextKind) => {
+                  setKind(nextKind);
+                  setPreferredKind(nextKind);
+                }}
                 label={label}
                 onLabelChange={setLabel}
               />

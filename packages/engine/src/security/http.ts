@@ -58,7 +58,9 @@ export function createSafeDispatcher(options: SafeHttpOptions = {}): Dispatcher 
     connect: buildConnector(connectOptions),
     headersTimeout: options.headersTimeoutMs ?? 15_000,
     bodyTimeout: options.bodyTimeoutMs ?? 60_000,
-    pipelining: 0,
+    pipelining: 1,
+    keepAliveTimeout: 30_000,
+    keepAliveMaxTimeout: 60_000,
   });
 }
 

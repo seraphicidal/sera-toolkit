@@ -197,36 +197,31 @@ export default async function AboutPage() {
       <Section title="Patch notes">
         <ul className="flex flex-col gap-1.5 text-[0.875rem]">
           <Limit
-            label="Latest security & bug-fix audit"
-            value="47 files · 1,014 lines changed (+878 / −136)"
+            label="Latest update (Update 1.1)"
+            value="Download acceleration, connection pipelining & quick actions"
           />
           <Limit
-            label="Cumulative audit changes"
-            value="102 file touches · 2,483 lines changed (+2,020 / −463)"
+            label="Security & hardening passes"
+            value="3 audits · 102 file touches · 2,483 lines changed"
           />
         </ul>
         <ul className="mt-1 list-disc space-y-1.5 pl-5 text-[0.875rem]">
           <li>
-            Hardened SSRF and network boundaries across IPv6 transition ranges (IPv4-compatible,
-            SIIT, 6to4, Teredo, local NAT64, expanded IPv4-mapped addresses), redirect credentials
-            and non-standard ports, blocked-host checks, and HTTPS-only upstream media URLs.
+            Accelerated media downloads with 4 concurrent yt-dlp fragments, 64KB extraction buffers,
+            and 512KB direct disk write buffers.
           </li>
           <li>
-            Eliminated cross-purpose signed-token confusion on the thumbnail proxy, enforced
-            canonical base64url HMAC verification and SHA-256 constant-time bearer token checks, and
-            read the rightmost hop of <ExternalNote>X-Forwarded-For</ExternalNote> against spoofing.
+            Enabled auto-threaded FFmpeg transcoding across all CPU cores and persistent HTTP
+            keep-alive connection reuse and pipelining.
           </li>
           <li>
-            Replaced regex-based <ExternalNote>robots.txt</ExternalNote> wildcard matching with a
-            linear-time matcher, bounded JSON and carousel recursion depth, restricted{' '}
-            <ExternalNote>FFmpeg</ExternalNote> and <ExternalNote>ffprobe</ExternalNote> protocol
-            whitelists to local files and pipes, and hardened symlink and upload limits on
-            extraction nodes.
+            Added mobile one-tap Paste & Analyze, Cmd/Ctrl + Enter download shortcuts, persistent
+            format kind preferences, copy download link with toast feedback, and native in-browser
+            media previews.
           </li>
           <li>
-            Resolved state race conditions, duplicate polling loops, mixed-carousel format
-            switching, accessibility semantics, and zero-downtime deployment guards across the web
-            client and Oracle Cloud stack.
+            Full regression testing across SSRF, ReDoS, token security, and lifecycle bounds with
+            zero runtime third-party dependencies.
           </li>
         </ul>
         <p className="mt-1">

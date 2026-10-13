@@ -137,3 +137,16 @@ export const GifIcon = (props: IconProps) => (
     <path d="M13.75 9.5v5M16.5 14.5v-5h2.75M16.5 12h2.25" />
   </Icon>
 );
+
+export const CopyIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <rect x="9" y="9" width="13" height="13" rx="2" />
+    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+  </Icon>
+);
+
+export const PlayIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <polygon points="6 3 20 12 6 21 6 3" fill="currentColor" stroke="none" />
+  </Icon>
+);

@@ -104,7 +104,7 @@ export function UrlForm({
             type="button"
             onClick={() => void paste()}
             disabled={busy || disabled}
-            className="hidden shrink-0 cursor-pointer items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[0.8125rem] font-medium text-[var(--color-ink-muted)] transition-colors hover:bg-[var(--color-sunken)] hover:text-[var(--color-ink)] sm:flex"
+            className="flex shrink-0 cursor-pointer items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[0.8125rem] font-medium text-[var(--color-ink-muted)] transition-colors hover:bg-[var(--color-sunken)] hover:text-[var(--color-ink)]"
           >
             <ClipboardIcon size={15} />
             Paste

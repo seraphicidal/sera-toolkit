@@ -29,6 +29,47 @@ interface PatchRecord {
 
 const PATCHES: readonly PatchRecord[] = [
   {
+    version: 'Update 1.1',
+    title: 'Download Acceleration, Connection Pipelining & Quick Actions',
+    date: 'October 13, 2026',
+    stats: {
+      files: 10,
+      insertions: 265,
+      deletions: 55,
+      total: 320,
+    },
+    highlights: [
+      'Multi-fragment concurrent stream acceleration in yt-dlp with expanded 64KB extraction buffers.',
+      'Auto-threaded FFmpeg media transcoding across all available hardware cores.',
+      'Reduced filesystem context switching and syscall overhead with 512KB write stream buffers.',
+      'HTTP keep-alive connection reuse and pipelining enabled on safe internal dispatchers.',
+      'Mobile one-tap Paste & Analyze, Cmd/Ctrl + Enter download shortcut, and format kind persistence.',
+      'One-click download link copying with instant feedback, per-file copy links, and native in-browser media previews.',
+    ],
+    categories: [
+      {
+        name: 'Download & Conversion Acceleration',
+        items: [
+          'Added --concurrent-fragments 4 and --buffer-size 64K to yt-dlp to accelerate DASH and HLS video fragment extraction.',
+          'Enabled automatic multi-threading (-threads 0) in FFmpeg across audio/video conversions and remuxing.',
+          'Increased direct download write stream highWaterMark buffer from 64KB to 512KB to cut disk I/O overhead.',
+          'Configured connection pipelining and persistent keep-alive timeouts (30s / 60s) in Undici safe dispatchers.',
+        ],
+      },
+      {
+        name: 'Convenience & Quick Actions',
+        items: [
+          'Exposed Paste button on mobile screens with automatic one-tap link analysis upon pasting.',
+          'Added Cmd+Enter / Ctrl+Enter (and Enter key outside form inputs) keyboard shortcut to start download.',
+          'Persisted user-preferred format kind in local storage across browser visits with private browsing error guards.',
+          'Added Copy Download Link button with live copy status toasts on finished downloads.',
+          'Integrated zero-dependency in-browser HTML5 preview player for audio, video, and image downloads.',
+          'Added individual copy buttons for multi-file collections and carousels.',
+        ],
+      },
+    ],
+  },
+  {
     version: 'Audit Pass 3',
     title: 'SSRF, Token Boundaries, ReDoS & System Security',
     date: 'October 13, 2026',
