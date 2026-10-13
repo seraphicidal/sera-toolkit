@@ -78,7 +78,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: ${SERA_API_MEMORY:-1g}
+          memory: 1g
 
   worker:
     image: ${SERA_IMAGE_API:-ghcr.io/seraphicidal/sera-api:latest}
