@@ -27,6 +27,48 @@ interface PatchRecord {
 
 const PATCHES: readonly PatchRecord[] = [
   {
+    id: 'security-hardening-performance',
+    title: 'Egress Guard, Atomic Queuing, Download Acceleration & Per-Node Tokens',
+    stats: {
+      files: 46,
+      insertions: 3609,
+      deletions: 295,
+      total: 3904,
+    },
+    categories: [
+      {
+        name: 'Perimeter Security & SSRF Defense',
+        items: [
+          'Introduced loopback HTTP/CONNECT EgressGuard proxy ensuring yt-dlp and FFmpeg network requests resolve strictly to public IPs.',
+          'Redacted public health and readiness reports for unauthenticated callers with single-flight cached deduplication.',
+          'Added signed thumbnail proxy rate-limiting, in-memory LRU caching, and SSRF redirect validation.',
+          'Normalized IPv6 and IPv4-mapped addresses to /64 subnets before hashing client identifiers.',
+          'Hardened Docker Compose deploy memory limits and pinned GitHub Actions to immutable commit digests.',
+        ],
+      },
+      {
+        name: 'Engine Resiliency & Bug Fixes',
+        items: [
+          'Converted Redis job backend patching to atomic Lua scripting (EVAL), preventing race conditions during concurrent progress and cancellation writes.',
+          'Added HTTP Range (206 Partial Content) and HEAD support with real-time video seeking for in-browser media players.',
+          'Fixed t.co URL expansion via SSRF-safe single-hop resolution without offsite redirects.',
+          'Preserved provider signed URL query parameters while stripping universal analytics and tracking tags.',
+          'Separated job timeout signals from user cancellation to record timeouts as failures.',
+          'Capped fallback quality alternatives to the 2 nearest resolutions and prevented Enter key navigation conflicts on interactive links.',
+        ],
+      },
+      {
+        name: 'Download Acceleration & Node Credentials',
+        items: [
+          'Accelerated job starts by persisting API resolution outcomes and caching raw yt-dlp metadata via --load-info-json.',
+          'Added bounded item concurrency (SERA_ITEM_CONCURRENCY) and concurrent extraction node file uploads.',
+          'Implemented long-polling with instant push notifications for internal extraction dispatch status.',
+          'Upgraded extraction architecture to per-node credentials (SERA_EXTRACTION_NODE_TOKENS) with task ownership verification before uploads.',
+        ],
+      },
+    ],
+  },
+  {
     id: 'acceleration-actions',
     title: 'Download Acceleration, Connection Pipelining & Quick Actions',
     stats: {
