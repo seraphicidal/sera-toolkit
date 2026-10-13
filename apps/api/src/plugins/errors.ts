@@ -40,11 +40,13 @@ export const errorHandlerPlugin = fp(function errorHandlerPlugin(
     if (status < 500) {
       const body: ApiErrorBody = {
         error: {
-          code: status === 429 ? 'RATE_LIMITED' : 'INVALID_URL',
+          code: status === 429 ? 'RATE_LIMITED' : status === 413 ? 'TOO_LARGE' : 'INVALID_URL',
           message:
             status === 429
               ? 'Too many requests. Try again in a moment.'
-              : 'That request was not valid.',
+              : status === 413
+                ? 'That request is too large.'
+                : 'That request was not valid.',
           retryable: status === 429,
         },
       };

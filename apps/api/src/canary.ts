@@ -115,10 +115,20 @@ async function download(
     method: 'POST',
     body: JSON.stringify({ infoId: info.id, optionIds: [option.id] }),
   });
-  while (!['ready', 'failed', 'cancelled', 'expired'].includes(job.state)) {
-    await new Promise((resolve) => setTimeout(resolve, options.pollMs ?? 2000));
-    if (signal.aborted) throw signal.reason;
-    job = await json<Job>(`/api/jobs/${job.id}`);
+  try {
+    while (!['ready', 'failed', 'cancelled', 'expired'].includes(job.state)) {
+      await new Promise((resolve) => setTimeout(resolve, options.pollMs ?? 2000));
+      if (signal.aborted) throw signal.reason;
+      job = await json<Job>(`/api/jobs/${job.id}`);
+    }
+  } finally {
+    if (!['ready', 'failed', 'cancelled', 'expired'].includes(job.state)) {
+      await call(`${base}/api/jobs/${job.id}`, {
+        method: 'DELETE',
+        headers,
+        signal: AbortSignal.timeout(5_000),
+      }).catch(() => undefined);
+    }
   }
   if (job.state !== 'ready' || !job.result) {
     throw new CanaryFailure(job.error?.code ?? job.state.toUpperCase());

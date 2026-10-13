@@ -227,7 +227,12 @@ export abstract class YtdlpProvider implements MediaProvider {
 
   protected fallbackTitle(url: URL): string {
     const segment = url.pathname.split('/').filter(Boolean).pop();
-    return segment ? decodeURIComponent(segment).replace(/[-_]+/g, ' ') : this.label;
+    if (!segment) return this.label;
+    let decoded = segment;
+    try {
+      decoded = decodeURIComponent(segment);
+    } catch {}
+    return decoded.replace(/[-_]+/g, ' ');
   }
 }
 

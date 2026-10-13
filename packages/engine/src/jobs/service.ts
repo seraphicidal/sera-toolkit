@@ -172,13 +172,6 @@ export class JobService {
   }
 
   async *events(id: string, signal?: AbortSignal): AsyncGenerator<JobEvent> {
-    const record = await this.deps.backend.get(id);
-    if (!record) throw seraError('NOT_FOUND', { message: 'That download has expired.' });
-
-    const initial = toPublicJob(record);
-    yield { type: eventTypeFor(initial), job: initial };
-    if (isTerminalJobState(record.state)) return;
-
     const queue: JobEvent[] = [];
     let notify: (() => void) | undefined;
     const push = (event: JobEvent): void => {
@@ -194,6 +187,13 @@ export class JobService {
     signal?.addEventListener('abort', onAbort, { once: true });
 
     try {
+      const record = await this.deps.backend.get(id);
+      if (!record) throw seraError('NOT_FOUND', { message: 'That download has expired.' });
+
+      const initial = toPublicJob(record);
+      yield { type: eventTypeFor(initial), job: initial };
+      if (isTerminalJobState(record.state)) return;
+
       for (;;) {
         while (queue.length) {
           const event = queue.shift()!;
@@ -230,6 +230,9 @@ export class JobService {
 
   private async execute(record: JobRecord): Promise<void> {
     const { backend, logger, workspaces } = this.deps;
+    const current = await backend.get(record.id);
+    if (!current || isTerminalJobState(current.state)) return;
+
     const controller = new AbortController();
     this.inFlight.set(record.id, controller);
 
@@ -241,14 +244,18 @@ export class JobService {
     timeout.unref();
 
     let lastPatch = 0;
+    let lastFlushedState: JobRecord['state'] = current.state;
     let pending:
       { state: JobRecord['state']; step: string; progress: JobRecord['progress'] } | undefined;
+    let inFlightFlush: Promise<void> | undefined;
 
     const flush = async (): Promise<void> => {
-      if (!pending) return;
-      const update = pending;
-      pending = undefined;
-      await backend.patch(record.id, update);
+      while (pending) {
+        const update = pending;
+        pending = undefined;
+        lastFlushedState = update.state;
+        await backend.patch(record.id, update).catch(() => undefined);
+      }
     };
 
     try {
@@ -257,15 +264,17 @@ export class JobService {
         (update) => {
           pending = update;
           const now = Date.now();
-          const stateChanged = update.state !== record.state;
+          const stateChanged = update.state !== lastFlushedState;
           if (stateChanged || now - lastPatch >= PROGRESS_THROTTLE_MS) {
             lastPatch = now;
-            void flush();
+            inFlightFlush = (inFlightFlush ?? Promise.resolve()).then(() => flush());
           }
         },
         controller.signal,
       );
 
+      pending = undefined;
+      await inFlightFlush;
       const totalFiles = record.spec.selections.length;
       await backend.patch(record.id, {
         state: 'ready',
@@ -278,6 +287,8 @@ export class JobService {
       });
       this.count(record, { ok: true });
     } catch (error) {
+      pending = undefined;
+      await inFlightFlush;
       const seraErr = SeraError.from(error);
       const cancelled = seraErr.code === 'CANCELLED' || controller.signal.aborted;
       if (!cancelled) this.count(record, { ok: false, code: seraErr.code });

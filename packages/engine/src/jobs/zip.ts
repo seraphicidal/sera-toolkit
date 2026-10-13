@@ -25,32 +25,49 @@ export async function createZip(request: CreateZipRequest): Promise<{ sizeBytes:
   const zip = new ZipFile();
   const output = createWriteStream(request.destination);
   const finished = once(output, 'close');
+  zip.outputStream.on('error', (err: unknown) => {
+    output.destroy(err instanceof Error ? err : new Error(String(err)));
+  });
   zip.outputStream.pipe(output);
 
-  const total = request.entries.length;
-  const taken = new Set<string>();
+  const onAbort = (): void => {
+    output.destroy(seraError('CANCELLED'));
+  };
+  request.signal?.addEventListener('abort', onAbort, { once: true });
 
-  for (const [index, entry] of request.entries.entries()) {
-    if (request.signal?.aborted) throw seraError('CANCELLED');
+  try {
+    const total = request.entries.length;
+    const taken = new Set<string>();
 
-    const name = assertSafeFilename(entry.name);
-    const unique = dedupe(name, taken);
+    for (const [index, entry] of request.entries.entries()) {
+      if (request.signal?.aborted) throw seraError('CANCELLED');
 
-    const info = await stat(entry.path).catch(() => undefined);
-    if (!info?.isFile()) {
-      throw seraError('INTERNAL', { detail: `missing archive entry: ${name}` });
+      const name = assertSafeFilename(entry.name);
+      const unique = dedupe(name, taken);
+
+      const info = await stat(entry.path).catch(() => undefined);
+      if (!info?.isFile()) {
+        throw seraError('INTERNAL', { detail: `missing archive entry: ${name}` });
+      }
+
+      zip.addFile(entry.path, unique, {
+        mtime: info.mtime,
+        mode: 0o644,
+        compress: shouldCompress(name),
+      });
+      request.onProgress?.(Math.round(((index + 1) / total) * 100), index + 1, total);
     }
 
-    zip.addFile(entry.path, unique, {
-      mtime: info.mtime,
-      mode: 0o644,
-      compress: shouldCompress(name),
-    });
-    request.onProgress?.(Math.round(((index + 1) / total) * 100), index + 1, total);
+    zip.end();
+    await finished;
+  } catch (error) {
+    output.destroy();
+    await finished.catch(() => undefined);
+    if (request.signal?.aborted) throw seraError('CANCELLED', { cause: error });
+    throw error;
+  } finally {
+    request.signal?.removeEventListener('abort', onAbort);
   }
-
-  zip.end();
-  await finished;
 
   const info = await stat(request.destination);
   return { sizeBytes: info.size };

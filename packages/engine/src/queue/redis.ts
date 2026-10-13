@@ -25,6 +25,7 @@ export class RedisJobBackend implements JobBackend {
   private readonly queue: Queue<{ jobId: string }>;
   private readonly listeners = new Map<string, Set<(record: JobRecord) => void>>();
   private worker: Worker<{ jobId: string }> | undefined;
+  private workerConnection: Redis | undefined;
   private readonly subscribed: Promise<void>;
 
   constructor(
@@ -34,6 +35,12 @@ export class RedisJobBackend implements JobBackend {
   ) {
     this.connection = new Redis(redisUrl, { maxRetriesPerRequest: null });
     this.subscriber = new Redis(redisUrl, { maxRetriesPerRequest: null });
+    this.connection.on('error', (error: unknown) => {
+      this.logger.warn({ err: error }, 'redis connection error');
+    });
+    this.subscriber.on('error', (error: unknown) => {
+      this.logger.warn({ err: error }, 'redis subscriber error');
+    });
     this.queue = new Queue(QUEUE_NAME, { connection: this.connection });
 
     this.subscribed = this.subscriber.subscribe(UPDATE_CHANNEL).then(
@@ -142,6 +149,11 @@ export class RedisJobBackend implements JobBackend {
   }
 
   startWorker(handler: JobHandler, concurrency: number): WorkerHandle {
+    const workerConnection = new Redis(this.connection.options);
+    workerConnection.on('error', (error: unknown) => {
+      this.logger.warn({ err: error }, 'redis worker connection error');
+    });
+    this.workerConnection = workerConnection;
     this.worker = new Worker<{ jobId: string }>(
       QUEUE_NAME,
       async (job: BullJob<{ jobId: string }>) => {
@@ -152,7 +164,7 @@ export class RedisJobBackend implements JobBackend {
         }
         await handler(record);
       },
-      { connection: new Redis(this.connection.options), concurrency: Math.max(1, concurrency) },
+      { connection: workerConnection, concurrency: Math.max(1, concurrency) },
     );
 
     this.worker.on('failed', (job, error) => {
@@ -162,12 +174,16 @@ export class RedisJobBackend implements JobBackend {
     return {
       close: async () => {
         await this.worker?.close();
+        this.workerConnection?.disconnect();
+        this.workerConnection = undefined;
       },
     };
   }
 
   async close(): Promise<void> {
     await this.worker?.close().catch(() => undefined);
+    this.workerConnection?.disconnect();
+    this.workerConnection = undefined;
     await this.queue.close().catch(() => undefined);
     this.subscriber.disconnect();
     this.connection.disconnect();

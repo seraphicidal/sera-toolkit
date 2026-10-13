@@ -37,6 +37,7 @@ interface FfprobeStream {
   sample_rate?: string;
   bit_rate?: string;
   avg_frame_rate?: string;
+  disposition?: { attached_pic?: number };
 }
 
 interface FfprobeOutput {
@@ -67,7 +68,9 @@ export async function probe(path: string, options: FfmpegOptions): Promise<Probe
     throw seraError('CONVERSION_FAILED', { detail: 'unparseable ffprobe output', cause });
   }
 
-  const video = parsed.streams?.find((s) => s.codec_type === 'video');
+  const video = parsed.streams?.find(
+    (s) => s.codec_type === 'video' && s.disposition?.attached_pic !== 1,
+  );
   const audio = parsed.streams?.find((s) => s.codec_type === 'audio');
 
   const out: {

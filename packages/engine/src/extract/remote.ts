@@ -361,6 +361,9 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
       signal?: AbortSignal;
     } = {},
   ): Promise<{ media?: ResolvedMedia; files?: readonly RemoteFile[] }> {
+    if (options.signal?.aborted) {
+      return Promise.reject(seraError('CANCELLED'));
+    }
     const full: RemoteTask = { ...task, id: newTaskId(), createdAt: Date.now() };
 
     return new Promise<{ media?: ResolvedMedia; files?: readonly RemoteFile[] }>(

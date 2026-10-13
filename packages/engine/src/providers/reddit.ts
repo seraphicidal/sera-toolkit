@@ -282,7 +282,7 @@ function videoItem(video: RedditVideo, post: RedditPost): ResolvedItem | undefin
     {
       kind: isGif ? 'gif' : 'video',
       container: 'mp4',
-      label: 'Original',
+      label: viaManifest && !isGif ? 'Best available' : 'Original',
       detail: [
         'MP4',
         video.width && video.height ? `${video.width} × ${video.height}` : undefined,

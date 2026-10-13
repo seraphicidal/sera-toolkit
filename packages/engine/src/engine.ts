@@ -250,7 +250,11 @@ async function createUsageCounter(config: EngineConfig, logger: Logger): Promise
       import('ioredis'),
       import('./usage/counts.js'),
     ]);
-    return new RedisUsageCounter(new Redis(config.redisUrl, { maxRetriesPerRequest: 1 }), logger);
+    const redis = new Redis(config.redisUrl, { maxRetriesPerRequest: 1 });
+    redis.on('error', (error: unknown) => {
+      logger.warn({ err: error }, 'redis usage connection error');
+    });
+    return new RedisUsageCounter(redis, logger);
   }
   return new MemoryUsageCounter();
 }

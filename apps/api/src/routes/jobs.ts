@@ -55,7 +55,12 @@ export function registerJobRoutes(app: FastifyInstance, engine: SeraEngine): voi
     const id = assertJobId(request.params.id);
     const signal = clientAbortSignal(request, reply);
 
+    const existingHeaders: Record<string, string | number | readonly string[]> = {};
+    for (const [key, value] of Object.entries(reply.getHeaders())) {
+      if (value !== undefined) existingHeaders[key] = value;
+    }
     reply.raw.writeHead(200, {
+      ...existingHeaders,
       'content-type': 'text/event-stream; charset=utf-8',
       'cache-control': 'no-cache, no-transform',
       connection: 'keep-alive',
@@ -81,7 +86,13 @@ export function registerJobRoutes(app: FastifyInstance, engine: SeraEngine): voi
     const id = assertJobId(request.params.id);
     const manifest = await engine.workspaces.readManifest(id);
     if (!manifest) throw seraError('NOT_FOUND', { message: 'That download has expired.' });
-    return sendFile(engine, reply, id, manifest.primary, !request.canary);
+    return sendFile(
+      engine,
+      reply,
+      id,
+      manifest.primary,
+      !request.canary && request.method !== 'HEAD',
+    );
   });
 
   app.get<{ Params: { id: string; name: string } }>(
@@ -91,9 +102,9 @@ export function registerJobRoutes(app: FastifyInstance, engine: SeraEngine): voi
       const manifest = await engine.workspaces.readManifest(id);
       if (!manifest) throw seraError('NOT_FOUND', { message: 'That download has expired.' });
 
-      const name = decodeURIComponent(request.params.name);
+      const name = request.params.name;
       if (!manifest.files.some((file) => file.name === name)) throw seraError('NOT_FOUND');
-      return sendFile(engine, reply, id, name, !request.canary);
+      return sendFile(engine, reply, id, name, !request.canary && request.method !== 'HEAD');
     },
   );
 }
@@ -110,13 +121,16 @@ async function sendFile(
 
   if (counted) {
     reply.raw.once('finish', () => {
-      void engine.jobs.get(jobId).then((job) =>
-        engine.usage.record({
-          source: job?.provider ?? 'other',
-          kind: 'bytes',
-          bytes: info.size,
-        }),
-      );
+      void engine.jobs
+        .get(jobId)
+        .then((job) =>
+          engine.usage.record({
+            source: job?.provider ?? 'other',
+            kind: 'bytes',
+            bytes: info.size,
+          }),
+        )
+        .catch(() => undefined);
     });
   }
 

@@ -292,14 +292,14 @@ export function checkTrim(
       message: `The end is past the end of the media (${formatTimecode(durationSeconds)}).`,
     };
   }
-  const effectiveEnd = end ?? (known ? durationSeconds : undefined);
+  const clippedEnd = known && end !== undefined ? Math.min(end, durationSeconds) : end;
+  const effectiveEnd = clippedEnd ?? (known ? durationSeconds : undefined);
   if (effectiveEnd !== undefined && effectiveEnd - start < MIN_TRIM_SECONDS) {
     return { ok: false, message: 'The start has to come before the end.' };
   }
-  if (start === 0 && (end === undefined || (known && end >= durationSeconds))) {
+  if (start === 0 && (clippedEnd === undefined || (known && clippedEnd >= durationSeconds))) {
     return { ok: false, message: 'That keeps the whole thing; there is nothing to trim.' };
   }
-  const clippedEnd = known && end !== undefined ? Math.min(end, durationSeconds) : end;
   return {
     ok: true,
     range: {

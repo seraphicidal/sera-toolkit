@@ -13,7 +13,10 @@ async function main(): Promise<void> {
     return;
   }
 
-  const api = value('--api') ?? `http://127.0.0.1:${process.env.SERA_PORT ?? '4000'}`;
+  const api = (value('--api') ?? `http://127.0.0.1:${process.env.SERA_PORT ?? '4000'}`).replace(
+    /\/+$/,
+    '',
+  );
   const days = value('--days') ?? '7';
   const response = await fetch(`${api}/api/admin/usage?days=${encodeURIComponent(days)}`, {
     headers: { authorization: `Bearer ${token}` },

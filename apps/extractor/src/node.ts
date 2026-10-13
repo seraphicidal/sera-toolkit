@@ -111,10 +111,12 @@ const IDLE_BACKOFF_MS = 2_000;
 const ERROR_BACKOFF_MS = 5_000;
 const MAX_BACKOFF_MS = 60_000;
 const PROGRESS_INTERVAL_MS = 1_000;
+const PROGRESS_THROTTLE_MS = 250;
 
 const CLAIM_TIMEOUT_MS = 60_000;
 
 const REQUEST_TIMEOUT_MS = 30_000;
+const UPLOAD_TIMEOUT_MS = 10 * 60_000;
 
 export class ExtractionNode {
   private readonly apiUrl: string;
@@ -124,6 +126,7 @@ export class ExtractionNode {
   private readonly providers: string[];
   private readonly features: NodeFeature[];
   private stopping = false;
+  private claimAbort: AbortController | undefined;
 
   constructor(
     options: NodeOptions,
@@ -148,6 +151,7 @@ export class ExtractionNode {
 
   stop(): void {
     this.stopping = true;
+    this.claimAbort?.abort();
   }
 
   async run(): Promise<void> {
@@ -167,9 +171,10 @@ export class ExtractionNode {
       try {
         const task = await this.claim();
         backoff = ERROR_BACKOFF_MS;
-        if (!task) continue;
+        if (!task || this.stopping) continue;
         await this.handle(task);
       } catch (error) {
+        if (this.stopping) break;
         this.logger.warn(
           { err: error instanceof Error ? error.message : String(error), backoffMs: backoff },
           'could not reach the SERA API',
@@ -181,23 +186,30 @@ export class ExtractionNode {
   }
 
   private async claim(): Promise<RemoteTask | undefined> {
-    const response = await this.post(
-      '/internal/extraction/claim',
-      {
-        nodeId: this.nodeId,
-        providers: this.providers,
-        capacity: 1,
-        networkClass: this.networkClass,
-        features: this.features,
-      },
-      CLAIM_TIMEOUT_MS,
-    );
-    if (response.status === 204) {
-      await sleep(IDLE_BACKOFF_MS);
-      return undefined;
+    const controller = new AbortController();
+    this.claimAbort = controller;
+    try {
+      const response = await this.post(
+        '/internal/extraction/claim',
+        {
+          nodeId: this.nodeId,
+          providers: this.providers,
+          capacity: 1,
+          networkClass: this.networkClass,
+          features: this.features,
+        },
+        CLAIM_TIMEOUT_MS,
+        controller.signal,
+      );
+      if (response.status === 204) {
+        if (!this.stopping) await sleep(IDLE_BACKOFF_MS);
+        return undefined;
+      }
+      if (!response.ok) throw new Error(`claim returned ${response.status}`);
+      return (await response.json()) as RemoteTask;
+    } finally {
+      if (this.claimAbort === controller) this.claimAbort = undefined;
     }
-    if (!response.ok) throw new Error(`claim returned ${response.status}`);
-    return (await response.json()) as RemoteTask;
   }
 
   private accept(task: RemoteTask): URL {
@@ -212,7 +224,7 @@ export class ExtractionNode {
     });
 
     const detected = this.registry.detect(url);
-    if (detected?.id !== task.providerId) {
+    if (task.providerId !== 'generic' && detected?.id !== task.providerId) {
       throw seraError('UNSUPPORTED_SOURCE', {
         detail: `node: ${url.hostname} is not ${task.providerId}`,
       });
@@ -223,10 +235,25 @@ export class ExtractionNode {
   private async handle(task: RemoteTask): Promise<void> {
     const started = Date.now();
     const abort = new AbortController();
+    let currentPercent = 0;
+    let currentStep = 'Working';
+    let lastSentAt = 0;
     const heartbeat = setInterval(() => {
-      void this.progress(task.id, 0, 'Working', abort);
+      lastSentAt = Date.now();
+      void this.progress(task.id, currentPercent, currentStep, abort);
     }, PROGRESS_INTERVAL_MS);
     heartbeat.unref();
+
+    const onProgress = (percent: number, step: string): void => {
+      const stepChanged = step !== currentStep;
+      currentPercent = percent;
+      currentStep = step;
+      const now = Date.now();
+      if (stepChanged || now - lastSentAt >= PROGRESS_THROTTLE_MS) {
+        lastSentAt = now;
+        void this.progress(task.id, currentPercent, currentStep, abort);
+      }
+    };
 
     try {
       const url = this.accept(task);
@@ -247,7 +274,7 @@ export class ExtractionNode {
         return;
       }
 
-      await this.runJob(task, url, abort);
+      await this.runJob(task, url, abort, onProgress);
       this.logger.info(
         {
           task: task.id,
@@ -273,7 +300,12 @@ export class ExtractionNode {
     }
   }
 
-  private async runJob(task: RemoteTask, url: URL, abort: AbortController): Promise<void> {
+  private async runJob(
+    task: RemoteTask,
+    url: URL,
+    abort: AbortController,
+    onProgress: (percent: number, step: string) => void,
+  ): Promise<void> {
     const jobId = newJobId();
     const media: ResolvedMedia = await this.resolver.resolveCanonical(
       url,
@@ -301,7 +333,7 @@ export class ExtractionNode {
       await this.runner.run(
         spec,
         (update) => {
-          void this.progress(task.id, update.progress.percent, update.step, abort);
+          onProgress(update.progress.percent, update.step);
         },
         abort.signal,
       );
@@ -310,8 +342,9 @@ export class ExtractionNode {
       if (!manifest) throw new Error('the job produced no manifest');
 
       for (const file of manifest.files) {
+        if (abort.signal.aborted) throw seraError('CANCELLED');
         const path = await this.workspaces.resolveFile(jobId, file.name);
-        await this.upload(task.id, file.name, file.mimeType, path);
+        await this.upload(task.id, file.name, file.mimeType, path, abort.signal);
       }
       await this.report(`/internal/extraction/${task.id}/complete`, {});
     } finally {
@@ -324,21 +357,37 @@ export class ExtractionNode {
     name: string,
     mimeType: string,
     path: string,
+    signal: AbortSignal,
   ): Promise<void> {
     const query = new URLSearchParams({ name, mime: mimeType });
-    const response = await fetch(
-      `${this.apiUrl}/internal/extraction/${taskId}/file?${query.toString()}`,
-      {
-        method: 'POST',
-        headers: {
-          authorization: `Bearer ${this.token}`,
-          'content-type': 'application/octet-stream',
+    const stream = createReadStream(path);
+    const timeoutSignal = AbortSignal.timeout(UPLOAD_TIMEOUT_MS);
+    const combinedSignal = AbortSignal.any([signal, timeoutSignal]);
+    try {
+      const response = await fetch(
+        `${this.apiUrl}/internal/extraction/${taskId}/file?${query.toString()}`,
+        {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${this.token}`,
+            'content-type': 'application/octet-stream',
+          },
+          body: Readable.toWeb(stream),
+          duplex: 'half',
+          signal: combinedSignal,
         },
-        body: Readable.toWeb(createReadStream(path)),
-        duplex: 'half',
-      },
-    );
-    if (!response.ok) throw new Error(`upload of ${name} returned ${response.status}`);
+      );
+      if (response.status === 409) throw seraError('CANCELLED');
+      if (!response.ok) throw new Error(`upload of ${name} returned ${response.status}`);
+      const payload = (await response.json().catch(() => undefined)) as
+        { accepted?: boolean; cancelled?: boolean } | undefined;
+      if (payload?.cancelled) throw seraError('CANCELLED');
+      if (payload?.accepted === false) {
+        throw new Error(`the server did not accept uploaded file ${name}`);
+      }
+    } finally {
+      stream.destroy();
+    }
   }
 
   private async progress(
@@ -363,9 +412,20 @@ export class ExtractionNode {
     if (!response.ok) {
       throw new Error(`the server refused ${path.split('/').pop()} (HTTP ${response.status})`);
     }
+    const payload = (await response.json().catch(() => undefined)) as
+      { accepted?: boolean } | undefined;
+    if (payload?.accepted === false) {
+      throw new Error(`the server did not accept ${path.split('/').pop()}`);
+    }
   }
 
-  private post(path: string, body: unknown, timeoutMs = REQUEST_TIMEOUT_MS): Promise<Response> {
+  private post(
+    path: string,
+    body: unknown,
+    timeoutMs = REQUEST_TIMEOUT_MS,
+    signal?: AbortSignal,
+  ): Promise<Response> {
+    const timeoutSignal = AbortSignal.timeout(timeoutMs);
     return fetch(`${this.apiUrl}${path}`, {
       method: 'POST',
       headers: {
@@ -373,7 +433,7 @@ export class ExtractionNode {
         'content-type': 'application/json',
       },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal,
     });
   }
 }

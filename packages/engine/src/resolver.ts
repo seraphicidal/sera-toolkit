@@ -446,6 +446,9 @@ export class MediaResolver {
     if (!media.items.length) throw seraError('MEDIA_UNAVAILABLE');
     const withMedia = { ...outcome, media };
     this.cache.set(cacheKey, withMedia);
+    if (media.url !== canonical.toString()) {
+      this.cache.set(`${providerId}|${media.url}`, withMedia);
+    }
     return withMedia;
   }
 

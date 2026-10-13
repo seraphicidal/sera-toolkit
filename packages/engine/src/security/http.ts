@@ -141,6 +141,7 @@ export async function safeOpen(url: URL, options: SafeFetchOptions): Promise<Ope
       });
     } catch (cause) {
       if (isBlockedAddress(cause)) throw seraError('BLOCKED_ADDRESS', { cause });
+      if (options.signal?.aborted) throw seraError('CANCELLED', { cause });
       if (signal.aborted) throw seraError('TIMEOUT', { cause });
       if (hasErrorCode(cause, 'ENOTFOUND')) {
         throw seraError('INVALID_URL', {
@@ -234,7 +235,18 @@ export async function safeFetch(url: URL, options: SafeFetchOptions): Promise<Sa
     throw seraError('TOO_LARGE', { detail: `content-length ${declared} > ${maxBytes}` });
   }
 
-  const body = await readCapped(opened.body, maxBytes);
+  let body: Buffer;
+  try {
+    body = await readCapped(opened.body, maxBytes);
+  } catch (cause) {
+    discard(opened.body);
+    if (cause instanceof Error && cause.name === 'SeraError') throw cause;
+    if (options.signal?.aborted) throw seraError('CANCELLED', { cause });
+    if (cause instanceof Error && (cause.name === 'TimeoutError' || cause.name === 'AbortError')) {
+      throw seraError('TIMEOUT', { cause });
+    }
+    throw seraError('NETWORK_ERROR', { cause, detail: describe(cause) });
+  }
   return { status: opened.status, headers: opened.headers, url: opened.url, body };
 }
 

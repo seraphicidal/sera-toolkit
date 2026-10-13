@@ -153,7 +153,7 @@ function withThumbnailOption(media: ResolvedMedia): ResolvedMedia {
     items: media.items.map((item) => {
       const thumbnail = item.thumbnailUrl;
       if (!thumbnail || item.kind !== 'video') return item;
-      const extension = /.(jpg|jpeg|png|webp)(?:[?#]|$)/i.exec(thumbnail)?.[1]?.toLowerCase();
+      const extension = /\.(jpg|jpeg|png|webp)(?:[?#]|$)/i.exec(thumbnail)?.[1]?.toLowerCase();
       const container = extension === 'jpeg' ? 'jpg' : ((extension ?? 'jpg') as 'jpg');
 
       return {

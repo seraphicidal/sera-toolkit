@@ -1,11 +1,21 @@
 import { createWriteStream } from 'node:fs';
-import { mkdir, rm, stat } from 'node:fs/promises';
+import { mkdir, readdir, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { buildFilename, seraError, SeraError, type SeraEngine } from '@sera/engine';
+import type { ErrorCode } from '@sera/contracts/types';
+import {
+  buildFilename,
+  dedupeFilename,
+  MESSAGES,
+  sanitizeExtension,
+  sanitizeStem,
+  seraError,
+  SeraError,
+  type SeraEngine,
+} from '@sera/engine';
 import { z } from 'zod';
 
 const claimSchema = z.object({
@@ -37,6 +47,7 @@ const dispatchSchema = z.object({
     .array(z.enum(['trim', 'subtitles', 'items', 'instagram-session']))
     .max(5)
     .optional(),
+  avoid: z.array(z.string().min(1).max(64)).max(20).optional(),
   subtitles: z
     .object({
       lang: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/),
@@ -83,9 +94,23 @@ function tokenMatches(presented: string, expected: string): boolean {
   return timingSafeEqual(a, b);
 }
 
+function sanitizeUploadedFilename(requested: string): string {
+  const dot = requested.lastIndexOf('.');
+  const rawStem = dot > 0 ? requested.slice(0, dot) : requested;
+  const ext = sanitizeExtension(dot > 0 ? requested.slice(dot + 1) : 'bin');
+  if (ext === 'srt' || ext === 'vtt') {
+    const subMatch = /^(.+)\.([A-Za-z0-9][A-Za-z0-9_-]{0,39})$/.exec(rawStem);
+    if (subMatch?.[1] && subMatch[2]) {
+      return `${sanitizeStem(subMatch[1])}.${subMatch[2]}.${ext}`;
+    }
+  }
+  return buildFilename(rawStem, ext);
+}
+
 interface Dispatched {
   state: 'pending' | 'done' | 'failed';
   progress?: { percent: number; step: string };
+  claimedBy?: string;
   media?: unknown;
   files?: readonly { name: string; mimeType: string; path: string }[];
   error?: { code: string; message: string; detail?: string };
@@ -191,12 +216,15 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
       async (request, reply) => {
         if (!authenticate(request, reply)) return reply;
         const parsed = failedSchema.safeParse(request.body);
+        const rawCode = parsed.success ? parsed.data.code : '';
+        const code: ErrorCode = Object.prototype.hasOwnProperty.call(MESSAGES, rawCode)
+          ? (rawCode as ErrorCode)
+          : 'PROVIDER_UNAVAILABLE';
         const error = parsed.success
-          ? new SeraError(
-              parsed.data.code as Parameters<typeof seraError>[0],
-              parsed.data.message ?? 'The extraction node could not complete this.',
-              { ...(parsed.data.detail ? { detail: `node: ${parsed.data.detail}` } : {}) },
-            )
+          ? seraError(code, {
+              ...(parsed.data.message ? { message: parsed.data.message } : {}),
+              ...(parsed.data.detail ? { detail: `node: ${parsed.data.detail}` } : {}),
+            })
           : seraError('PROVIDER_UNAVAILABLE', { detail: 'node: malformed failure report' });
 
         const accepted = extractionNodes.fail(request.params.taskId, error);
@@ -218,14 +246,14 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
           return reply.status(409).send({ accepted: false, cancelled: true });
         }
 
-        const requested = request.query.name ?? 'media.bin';
-        const dot = requested.lastIndexOf('.');
-        const name = buildFilename(
-          dot > 0 ? requested.slice(0, dot) : requested,
-          dot > 0 ? requested.slice(dot + 1) : 'bin',
-        );
         const directory = join(config.dataDir, `remote-${taskId}`);
         await mkdir(directory, { recursive: true });
+        const existing = await readdir(directory).catch(() => [] as string[]);
+        const taken = new Set(existing.map((entry) => entry.toLowerCase()));
+        const name = dedupeFilename(
+          sanitizeUploadedFilename(request.query.name ?? 'media.bin'),
+          taken,
+        );
         const path = join(directory, name);
 
         try {
@@ -287,6 +315,9 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
           onProgress: (progress: { percent: number; step: string }) => {
             entry.progress = { percent: progress.percent, step: progress.step };
           },
+          onClaimed: (nodeId: string) => {
+            entry.claimedBy = nodeId;
+          },
           signal: entry.controller.signal,
         };
 
@@ -332,6 +363,7 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
         return reply.send({
           state: entry.state,
           ...(entry.progress ? { progress: entry.progress } : {}),
+          ...(entry.claimedBy ? { claimedBy: entry.claimedBy } : {}),
           ...(entry.media ? { media: entry.media } : {}),
           ...(entry.files ? { files: entry.files } : {}),
           ...(entry.error ? { error: entry.error } : {}),

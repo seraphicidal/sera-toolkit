@@ -16,11 +16,13 @@ if [ -z "$topic" ]; then
 fi
 
 notify() {
-  curl -fsS --max-time 15 -o /dev/null \
+  if ! curl -fsS --max-time 15 -o /dev/null \
     -H "Title: $1" -H "Priority: $3" -H "Tags: $4" \
     -H "Click: https://$domain/health" \
-    -d "$2" "https://ntfy.sh/$topic" ||
+    -d "$2" "https://ntfy.sh/$topic"; then
     echo "[alert] could not reach ntfy.sh"
+    return 1
+  fi
 }
 
 if [ "${1:-}" = --test ]; then
@@ -52,16 +54,19 @@ observe() {
     pending=$seen count=1
   fi
   if [ "$count" -ge 2 ]; then
+    local sent=0
     if [ "$seen" = down ]; then
-      notify "SERA: $detail" "$detail on $domain." high rotating_light
+      notify "SERA: $detail" "$detail on $domain." high rotating_light && sent=1
     else
       if [ -n "$recovered" ]; then
-        notify "SERA: $recovered recovered" "$recovered recovered on $domain." default white_check_mark
+        notify "SERA: $recovered recovered" "$recovered recovered on $domain." default white_check_mark && sent=1
       else
-        notify "SERA: recovered" "$(label "$name") is back to normal on $domain." default white_check_mark
+        notify "SERA: recovered" "$(label "$name") is back to normal on $domain." default white_check_mark && sent=1
       fi
     fi
-    notified=$seen pending='' count=0
+    if [ "$sent" = 1 ]; then
+      notified=$seen pending='' count=0
+    fi
   fi
   printf 'notified=%s\npending=%s\ncount=%s\n' "$notified" "$pending" "$count" >"$file"
   echo "[alert] $name: $seen (notified $notified)"

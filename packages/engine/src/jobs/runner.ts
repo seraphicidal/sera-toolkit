@@ -146,9 +146,10 @@ export class JobRunner {
       );
 
       for (const file of files) {
-        const destination = workspace.outputPath(file.name);
+        const name = dedupeFilename(file.name, taken);
+        const destination = workspace.outputPath(name);
         await rename(file.path, destination);
-        produced.push({ path: destination, name: file.name });
+        produced.push({ path: destination, name });
       }
       const uploads = [...new Set(files.map((file) => dirname(file.path)))].filter((directory) =>
         basename(directory).startsWith('remote-'),
@@ -849,15 +850,17 @@ export class JobRunner {
         });
       }
 
-      const imposter = sniffTextImposter(await headOf(file.path));
-      if (imposter) {
-        throw seraError('MEDIA_UNAVAILABLE', {
-          message: 'The source returned a page instead of the media.',
-          hint: 'The post may have become private, or the site may be asking for a login.',
-          detail: `${file.name} is ${imposter}, not media`,
-        });
-      }
       const extension = file.name.split('.').pop()?.toLowerCase() ?? '';
+      if (extension !== 'srt' && extension !== 'vtt') {
+        const imposter = sniffTextImposter(await headOf(file.path));
+        if (imposter) {
+          throw seraError('MEDIA_UNAVAILABLE', {
+            message: 'The source returned a page instead of the media.',
+            hint: 'The post may have become private, or the site may be asking for a login.',
+            detail: `${file.name} is ${imposter}, not media`,
+          });
+        }
+      }
       if (
         ['mp4', 'webm', 'mov', 'mkv', 'mp3', 'm4a', 'opus', 'wav', 'flac', 'ogg'].includes(
           extension,
@@ -1120,7 +1123,7 @@ async function renameToActualFormat(path: string, claimed: string): Promise<stri
   const actual = sniffContainer(head);
   if (!actual || !contradicts(claimed, actual)) return path;
 
-  const corrected = path.replace(/.[^.]+$/, `.${actual}`);
+  const corrected = path.replace(/\.[^.]+$/, `.${actual}`);
   await rename(path, corrected);
   return corrected;
 }

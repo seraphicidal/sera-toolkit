@@ -59,7 +59,11 @@ export class AbuseGuard {
     const entry: Entry =
       existing && now - existing.windowStartedAt <= this.options.windowMs
         ? existing
-        : { failures: 0, windowStartedAt: now, blockedUntil: 0 };
+        : {
+            failures: 0,
+            windowStartedAt: now,
+            blockedUntil: existing && existing.blockedUntil > now ? existing.blockedUntil : 0,
+          };
 
     entry.failures += 1;
     if (entry.failures >= this.options.maxFailures) {
@@ -72,9 +76,10 @@ export class AbuseGuard {
     this.evict(now);
   }
 
-  recordSuccess(clientKey: string): void {
+  recordSuccess(clientKey: string, now = Date.now()): void {
     const entry = this.entries.get(clientKey);
-    if (!entry || entry.blockedUntil) return;
+    if (!entry || entry.blockedUntil > now) return;
+    entry.blockedUntil = 0;
     entry.failures = Math.max(0, entry.failures - 1);
     if (entry.failures === 0) this.entries.delete(clientKey);
   }

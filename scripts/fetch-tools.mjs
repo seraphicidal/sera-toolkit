@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -120,7 +121,16 @@ function findFile(dir, name) {
 function installBinary(sourcePath, targetName) {
   const target = join(TOOLS_DIR, targetName);
   const staging = `${target}.download`;
-  renameSync(sourcePath, staging);
+  try {
+    renameSync(sourcePath, staging);
+  } catch (error) {
+    if (error && error.code === 'EXDEV') {
+      copyFileSync(sourcePath, staging);
+      rmSync(sourcePath, { force: true });
+    } else {
+      throw error;
+    }
+  }
   if (!EXE) chmodSync(staging, 0o755);
   if (existsSync(target)) {
     const previous = `${target}.old`;

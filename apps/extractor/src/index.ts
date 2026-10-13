@@ -16,9 +16,11 @@ async function main(): Promise<void> {
     name: 'sera-node',
   });
 
-  const registry = new ProviderRegistry();
+  const registry = new ProviderRegistry(undefined, config);
   const resolver = new MediaResolver({ config, logger, registry });
   const workspaces = new WorkspaceManager(config.dataDir, config.retentionSeconds, logger);
+  await workspaces.reap();
+  const stopReaper = workspaces.startReaper(config.reapIntervalSeconds);
   const runner = new JobRunner({ config, logger, resolver, workspaces });
 
   const node = new ExtractionNode(
@@ -42,6 +44,7 @@ async function main(): Promise<void> {
 
   const shutdown = (signal: string): void => {
     logger.info({ signal }, 'stopping extraction node');
+    stopReaper();
     node.stop();
     setTimeout(() => process.exit(0), 2000).unref();
   };

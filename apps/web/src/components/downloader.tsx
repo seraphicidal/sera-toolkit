@@ -122,6 +122,14 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
     setInfo(undefined);
     setJobId(undefined);
     setInitialJob(undefined);
+    setFilename('');
+    setTrimStart('');
+    setTrimEnd('');
+    setSubtitleTrack('');
+    setSubtitleFormat('embed');
+    setSubtitlesOnly(false);
+    setPackaging('auto');
+    setShowAdvanced(false);
 
     try {
       const resolved = await resolveMedia(raw, controller.signal);
@@ -190,12 +198,11 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
         info.items.find((item) => selectedIds.has(item.id)))
       : undefined;
 
-  const subtitles = subtitleChoices(
-    singleItem,
-    singleItem?.options.find((option) => option.id === selection?.optionIds[0]),
-  );
+  const singleOption = singleItem?.options.find((option) => option.id === selection?.optionIds[0]);
+  const subtitles = subtitleChoices(singleItem, singleOption);
+  const effectiveKind = singleOption?.kind ?? kind;
 
-  const canTrim = Boolean(singleItem && (kind === 'video' || kind === 'audio'));
+  const canTrim = Boolean(singleItem && (effectiveKind === 'video' || effectiveKind === 'audio'));
   const rawTrim: TrimSummary = useMemo(
     () =>
       canTrim && singleItem
@@ -295,7 +302,7 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
         return;
       }
       if (phase === 'running' || phase === 'submitting') cancel();
-      else if (phase === 'ready' || phase === 'done') reset();
+      else if (phase === 'ready' || phase === 'done' || phase === 'analyzing') reset();
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
@@ -338,13 +345,8 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
           value={url}
           onChange={(next) => {
             setUrl(next);
-            if (info || error) {
-              sessionRef.current += 1;
-              setInfo(undefined);
-              setError(undefined);
-              setJobId(undefined);
-              setInitialJob(undefined);
-              setPhase('idle');
+            if (info || error || phase === 'analyzing') {
+              reset();
             }
           }}
           onSubmit={(next) => void analyze(next)}
@@ -402,7 +404,10 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
                   track={subtitleTrack}
                   onTrackChange={setSubtitleTrack}
                   format={subtitlesRequested?.format ?? subtitleFormat}
-                  onFormatChange={setSubtitleFormat}
+                  onFormatChange={(nextFormat) => {
+                    if (nextFormat === 'embed') setSubtitlesOnly(false);
+                    setSubtitleFormat(nextFormat);
+                  }}
                   only={subtitlesOnly}
                   onOnlyChange={setSubtitlesOnly}
                   disabled={trim.state !== 'none'}

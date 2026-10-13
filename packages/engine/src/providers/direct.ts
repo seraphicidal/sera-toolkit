@@ -55,7 +55,11 @@ export class DirectFileProvider implements MediaProvider {
     }
 
     const container = normalizeContainer(contentType, extension);
-    const filename = decodeURIComponent(url.pathname.split('/').filter(Boolean).pop() ?? 'file');
+    const rawSegment = url.pathname.split('/').filter(Boolean).pop() ?? 'file';
+    let filename = rawSegment;
+    try {
+      filename = decodeURIComponent(rawSegment);
+    } catch {}
     const title = sanitizeStem(filename.replace(/\.[^.]+$/, ''), 'Media file');
 
     const plans: DownloadPlan[] = [

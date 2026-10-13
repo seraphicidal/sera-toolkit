@@ -38,8 +38,7 @@ export class TtlCache<V> {
 
   private evict(now: number): void {
     for (const [key, entry] of this.entries) {
-      if (entry.expiresAt > now) break;
-      this.entries.delete(key);
+      if (entry.expiresAt <= now) this.entries.delete(key);
     }
     while (this.entries.size > this.maxEntries) {
       const oldest = this.entries.keys().next();

@@ -165,6 +165,10 @@ export const MEDIA_EXTENSIONS = new Set([
 ]);
 
 export function urlExtension(url: URL): string | undefined {
-  const match = /\.([a-z0-9]{1,5})$/i.exec(decodeURIComponent(url.pathname));
+  let pathname = url.pathname;
+  try {
+    pathname = decodeURIComponent(pathname);
+  } catch {}
+  const match = /\.([a-z0-9]{1,5})$/i.exec(pathname);
   return match?.[1]?.toLowerCase();
 }

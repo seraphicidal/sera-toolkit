@@ -78,16 +78,20 @@ export function registerMediaRoutes(app: FastifyInstance, engine: SeraEngine): v
       try {
         const info = engine.resolver.importSubmitted(body, request.id);
         abuse.recordSuccess();
-        void engine.usage.record({ source: info.provider, kind: 'resolve', ok: true });
+        if (!request.canary) {
+          void engine.usage.record({ source: info.provider, kind: 'resolve', ok: true });
+        }
         return await reply.header('cache-control', 'no-store').send(info);
       } catch (error) {
         abuse.recordFailure(error instanceof SeraError ? error.code : undefined);
-        void engine.usage.record({
-          source: 'instagram',
-          kind: 'resolve',
-          ok: false,
-          code: SeraError.from(error).code,
-        });
+        if (!request.canary) {
+          void engine.usage.record({
+            source: 'instagram',
+            kind: 'resolve',
+            ok: false,
+            code: SeraError.from(error).code,
+          });
+        }
         throw error;
       }
     },
@@ -105,7 +109,7 @@ export function registerMediaRoutes(app: FastifyInstance, engine: SeraEngine): v
     if (response.status >= 400) throw seraError('NOT_FOUND');
 
     const contentType =
-      (header(response.headers, 'content-type') ?? '').split(';')[0]?.trim() ?? '';
+      (header(response.headers, 'content-type') ?? '').split(';')[0]?.trim().toLowerCase() ?? '';
     if (!IMAGE_TYPES.has(contentType))
       throw seraError('NOT_FOUND', { detail: `thumb type ${contentType}` });
 

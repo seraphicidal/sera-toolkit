@@ -67,6 +67,7 @@ git fetch -q origin main
 target=$(git rev-parse origin/main)
 if [ "$target" != "$old_rev" ] && ! published "$target"; then
   log "images for ${target:0:7} are not published yet; trying again next run"
+  exit 0
 elif [ "$target" != "$old_rev" ]; then
   if git -c core.fileMode=false diff --quiet && git -c core.fileMode=false diff --cached --quiet; then
     git merge -q --ff-only origin/main

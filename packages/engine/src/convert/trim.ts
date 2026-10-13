@@ -52,7 +52,25 @@ export async function keyframeAtOrBefore(
   return times.length ? Math.max(...times) : undefined;
 }
 
+const AUDIO_ONLY_EXTENSIONS = new Set(['mp3', 'm4a', 'aac', 'opus', 'ogg', 'wav', 'flac']);
+
 function reencodeArgs(extension: string): string[] {
+  if (AUDIO_ONLY_EXTENSIONS.has(extension)) {
+    switch (extension) {
+      case 'mp3':
+        return ['-vn', '-c:a', 'libmp3lame', '-b:a', '192k'];
+      case 'opus':
+        return ['-vn', '-c:a', 'libopus', '-b:a', '160k'];
+      case 'ogg':
+        return ['-vn', '-c:a', 'libvorbis', '-b:a', '192k'];
+      case 'wav':
+        return ['-vn', '-c:a', 'pcm_s16le'];
+      case 'flac':
+        return ['-vn', '-c:a', 'flac'];
+      default:
+        return ['-vn', '-c:a', 'aac', '-b:a', '192k'];
+    }
+  }
   if (extension === 'webm') {
     return [...videoCodecArgs(extension), '-c:a', 'libopus', '-b:a', '160k'];
   }
@@ -81,11 +99,12 @@ export async function trimMedia(request: TrimMediaRequest): Promise<{ reencoded:
   const { range } = request;
   const source = await probe(request.input, request);
   const extension = extname(request.output).slice(1).toLowerCase();
+  const hasVideo = Boolean(source.video) && !AUDIO_ONLY_EXTENSIONS.has(extension);
   const keyframe =
-    source.video && range.start > 0
+    hasVideo && range.start > 0
       ? await keyframeAtOrBefore(request.input, range.start, request)
       : undefined;
-  const copy = !source.video || copyIsAccurate(range.start, keyframe);
+  const copy = !hasVideo || copyIsAccurate(range.start, keyframe);
 
   const length = range.end !== undefined ? range.end - range.start : undefined;
   const args = [

@@ -64,14 +64,19 @@ conditions_hold() {
 }
 
 refresh_ytdlp() {
-  last_refresh=$(date +%s)
   if [ -e "$STATE/ytdlp-updates.paused" ]; then
+    last_refresh=$(date +%s)
     say "yt-dlp updates are paused" >>"$STATE/ytdlp-update.log"
     return
   fi
   say "refreshing yt-dlp" >>"$STATE/ytdlp-update.log"
-  (cd "$DIR" && npm run -s tools:fetch -- --only=ytdlp --pin-from=main) \
-    >>"$STATE/ytdlp-update.log" 2>&1 || say "yt-dlp refresh failed; trying again tomorrow"
+  if (cd "$DIR" && npm run -s tools:fetch -- --only=ytdlp --pin-from=main) \
+    >>"$STATE/ytdlp-update.log" 2>&1; then
+    last_refresh=$(date +%s)
+  else
+    last_refresh=$(($(date +%s) - REFRESH_SECONDS + 3600))
+    say "yt-dlp refresh failed; trying again in an hour"
+  fi
 }
 
 configured() {
@@ -98,14 +103,13 @@ report() {
 }
 
 while :; do
-  if [ $(($(date +%s) - last_refresh)) -ge "$REFRESH_SECONDS" ]; then
-    refresh_ytdlp
-  fi
-
   if ! configured; then
     report "waiting: no SERA_EXTRACTION_NODE_TOKEN in $DIR/.env.node.local"
     stop_node
   elif conditions_hold; then
+    if [ $(($(date +%s) - last_refresh)) -ge "$REFRESH_SECONDS" ]; then
+      refresh_ytdlp
+    fi
     report 'running'
     if [ -z "$child" ]; then
       start_node
