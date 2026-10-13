@@ -129,6 +129,7 @@ export class SeraEngine {
     });
     engine.stopReaper = workspaces.startReaper(config.reapIntervalSeconds);
     void workspaces.reap().catch(() => undefined);
+    void Promise.allSettled([ytdlpVersion(config.ytdlpPath), ffmpegVersion(config.ffmpegPath)]);
     return engine;
   }
 
@@ -173,7 +174,31 @@ export class SeraEngine {
     });
   }
 
+  private cachedHealth: { report: HealthReport; expiresAt: number } | undefined;
+  private healthInFlight: Promise<HealthReport> | undefined;
+
   async health(): Promise<HealthReport> {
+    const now = Date.now();
+    if (this.cachedHealth && now < this.cachedHealth.expiresAt) {
+      return this.cachedHealth.report;
+    }
+    if (this.healthInFlight) return this.healthInFlight;
+    this.healthInFlight = this.computeHealth()
+      .then((report) => {
+        this.cachedHealth = { report, expiresAt: Date.now() + 15_000 };
+        return report;
+      })
+      .finally(() => {
+        this.healthInFlight = undefined;
+      });
+    return this.healthInFlight;
+  }
+
+  resetHealthCache(): void {
+    this.cachedHealth = undefined;
+  }
+
+  private async computeHealth(): Promise<HealthReport> {
     const checks: HealthCheck[] = [];
 
     checks.push(

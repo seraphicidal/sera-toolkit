@@ -98,7 +98,10 @@ export class WorkspaceManager {
         this.logger.warn({ err: error, workspace: entry.name }, 'failed to reap workspace');
       }
     }
-    if (removed) this.logger.info({ removed }, 'reaped expired workspaces');
+    if (removed) {
+      this.logger.info({ removed }, 'reaped expired workspaces');
+      void this.usage(true).catch(() => undefined);
+    }
     return removed;
   }
 
@@ -112,7 +115,27 @@ export class WorkspaceManager {
     return () => clearInterval(timer);
   }
 
-  async usage(): Promise<{ workspaces: number; bytes: number }> {
+  private cachedUsage: { workspaces: number; bytes: number; expiresAt: number } | undefined;
+  private usageInFlight: Promise<{ workspaces: number; bytes: number }> | undefined;
+
+  async usage(force = false): Promise<{ workspaces: number; bytes: number }> {
+    const now = Date.now();
+    if (!force && this.cachedUsage && now < this.cachedUsage.expiresAt) {
+      return { workspaces: this.cachedUsage.workspaces, bytes: this.cachedUsage.bytes };
+    }
+    if (this.usageInFlight) return this.usageInFlight;
+    this.usageInFlight = this.computeUsage()
+      .then((usage) => {
+        this.cachedUsage = { ...usage, expiresAt: Date.now() + 60_000 };
+        return usage;
+      })
+      .finally(() => {
+        this.usageInFlight = undefined;
+      });
+    return this.usageInFlight;
+  }
+
+  private async computeUsage(): Promise<{ workspaces: number; bytes: number }> {
     let workspaces = 0;
     let bytes = 0;
     const entries = await readdir(this.rootDir, { withFileTypes: true }).catch(() => []);

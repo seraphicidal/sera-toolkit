@@ -305,7 +305,12 @@ export async function convert(request: ConvertRequest): Promise<void> {
   request.onProgress?.(100);
 }
 
+const ffmpegVersionCache = new Map<string, { version: string; expiresAt: number }>();
+const FFMPEG_VERSION_CACHE_TTL_MS = 10 * 60_000;
+
 export async function ffmpegVersion(ffmpegPath: string, timeoutMs = 10_000): Promise<string> {
+  const cached = ffmpegVersionCache.get(ffmpegPath);
+  if (cached && Date.now() < cached.expiresAt) return cached.version;
   const result = await run(ffmpegPath, {
     args: ['-hide_banner', '-version'],
     timeoutMs,
@@ -316,5 +321,14 @@ export async function ffmpegVersion(ffmpegPath: string, timeoutMs = 10_000): Pro
     throw seraError('INTERNAL', { detail: `ffmpeg -version exited ${result.code}` });
   }
   const first = result.stdout.split('\n')[0] ?? '';
-  return /ffmpeg version (\S+)/.exec(first)?.[1] ?? first.trim();
+  const resolved = /ffmpeg version (\S+)/.exec(first)?.[1] ?? first.trim();
+  ffmpegVersionCache.set(ffmpegPath, {
+    version: resolved,
+    expiresAt: Date.now() + FFMPEG_VERSION_CACHE_TTL_MS,
+  });
+  return resolved;
+}
+
+export function resetFfmpegVersionCache(): void {
+  ffmpegVersionCache.clear();
 }

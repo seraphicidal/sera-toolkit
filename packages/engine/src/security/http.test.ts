@@ -33,6 +33,19 @@ beforeAll(async () => {
       response.end();
       return;
     }
+    if (path === '/away-to-evil') {
+      response.writeHead(302, { location: `http://localhost:${String(port)}/evil` });
+      response.end();
+      return;
+    }
+    if (path === '/evil') {
+      response.writeHead(302, {
+        location: `http://127.0.0.1:${String(port)}/back`,
+        'set-cookie': ['evil=1; Path=/'],
+      });
+      response.end();
+      return;
+    }
     response.writeHead(200);
     response.end('ok');
   });
@@ -78,5 +91,16 @@ describe('keepCookies', () => {
     expect(seen.map((hop) => hop.path)).toEqual(['/away', '/landed']);
     expect(seen[0]!.cookie).toBe('sessionid=secret');
     expect(seen[1]!.cookie).toBeUndefined();
+  });
+
+  it('does not keep cookies set by another host on a redirect hop', async () => {
+    seen.length = 0;
+    await safeFetch(new URL(`http://127.0.0.1:${String(port)}/away-to-evil`), {
+      dispatcher,
+      keepCookies: true,
+    });
+    const backHop = seen.find((hop) => hop.path === '/back');
+    expect(backHop).toBeDefined();
+    expect(backHop?.cookie).toBeUndefined();
   });
 });

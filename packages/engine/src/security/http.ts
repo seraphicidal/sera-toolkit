@@ -177,8 +177,9 @@ export async function safeOpen(url: URL, options: SafeFetchOptions): Promise<Ope
           detail: `redirect ${response.statusCode} without location`,
         });
       }
-      if (hop === maxRedirects) throw seraError('NETWORK_ERROR', { detail: 'too many redirects' });
-      if (options.keepCookies) keepSetCookies(jar, headers['set-cookie']);
+      if (options.keepCookies && current.hostname === url.hostname) {
+        keepSetCookies(jar, headers['set-cookie']);
+      }
       try {
         current = new URL(location, current);
       } catch (cause) {

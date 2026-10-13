@@ -72,7 +72,16 @@ observe() {
   echo "[alert] $name: $seen (notified $notified)"
 }
 
-body=$(curl -fsS --max-time 15 --resolve "$domain:443:127.0.0.1" "https://$domain/health" || true)
+admin_token=$(env_value SERA_ADMIN_TOKEN)
+canary_token=$(env_value SERA_CANARY_TOKEN)
+auth_headers=()
+if [ -n "$admin_token" ]; then
+  auth_headers=(-H "Authorization: Bearer $admin_token")
+elif [ -n "$canary_token" ]; then
+  auth_headers=(-H "x-sera-canary: $canary_token")
+fi
+
+body=$(curl -fsS --max-time 15 --resolve "$domain:443:127.0.0.1" ${auth_headers[@]+"${auth_headers[@]}"} "https://$domain/health" || true)
 if [ -z "$body" ] || ! echo "$body" | jq -e .checks >/dev/null 2>&1; then
   observe api down "the API is not answering"
 else
