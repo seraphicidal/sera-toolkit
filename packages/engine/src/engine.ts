@@ -81,6 +81,12 @@ export class SeraEngine {
         name: 'sera',
       });
 
+    if (config.extractionNodes.legacyTokenUsed) {
+      logger.warn(
+        'SERA_EXTRACTION_NODE_TOKEN is deprecated; configure per-node tokens in SERA_EXTRACTION_NODE_TOKENS instead',
+      );
+    }
+
     await mkdir(config.dataDir, { recursive: true });
 
     const registry = new ProviderRegistry(undefined, config);
@@ -88,7 +94,7 @@ export class SeraEngine {
 
     const remote: RemoteExtraction =
       config.extractionNodes.enabled && config.apiUrl
-        ? new RemoteOverHttp(config.apiUrl, config.extractionNodes.token, logger)
+        ? new RemoteOverHttp(config.apiUrl, config.extractionNodes.workerToken, logger)
         : extractionNodes;
     const resolver = new MediaResolver({
       config,

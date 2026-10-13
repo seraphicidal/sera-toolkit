@@ -92,29 +92,97 @@ function limitTo(maxBytes: number, isCancelled: () => boolean): Transform {
   });
 }
 
-function isValidResolvedMedia(media: unknown): boolean {
-  if (!media || typeof media !== 'object') return false;
-  const record = media as {
-    url?: unknown;
-    provider?: unknown;
-    title?: unknown;
-    items?: unknown;
-  };
-  if (
-    typeof record.url !== 'string' ||
-    typeof record.provider !== 'string' ||
-    typeof record.title !== 'string' ||
-    !Array.isArray(record.items)
-  ) {
-    return false;
-  }
-  return record.items.every(
-    (item) =>
-      Boolean(item) &&
-      typeof item === 'object' &&
-      Array.isArray((item as { plans?: unknown }).plans),
-  );
-}
+const resolvedPlanSchema = z.object({
+  kind: z.enum(['video', 'audio', 'image', 'gif', 'carousel']),
+  container: z.string().min(1).max(16),
+  label: z.string().min(1).max(64),
+  detail: z.string().max(500).optional(),
+  width: z.number().int().positive().optional(),
+  height: z.number().int().positive().optional(),
+  fps: z.number().positive().optional(),
+  audioBitrateKbps: z.number().positive().optional(),
+  videoCodec: z.string().max(32).optional(),
+  audioCodec: z.string().max(32).optional(),
+  filesizeBytes: z.number().int().nonnegative().optional(),
+  filesizeIsApproximate: z.boolean().optional(),
+  requiresConversion: z.boolean(),
+  recommended: z.boolean(),
+  fetch: z.discriminatedUnion('via', [
+    z.object({
+      via: z.literal('ytdlp'),
+      selector: z.string().min(1).max(500),
+      merge: z.string().max(16).optional(),
+      audio: z
+        .object({
+          format: z.string().min(1).max(16),
+          quality: z.string().max(16).optional(),
+        })
+        .optional(),
+      remux: z.string().max(16).optional(),
+      extractorArgs: z.array(z.string().max(200)).max(20).optional(),
+      target: z.string().url().max(2048).optional(),
+      useExtractors: z.string().max(100).optional(),
+    }),
+    z.object({
+      via: z.literal('direct'),
+      url: z.string().url().max(2048),
+    }),
+  ]),
+  convert: z.record(z.string(), z.unknown()).optional(),
+});
+
+const resolvedItemSchema = z.object({
+  sourceId: z.string().max(200).optional(),
+  index: z.number().int().nonnegative(),
+  kind: z.enum(['video', 'audio', 'image', 'gif', 'carousel', 'unknown']),
+  title: z.string().max(500).optional(),
+  thumbnailUrl: z.string().url().max(2048).optional(),
+  thumbnailFallbackUrl: z.string().url().max(2048).optional(),
+  subtitles: z
+    .array(
+      z.object({
+        lang: z.string().max(40),
+        label: z.string().max(100),
+        auto: z.boolean().optional(),
+      }),
+    )
+    .optional(),
+  tags: z
+    .object({
+      artist: z.string().max(200).optional(),
+      album: z.string().max(200).optional(),
+      track: z.string().max(200).optional(),
+    })
+    .optional(),
+  width: z.number().int().positive().optional(),
+  height: z.number().int().positive().optional(),
+  duration: z.number().nonnegative().optional(),
+  container: z.string().max(16).optional(),
+  filesizeBytes: z.number().int().nonnegative().optional(),
+  isLive: z.boolean().optional(),
+  plans: z.array(resolvedPlanSchema).min(1),
+});
+
+const resolvedMediaSchema = z.object({
+  provider: z.string().min(1).max(32),
+  providerLabel: z.string().min(1).max(64),
+  url: z.string().url().max(2048),
+  type: z.enum(['single', 'collection', 'playlist', 'multi']),
+  title: z.string().max(500),
+  description: z.string().max(5000).optional(),
+  author: z.string().max(200).optional(),
+  authorUrl: z.string().url().max(2048).optional(),
+  thumbnailUrl: z.string().url().max(2048).optional(),
+  duration: z.number().nonnegative().optional(),
+  createdAt: z.string().max(64).optional(),
+  remoteBackend: z.string().max(64).optional(),
+  items: z.array(resolvedItemSchema).min(1),
+  metadata: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
+});
+
+const resolvedBodySchema = z.object({
+  media: resolvedMediaSchema,
+});
 
 function sanitizeUploadedFilename(requested: string): string {
   const dot = requested.lastIndexOf('.');
@@ -167,19 +235,76 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
       done(null, payload),
     );
 
-    const authenticate = (request: FastifyRequest, reply: FastifyReply): boolean => {
+    const authenticateNode = (
+      request: FastifyRequest,
+      reply: FastifyReply,
+    ): { nodeId: string; isLegacy?: boolean } | undefined => {
       const header = request.headers.authorization ?? '';
       const presented = header.startsWith('Bearer ') ? header.slice(7) : '';
-      if (matchesToken(presented, config.extractionNodes.token)) return true;
+      if (!presented) {
+        void reply.status(401).send({ error: { code: 'NOT_FOUND', message: 'Not found.' } });
+        return undefined;
+      }
+      for (const [nodeId, token] of config.extractionNodes.tokens) {
+        if (matchesToken(presented, token)) return { nodeId };
+      }
+      if (config.extractionNodes.token && matchesToken(presented, config.extractionNodes.token)) {
+        return { nodeId: 'legacy', isLegacy: true };
+      }
+      void reply.status(401).send({ error: { code: 'NOT_FOUND', message: 'Not found.' } });
+      return undefined;
+    };
+
+    const authenticateWorker = (request: FastifyRequest, reply: FastifyReply): boolean => {
+      const header = request.headers.authorization ?? '';
+      const presented = header.startsWith('Bearer ') ? header.slice(7) : '';
+      if (!presented) {
+        void reply.status(401).send({ error: { code: 'NOT_FOUND', message: 'Not found.' } });
+        return false;
+      }
+      if (
+        config.extractionNodes.workerToken &&
+        matchesToken(presented, config.extractionNodes.workerToken)
+      ) {
+        return true;
+      }
+      if (config.adminToken && matchesToken(presented, config.adminToken)) {
+        return true;
+      }
+      if (
+        config.extractionNodes.legacyTokenUsed &&
+        config.extractionNodes.token &&
+        matchesToken(presented, config.extractionNodes.token)
+      ) {
+        return true;
+      }
       void reply.status(401).send({ error: { code: 'NOT_FOUND', message: 'Not found.' } });
       return false;
+    };
+
+    const validateTaskOwnership = (
+      taskId: string,
+      auth: { nodeId: string; isLegacy?: boolean },
+      reply: FastifyReply,
+    ): boolean => {
+      const owner = extractionNodes.claimedBy(taskId);
+      if (!owner) {
+        void reply.status(404).send({ error: { code: 'NOT_FOUND', message: 'Not found.' } });
+        return false;
+      }
+      if (!auth.isLegacy && auth.nodeId !== owner) {
+        void reply.status(403).send({ error: { code: 'FORBIDDEN', message: 'Forbidden.' } });
+        return false;
+      }
+      return true;
     };
 
     app.post(
       '/internal/extraction/claim',
       { config: { rateLimit: false } },
       async (request, reply) => {
-        if (!authenticate(request, reply)) return reply;
+        const auth = authenticateNode(request, reply);
+        if (!auth) return reply;
 
         const parsed = claimSchema.safeParse(request.body);
         if (!parsed.success) {
@@ -190,6 +315,11 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
         }
 
         const { nodeId, providers, capacity, networkClass, features } = parsed.data;
+        if (!auth.isLegacy && auth.nodeId !== nodeId) {
+          void reply.status(403).send({ error: { code: 'FORBIDDEN', message: 'Forbidden.' } });
+          return reply;
+        }
+
         const task = await extractionNodes.claim(
           nodeId,
           providers,
@@ -207,7 +337,10 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
       '/internal/extraction/:taskId/progress',
       { config: { rateLimit: false } },
       async (request, reply) => {
-        if (!authenticate(request, reply)) return reply;
+        const auth = authenticateNode(request, reply);
+        if (!auth) return reply;
+        if (!validateTaskOwnership(request.params.taskId, auth, reply)) return reply;
+
         const parsed = progressSchema.safeParse(request.body);
         if (parsed.success) extractionNodes.reportProgress(request.params.taskId, parsed.data);
         return reply.send({ cancelled: extractionNodes.isCancelled(request.params.taskId) });
@@ -218,17 +351,21 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
       '/internal/extraction/:taskId/resolved',
       { config: { rateLimit: false }, bodyLimit: RESOLVED_BODY_LIMIT },
       async (request, reply) => {
-        if (!authenticate(request, reply)) return reply;
+        const auth = authenticateNode(request, reply);
+        if (!auth) return reply;
+        if (!validateTaskOwnership(request.params.taskId, auth, reply)) return reply;
 
-        const body = request.body as { media?: unknown };
-        const media = body?.media;
-        if (!isValidResolvedMedia(media)) {
-          throw seraError('INTERNAL', { detail: 'node: resolved body had no media' });
+        const parsed = resolvedBodySchema.safeParse(request.body);
+        if (!parsed.success) {
+          throw seraError('INVALID_URL', {
+            message: 'Malformed resolved media.',
+            detail: 'node: bad resolved body',
+          });
         }
 
         const accepted = extractionNodes.completeResolve(
           request.params.taskId,
-          media as Parameters<typeof extractionNodes.completeResolve>[1],
+          parsed.data.media as Parameters<typeof extractionNodes.completeResolve>[1],
         );
         return reply.send({ accepted });
       },
@@ -238,7 +375,10 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
       '/internal/extraction/:taskId/failed',
       { config: { rateLimit: false } },
       async (request, reply) => {
-        if (!authenticate(request, reply)) return reply;
+        const auth = authenticateNode(request, reply);
+        if (!auth) return reply;
+        if (!validateTaskOwnership(request.params.taskId, auth, reply)) return reply;
+
         const parsed = failedSchema.safeParse(request.body);
         const rawCode = parsed.success ? parsed.data.code : '';
         const code: ErrorCode = Object.prototype.hasOwnProperty.call(MESSAGES, rawCode)
@@ -260,12 +400,14 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
       '/internal/extraction/:taskId/file',
       { config: { rateLimit: false } },
       async (request, reply) => {
-        if (!authenticate(request, reply)) return reply;
+        const auth = authenticateNode(request, reply);
+        if (!auth) return reply;
 
         const { taskId } = request.params;
         if (!/^[a-f0-9]{16,64}$/.test(taskId)) {
           throw seraError('NOT_FOUND', { detail: 'node: malformed task id' });
         }
+        if (!validateTaskOwnership(taskId, auth, reply)) return reply;
         if (extractionNodes.isCancelled(taskId)) {
           return reply.status(409).send({ accepted: false, cancelled: true });
         }
@@ -328,13 +470,15 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
       '/internal/extraction/:taskId/complete',
       { config: { rateLimit: false } },
       async (request, reply) => {
-        if (!authenticate(request, reply)) return reply;
+        const auth = authenticateNode(request, reply);
+        if (!auth) return reply;
+        if (!validateTaskOwnership(request.params.taskId, auth, reply)) return reply;
         return reply.send({ accepted: extractionNodes.completeJob(request.params.taskId) });
       },
     );
 
     app.get('/internal/extraction/nodes', { config: { rateLimit: false } }, (request, reply) => {
-      if (!authenticate(request, reply)) return reply;
+      if (!authenticateWorker(request, reply)) return reply;
       return reply.send({ nodes: extractionNodes.status() });
     });
 
@@ -342,7 +486,7 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
       '/internal/extraction/dispatch',
       { config: { rateLimit: false } },
       (request, reply) => {
-        if (!authenticate(request, reply)) return reply;
+        if (!authenticateWorker(request, reply)) return reply;
 
         const parsed = dispatchSchema.safeParse(request.body);
         if (!parsed.success) {
@@ -428,7 +572,7 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
       '/internal/extraction/dispatch/:taskId',
       { config: { rateLimit: false } },
       async (request, reply) => {
-        if (!authenticate(request, reply)) return reply;
+        if (!authenticateWorker(request, reply)) return reply;
 
         const entry = dispatched.get(request.params.taskId);
         if (!entry) throw seraError('NOT_FOUND', { detail: 'node: no such dispatch' });
@@ -488,7 +632,7 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
       '/internal/extraction/dispatch/:taskId',
       { config: { rateLimit: false } },
       (request, reply) => {
-        if (!authenticate(request, reply)) return reply;
+        if (!authenticateWorker(request, reply)) return reply;
         const entry = dispatched.get(request.params.taskId);
         entry?.controller.abort();
         if (entry) {

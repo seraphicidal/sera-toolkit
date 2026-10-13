@@ -58,7 +58,9 @@ const envSchema = z.object({
 
   SERA_INSTAGRAM_SESSION_ID: z.string().default(''),
 
+  SERA_EXTRACTION_NODE_TOKENS: z.string().default(''),
   SERA_EXTRACTION_NODE_TOKEN: z.string().default(''),
+  SERA_EXTRACTION_WORKER_TOKEN: z.string().default(''),
   SERA_CANARY_TOKEN: z.string().default(''),
   SERA_ADMIN_TOKEN: z.string().default(''),
   SERA_EXTRACTION_CLAIM_HOLD_SECONDS: seconds.default(25),
@@ -129,8 +131,11 @@ export interface EngineConfig {
 
   readonly extractionNodes: {
     readonly token: string;
+    readonly tokens: ReadonlyMap<string, string>;
+    readonly workerToken: string;
     readonly enabled: boolean;
     readonly claimHoldMs: number;
+    readonly legacyTokenUsed: boolean;
   };
 
   readonly networkClass: 'datacenter' | 'residential' | 'unknown';
@@ -235,6 +240,29 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): EngineConfig {
     ? resolve(e.SERA_DATA_DIR)
     : resolve(process.cwd(), '.data', 'workspaces');
 
+  const nodeTokens = new Map<string, string>();
+  const rawNodeTokens = e.SERA_EXTRACTION_NODE_TOKENS.trim();
+  if (rawNodeTokens) {
+    for (const pair of rawNodeTokens.split(',')) {
+      const trimmed = pair.trim();
+      if (!trimmed) continue;
+      const colon = trimmed.indexOf(':');
+      if (colon > 0) {
+        const id = trimmed.slice(0, colon).trim();
+        const tok = trimmed.slice(colon + 1).trim();
+        if (id && tok) nodeTokens.set(id, tok);
+      }
+    }
+  }
+
+  const legacyToken = e.SERA_EXTRACTION_NODE_TOKEN.trim();
+  const legacyTokenUsed = nodeTokens.size === 0 && Boolean(legacyToken);
+  const workerToken =
+    e.SERA_EXTRACTION_WORKER_TOKEN.trim() ||
+    (legacyTokenUsed ? legacyToken : '') ||
+    e.SERA_ADMIN_TOKEN.trim();
+  const nodesEnabled = nodeTokens.size > 0 || legacyToken.length > 0;
+
   return {
     nodeEnv: e.NODE_ENV,
     isProduction,
@@ -279,9 +307,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): EngineConfig {
     adminToken: e.SERA_ADMIN_TOKEN,
 
     extractionNodes: {
-      token: e.SERA_EXTRACTION_NODE_TOKEN,
-      enabled: e.SERA_EXTRACTION_NODE_TOKEN.length > 0,
+      token: legacyToken || (nodeTokens.values().next().value ?? ''),
+      tokens: nodeTokens,
+      workerToken,
+      enabled: nodesEnabled,
       claimHoldMs: e.SERA_EXTRACTION_CLAIM_HOLD_SECONDS * 1000,
+      legacyTokenUsed,
     },
 
     networkClass: e.SERA_NETWORK_CLASS,
