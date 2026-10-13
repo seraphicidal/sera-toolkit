@@ -198,11 +198,11 @@ export default async function AboutPage() {
         <ul className="flex flex-col gap-1.5 text-[0.875rem]">
           <Limit
             label="Latest security & bug-fix audit"
-            value="45 files · 696 lines changed (+565 / −131)"
+            value="47 files · 1,014 lines changed (+878 / −136)"
           />
           <Limit
             label="Cumulative audit changes"
-            value="100 file touches · 2,165 lines changed (+1,707 / −458)"
+            value="102 file touches · 2,483 lines changed (+2,020 / −463)"
           />
         </ul>
         <ul className="mt-1 list-disc space-y-1.5 pl-5 text-[0.875rem]">
@@ -229,6 +229,14 @@ export default async function AboutPage() {
             client and Oracle Cloud stack.
           </li>
         </ul>
+        <p className="mt-1">
+          <Link
+            href="/patch-notes"
+            className="font-medium text-[var(--color-accent)] transition-opacity hover:opacity-75"
+          >
+            View full patch notes & audit log →
+          </Link>
+        </p>
       </Section>
 
       <p className="border-t border-[var(--color-line)] pt-6">

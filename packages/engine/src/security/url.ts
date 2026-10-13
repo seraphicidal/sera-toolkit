@@ -86,8 +86,9 @@ export function parseUserUrl(input: string, options: ParseUrlOptions = {}): Pars
     throw seraError('BLOCKED_ADDRESS', { detail: `port ${url.port}` });
   }
 
-  const rawHost = url.hostname.toLowerCase();
+  const rawHost = url.hostname.toLowerCase().replace(/\.+$/, '');
   if (!rawHost) throw seraError('INVALID_URL');
+  url.hostname = rawHost;
 
   if (!options.allowPrivateAddresses && isIpLiteral(rawHost)) {
     const bare = rawHost.startsWith('[') ? rawHost.slice(1, -1) : rawHost;
@@ -99,7 +100,8 @@ export function parseUserUrl(input: string, options: ParseUrlOptions = {}): Pars
 }
 
 export function stripWww(host: string): string {
-  return host.startsWith('www.') ? host.slice(4) : host;
+  const clean = host.startsWith('www.') ? host.slice(4) : host;
+  return clean.replace(/\.+$/, '');
 }
 
 export function normalizeUrl(url: URL): URL {
@@ -124,7 +126,7 @@ export function normalizeUrl(url: URL): URL {
 
 export function hostMatches(host: string, domain: string): boolean {
   const h = stripWww(host.toLowerCase());
-  const d = domain.toLowerCase();
+  const d = domain.toLowerCase().replace(/\.+$/, '');
   return h === d || h.endsWith(`.${d}`);
 }
 

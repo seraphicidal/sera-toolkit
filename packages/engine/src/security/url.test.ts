@@ -55,12 +55,15 @@ describe('parseUserUrl', () => {
     expect(codeFor('http://example.com:80/x.mp4')).toBe('OK');
   });
 
-  it('refuses literal addresses that point back at infrastructure', () => {
+  it('refuses literal addresses that point back at infrastructure, including with trailing dots', () => {
     for (const input of [
       'http://127.0.0.1/x.mp4',
+      'http://127.0.0.1./x.mp4',
       'http://169.254.169.254/latest/meta-data',
+      'http://169.254.169.254./latest/meta-data',
       'http://[::1]/x.mp4',
       'http://192.168.0.1/x.mp4',
+      'http://192.168.0.1./x.mp4',
       'http://10.1.2.3/x.mp4',
     ]) {
       expect(codeFor(input), input).toBe('BLOCKED_ADDRESS');

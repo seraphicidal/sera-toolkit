@@ -57,6 +57,12 @@ export default function RootLayout({ children }: { readonly children: React.Reac
               >
                 About
               </Link>
+              <Link
+                href="/patch-notes"
+                className="rounded-md text-sm text-[var(--color-ink-muted)] transition-colors hover:text-[var(--color-ink)]"
+              >
+                Patch notes
+              </Link>
               <ThemeToggle />
             </div>
           </header>
@@ -73,6 +79,12 @@ export default function RootLayout({ children }: { readonly children: React.Reac
                 className="rounded-md transition-colors hover:text-[var(--color-ink-muted)]"
               >
                 How this works
+              </Link>
+              <Link
+                href="/patch-notes"
+                className="rounded-md transition-colors hover:text-[var(--color-ink-muted)]"
+              >
+                Patch notes
               </Link>
               <span className="tabular text-[var(--color-ink-faint)]/70">v{SERA_VERSION}</span>
             </div>
