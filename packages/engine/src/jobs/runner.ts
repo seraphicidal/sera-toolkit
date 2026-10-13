@@ -1,4 +1,4 @@
-import { mkdir, open, readdir, rename, rm, stat } from 'node:fs/promises';
+import { mkdir, open, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, extname, join } from 'node:path';
 import type {
   JobProgress,
@@ -50,6 +50,9 @@ export interface JobSpec {
   readonly trim?: TrimRange;
   readonly subtitles?: JobSubtitles;
   readonly imported?: ImportedJob;
+  readonly resolvedMedia?: ResolvedMedia;
+  readonly rawInfoJson?: string;
+  readonly resolvedAt?: number;
 }
 
 export interface JobSubtitles {
@@ -100,6 +103,10 @@ export class JobRunner {
 
     report({ state: 'resolving', step: 'Reading the link', progress: { percent: 0 } });
 
+    const isResolvedFresh =
+      Boolean(spec.resolvedMedia) &&
+      (!spec.resolvedAt || Date.now() - spec.resolvedAt < 30 * 60_000);
+
     const resolved = spec.imported
       ? mediaFromImport({
           url: spec.url,
@@ -107,7 +114,9 @@ export class JobRunner {
           ...(spec.imported.author ? { author: spec.imported.author } : {}),
           entries: spec.imported.entries,
         })
-      : await resolver.resolveCanonical(new URL(spec.url), spec.provider, signal);
+      : isResolvedFresh
+        ? spec.resolvedMedia!
+        : await resolver.resolveCanonical(new URL(spec.url), spec.provider, signal);
     const matched = spec.selections.map((selection) => matchSelection(resolved, selection));
 
     assertWithinLimits(matched, config);
@@ -175,20 +184,66 @@ export class JobRunner {
         'job completed on a remote extraction backend',
       );
     } else {
-      for (const [index, { item, plan }] of matched.entries()) {
-        if (signal?.aborted) throw seraError('CANCELLED');
+      type ItemResult =
+        | {
+            readonly kind: 'subtitles';
+            readonly index: number;
+            readonly path: string;
+            readonly item: ResolvedItem;
+            readonly plan: DownloadPlan;
+          }
+        | {
+            readonly kind: 'media';
+            readonly index: number;
+            readonly finished: string;
+            readonly used: DownloadPlan;
+            readonly item: ResolvedItem;
+            readonly plan: DownloadPlan;
+            readonly subtitlePath?: string;
+          };
+
+      const results = new Array<ItemResult>(totalFiles);
+      const itemFractions = new Array<number>(totalFiles).fill(0);
+      let lastReportedPercent = 0;
+
+      const concurrency = Math.max(1, Math.min(config.itemConcurrency, totalFiles));
+      const itemAbort = new AbortController();
+      const onAbort = () => itemAbort.abort();
+      signal?.addEventListener('abort', onAbort);
+
+      const queue = matched.map((entry, index) => ({ ...entry, index }));
+      let firstError: unknown;
+
+      const processItem = async (
+        index: number,
+        item: ResolvedItem,
+        plan: DownloadPlan,
+        itemSignal: AbortSignal,
+      ): Promise<ItemResult> => {
+        if (itemSignal.aborted) throw seraError('CANCELLED');
         if (spec.imported) assertImportFresh(spec.imported);
 
-        const fileProgress = (fraction: number, extra: Partial<JobProgress> = {}): JobProgress => ({
-          percent: Math.min(99, ((index + Math.min(fraction, 1)) / totalFiles) * 100),
-          ...(totalFiles > 1 ? { currentFile: index + 1, totalFiles } : {}),
-          ...extra,
-        });
+        const fileProgress = (fraction: number, extra: Partial<JobProgress> = {}): JobProgress => {
+          itemFractions[index] = Math.min(1, Math.max(0, fraction));
+          const sum = itemFractions.reduce((a, b) => a + b, 0);
+          const percent = Math.min(99, Math.max(lastReportedPercent, (sum / totalFiles) * 100));
+          lastReportedPercent = percent;
+          const currentFile = Math.min(totalFiles, itemFractions.filter((f) => f >= 1).length + 1);
+          return {
+            percent,
+            ...(totalFiles > 1 ? { currentFile, totalFiles } : {}),
+            ...extra,
+          };
+        };
+
+        const itemReport: ReportFn = (update) => {
+          report(update);
+        };
 
         if (spec.subtitles) assertSubtitlesOffered(item, spec.subtitles);
 
         if (spec.subtitles?.only) {
-          report({
+          itemReport({
             state: 'downloading',
             step: 'Downloading subtitles',
             progress: fileProgress(0),
@@ -199,19 +254,11 @@ export class JobRunner {
             workspace,
             index,
             subtitles: spec.subtitles,
-            signal,
+            signal: itemSignal,
           });
-          const name = dedupeFilename(
-            subtitleName(
-              this.nameFor(spec, resolved, item, plan, path, totalFiles),
-              spec.subtitles.lang,
-            ),
-            taken,
-          );
-          const destination = workspace.outputPath(name);
-          await rename(path, destination);
-          produced.push({ path: destination, name });
-          continue;
+          itemFractions[index] = 1;
+          fileProgress(1);
+          return { kind: 'subtitles', index, path, item, plan };
         }
 
         const { path: downloaded, plan: used } = await this.fetchWithFallback({
@@ -220,14 +267,14 @@ export class JobRunner {
           item,
           plan,
           index,
-          report,
+          report: itemReport,
           fileProgress,
+          rawInfoJson: isResolvedFresh ? spec.rawInfoJson : undefined,
           ...(spec.imported ? { imported: true } : {}),
           ...(spec.trim ? { trim: spec.trim } : {}),
           ...(spec.subtitles?.format === 'embed' ? { embedSubtitles: spec.subtitles } : {}),
-          ...(signal ? { signal } : {}),
+          signal: itemSignal,
         });
-        if (used !== plan) delivered.push({ requested: plan.label, actual: used.label });
 
         const converted = used.convert
           ? await this.convertOne({
@@ -235,12 +282,13 @@ export class JobRunner {
               spec: used.convert,
               workspace,
               index,
-              report,
+              report: itemReport,
               fileProgress,
               ...(item.duration !== undefined ? { durationSeconds: item.duration } : {}),
-              ...(signal ? { signal } : {}),
+              signal: itemSignal,
             })
           : downloaded;
+
         const finished =
           used.kind === 'audio'
             ? await this.tagOne({
@@ -250,42 +298,99 @@ export class JobRunner {
                 workspace,
                 index,
                 ...(spec.imported ? { imported: true } : {}),
-                ...(signal ? { signal } : {}),
+                signal: itemSignal,
               })
             : converted;
 
-        const name = dedupeFilename(
-          this.nameFor(spec, resolved, item, used, finished, totalFiles),
-          taken,
-        );
-        const destination = workspace.outputPath(name);
-        await rename(finished, destination);
-        produced.push({ path: destination, name });
-
+        let subtitlePath: string | undefined;
         if (spec.subtitles && spec.subtitles.format !== 'embed') {
-          report({
+          itemReport({
             state: 'downloading',
             step: 'Downloading subtitles',
             progress: fileProgress(0.99),
           });
-          const path = await this.fetchSubtitles({
+          subtitlePath = await this.fetchSubtitles({
             resolved,
             item,
             workspace,
             index,
             subtitles: spec.subtitles,
-            signal,
+            signal: itemSignal,
           });
-          const subtitle = dedupeFilename(
+        }
+
+        itemFractions[index] = 1;
+        fileProgress(1);
+        return { kind: 'media', index, finished, used, item, plan, subtitlePath };
+      };
+
+      try {
+        const worker = async () => {
+          while (queue.length > 0) {
+            if (itemAbort.signal.aborted) break;
+            const next = queue.shift();
+            if (!next) break;
+            try {
+              results[next.index] = await processItem(
+                next.index,
+                next.item,
+                next.plan,
+                itemAbort.signal,
+              );
+            } catch (error) {
+              firstError ??= error;
+              itemAbort.abort();
+              break;
+            }
+          }
+        };
+
+        await Promise.all(Array.from({ length: concurrency }, () => worker()));
+      } finally {
+        signal?.removeEventListener('abort', onAbort);
+      }
+
+      if (firstError) throw SeraError.from(firstError);
+      if (signal?.aborted) throw seraError('CANCELLED');
+
+      for (let i = 0; i < totalFiles; i++) {
+        const res = results[i];
+        if (!res) throw seraError('INTERNAL', { detail: 'missing item result' });
+        if (res.kind === 'subtitles') {
+          const name = dedupeFilename(
             subtitleName(
-              name.replace(/\.[^.]+$/, `.${spec.subtitles.format}`),
-              spec.subtitles.lang,
+              this.nameFor(spec, resolved, res.item, res.plan, res.path, totalFiles),
+              spec.subtitles!.lang,
             ),
             taken,
           );
-          const subtitleDestination = workspace.outputPath(subtitle);
-          await rename(path, subtitleDestination);
-          produced.push({ path: subtitleDestination, name: subtitle });
+          const destination = workspace.outputPath(name);
+          await rename(res.path, destination);
+          produced.push({ path: destination, name });
+        } else {
+          if (res.used !== res.plan) {
+            delivered.push({ requested: res.plan.label, actual: res.used.label });
+          }
+          const name = dedupeFilename(
+            this.nameFor(spec, resolved, res.item, res.used, res.finished, totalFiles),
+            taken,
+          );
+          const destination = workspace.outputPath(name);
+          await rename(res.finished, destination);
+          produced.push({ path: destination, name });
+
+          if (res.subtitlePath) {
+            const subtitle = dedupeFilename(
+              subtitleName(
+                name.replace(/\.[^.]+$/, `.${spec.subtitles!.format}`),
+                spec.subtitles!.lang,
+              ),
+              taken,
+            );
+            const subtitleDestination = workspace.outputPath(subtitle);
+            await rename(res.subtitlePath, subtitleDestination);
+            produced.push({ path: subtitleDestination, name: subtitle });
+          }
         }
       }
     }
@@ -334,6 +439,7 @@ export class JobRunner {
     index: number;
     report: ReportFn;
     fileProgress: (fraction: number, extra?: Partial<JobProgress>) => JobProgress;
+    rawInfoJson?: string;
     imported?: boolean;
     trim?: TrimRange;
     embedSubtitles?: JobSubtitles;
@@ -374,6 +480,7 @@ export class JobRunner {
     index: number;
     report: ReportFn;
     fileProgress: (fraction: number, extra?: Partial<JobProgress>) => JobProgress;
+    rawInfoJson?: string;
     imported?: boolean;
     trim?: TrimRange;
     embedSubtitles?: JobSubtitles;
@@ -384,6 +491,12 @@ export class JobRunner {
 
     const scratch = join(workspace.scratchDir, `sel-${index}`);
     await mkdir(scratch, { recursive: true });
+
+    let loadInfoJsonPath: string | undefined;
+    if (args.rawInfoJson) {
+      loadInfoJsonPath = join(scratch, 'info.json');
+      await writeFile(loadInfoJsonPath, args.rawInfoJson, 'utf8');
+    }
 
     const step = args.resolved.items.length > 1 ? `Downloading ${index + 1}` : 'Downloading';
     report({ state: 'downloading', step, progress: fileProgress(0) });
@@ -455,7 +568,8 @@ export class JobRunner {
       ? await this.deps.resolver.egressProxy(target, config.proxyFor(args.resolved.provider))
       : config.proxyFor(args.resolved.provider);
 
-    const download = (
+    const runDownload = (
+      infoPath?: string,
       sections?: { start: number; end?: number; forceKeyframes: boolean },
       downloadSignal = signal,
     ) =>
@@ -470,6 +584,7 @@ export class JobRunner {
         maxFilesizeBytes: config.maxFilesizeBytes,
         ...(proxy ? { proxy } : {}),
         ...(fetchPlan.useExtractors ? { useExtractors: fetchPlan.useExtractors } : {}),
+        ...(infoPath ? { loadInfoJsonPath: infoPath } : {}),
         ...(fetchPlan.merge ? { mergeContainer: fetchPlan.merge } : {}),
         ...(fetchPlan.remux ? { remuxContainer: fetchPlan.remux } : {}),
         ...(fetchPlan.audio
@@ -509,6 +624,36 @@ export class JobRunner {
           });
         },
       });
+
+    const download = async (
+      sections?: { start: number; end?: number; forceKeyframes: boolean },
+      downloadSignal = signal,
+    ) => {
+      if (loadInfoJsonPath) {
+        try {
+          await runDownload(loadInfoJsonPath, sections, downloadSignal);
+          return;
+        } catch (error) {
+          if (downloadSignal?.aborted) throw error;
+          const failure = classifyFailure(error);
+          if (
+            failure === 'STREAM_403' ||
+            failure === 'CDN_DOWNLOAD_FAILURE' ||
+            failure === 'FORMAT_UNAVAILABLE' ||
+            failure === 'NETWORK_ERROR'
+          ) {
+            this.deps.logger.warn(
+              { error, failure },
+              'cached info.json download failed; retrying with direct url',
+            );
+            await runDownload(undefined, sections, downloadSignal);
+            return;
+          }
+          throw error;
+        }
+      }
+      await runDownload(undefined, sections, downloadSignal);
+    };
 
     if (!args.trim) {
       await download();
@@ -711,6 +856,7 @@ export class JobRunner {
       output,
       spec: args.spec,
       maxOutputBytes: config.maxFilesizeBytes,
+      threads: config.ffmpegThreads,
       ...(args.durationSeconds !== undefined ? { durationSeconds: args.durationSeconds } : {}),
       ...(args.signal ? { signal: args.signal } : {}),
       onProgress: (percent) => {

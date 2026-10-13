@@ -358,6 +358,7 @@ export class ExtractionNode {
 
     const trim = taskTrim(task);
     const subtitles = taskSubtitles(task);
+    const cached = this.resolver.getCached(task.providerId, url.toString());
     const spec: JobSpec = {
       jobId,
       provider: task.providerId,
@@ -367,6 +368,9 @@ export class ExtractionNode {
       ...(task.filename ? { filename: task.filename } : {}),
       ...(trim ? { trim } : {}),
       ...(subtitles ? { subtitles } : {}),
+      resolvedMedia: media,
+      ...(cached?.rawInfoJson ? { rawInfoJson: cached.rawInfoJson } : {}),
+      resolvedAt: cached?.resolvedAt ?? Date.now(),
     };
 
     try {
@@ -391,16 +395,30 @@ export class ExtractionNode {
 
       onProgress(0, 'Uploading', 0, totalBytes);
 
-      for (const file of manifest.files) {
-        if (abort.signal.aborted) throw seraError('CANCELLED');
-        const path = await this.workspaces.resolveFile(jobId, file.name);
-        await this.upload(task.id, file.name, file.mimeType, path, abort, (chunkBytes) => {
-          uploadedBytes += chunkBytes;
-          const percent =
-            totalBytes > 0 ? Math.min(99, Math.round((uploadedBytes / totalBytes) * 100)) : 99;
-          onProgress(percent, 'Uploading', uploadedBytes, totalBytes);
-        });
-      }
+      const queue = [...manifest.files];
+      let uploadError: unknown;
+      const worker = async () => {
+        while (queue.length > 0) {
+          if (abort.signal.aborted || uploadError) break;
+          const file = queue.shift();
+          if (!file) break;
+          try {
+            const path = await this.workspaces.resolveFile(jobId, file.name);
+            await this.upload(task.id, file.name, file.mimeType, path, abort, (chunkBytes) => {
+              uploadedBytes += chunkBytes;
+              const percent =
+                totalBytes > 0 ? Math.min(99, Math.round((uploadedBytes / totalBytes) * 100)) : 99;
+              onProgress(percent, 'Uploading', uploadedBytes, totalBytes);
+            });
+          } catch (error) {
+            uploadError ??= error;
+            break;
+          }
+        }
+      };
+      await Promise.all([worker(), worker()]);
+      if (uploadError) throw SeraError.from(uploadError);
+      if (abort.signal.aborted) throw seraError('CANCELLED');
       await this.report(`/internal/extraction/${task.id}/complete`, {});
     } finally {
       await this.workspaces.destroy(jobId).catch(() => undefined);

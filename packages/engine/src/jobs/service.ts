@@ -103,6 +103,26 @@ export class JobService {
       });
     }
 
+    let resolvedMedia;
+    let rawInfoJson: string | undefined;
+    let resolvedAt: number | undefined;
+
+    if (!info.m) {
+      const cached = resolver.getCached(info.p, info.u);
+      if (cached) {
+        try {
+          const mediaJson = JSON.stringify(cached.media);
+          if (mediaJson.length <= 1024 * 1024) {
+            resolvedMedia = cached.media;
+            resolvedAt = cached.resolvedAt ?? Date.now();
+            if (cached.rawInfoJson && cached.rawInfoJson.length <= 1024 * 1024) {
+              rawInfoJson = cached.rawInfoJson;
+            }
+          }
+        } catch {}
+      }
+    }
+
     const spec: JobSpec = {
       jobId: newJobId(),
       provider: info.p,
@@ -112,6 +132,9 @@ export class JobService {
       ...(request.filename ? { filename: request.filename } : {}),
       ...(trim ? { trim } : {}),
       ...(subtitles ? { subtitles } : {}),
+      ...(resolvedMedia ? { resolvedMedia } : {}),
+      ...(rawInfoJson ? { rawInfoJson } : {}),
+      ...(resolvedAt !== undefined ? { resolvedAt } : {}),
       ...(info.m
         ? {
             imported: {

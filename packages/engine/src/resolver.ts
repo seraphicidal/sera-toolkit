@@ -474,21 +474,41 @@ export class MediaResolver {
     return withMedia;
   }
 
+  getCached(providerId: string, url: string): ExtractionOutcome | undefined {
+    return this.cache.get(`${providerId}|${url}`);
+  }
+
+  setCached(providerId: string, url: string, outcome: ExtractionOutcome): void {
+    this.cache.set(`${providerId}|${url}`, outcome);
+  }
+
   private async runProvider(
     canonical: URL,
     providerId: string,
     signal?: AbortSignal,
     options: { allowDegraded?: boolean } = {},
-  ): Promise<ResolvedMedia> {
+  ): Promise<ResolvedMedia | { readonly media: ResolvedMedia; readonly rawInfoJson?: string }> {
     const provider = this.registry.get(providerId);
     if (!provider) {
       throw seraError('UNSUPPORTED_SOURCE', { detail: `unknown provider ${providerId}` });
     }
-    const context = this.providerContext(signal);
-    return provider.resolve(
+    let rawInfoJson: string | undefined;
+    const baseContext = this.providerContext(signal);
+    const context: ProviderContext = {
+      ...baseContext,
+      probe: async (url, probeOptions) => {
+        const info = await baseContext.probe(url, probeOptions);
+        if (info._rawJson) {
+          rawInfoJson = info._rawJson;
+        }
+        return info;
+      },
+    };
+    const media = await provider.resolve(
       canonical,
       options.allowDegraded ? { ...context, allowDegraded: true } : context,
     );
+    return rawInfoJson ? { media, rawInfoJson } : media;
   }
 
   private providerContext(signal?: AbortSignal): ProviderContext {

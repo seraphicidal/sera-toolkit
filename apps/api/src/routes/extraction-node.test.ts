@@ -341,4 +341,54 @@ describe('the dispatch route a standalone worker uses', () => {
       trim: { start: 10, end: 30 },
     });
   });
+
+  it('long-polls for progress updates and returns when progress is reported', async () => {
+    const dispatched = await app.inject({
+      method: 'POST',
+      url: '/internal/extraction/dispatch',
+      headers: auth,
+      payload: {
+        kind: 'resolve',
+        url: 'https://www.youtube.com/watch?v=aqz-KE-bpKQ',
+        providerId: 'youtube',
+      },
+    });
+    const { taskId } = dispatched.json<{ taskId: string }>();
+
+    const pollPromise = app.inject({
+      method: 'GET',
+      url: `/internal/extraction/dispatch/${taskId}?wait=5`,
+      headers: auth,
+    });
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    const claimRes = await app.inject({
+      method: 'POST',
+      url: '/internal/extraction/claim',
+      headers: auth,
+      payload: {
+        nodeId: 'test-node-poll',
+        providers: ['youtube'],
+        capacity: 1,
+        features: ['trim'],
+      },
+    });
+    expect(claimRes.statusCode).toBe(200);
+    const task = claimRes.json<{ id: string }>();
+
+    await app.inject({
+      method: 'POST',
+      url: `/internal/extraction/${task.id}/progress`,
+      headers: auth,
+      payload: { percent: 42, step: 'Extracting' },
+    });
+
+    const pollRes = await pollPromise;
+    expect(pollRes.statusCode).toBe(200);
+    expect(pollRes.json<{ progress?: { percent: number; step: string } }>().progress).toEqual({
+      percent: 42,
+      step: 'Extracting',
+    });
+  });
 });

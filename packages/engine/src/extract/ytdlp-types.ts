@@ -89,6 +89,7 @@ export interface YtdlpInfo {
   readonly age_limit?: number | null;
   readonly availability?: string | null;
   readonly requested_downloads?: readonly { readonly filepath?: string }[];
+  readonly _rawJson?: string;
 }
 
 export function num(value: unknown): number | undefined {

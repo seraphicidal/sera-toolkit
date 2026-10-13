@@ -35,6 +35,7 @@ export interface DownloadRequest extends YtdlpOptions {
     readonly end?: number;
     readonly forceKeyframes: boolean;
   };
+  readonly loadInfoJsonPath?: string;
   readonly onProgress?: (progress: YtdlpProgress) => void;
 }
 
@@ -150,7 +151,11 @@ export async function dumpInfo(
   if (result.code !== 0) throw classifyYtdlpFailure(result.stderrTail, result.code);
 
   try {
-    return JSON.parse(result.stdout) as YtdlpInfo;
+    const parsed = JSON.parse(result.stdout) as YtdlpInfo;
+    if (result.stdout.length <= 4 * 1024 * 1024) {
+      return { ...parsed, _rawJson: result.stdout };
+    }
+    return parsed;
   } catch (cause) {
     throw seraError('PROVIDER_UNAVAILABLE', {
       detail: 'yt-dlp produced unparseable JSON',
@@ -203,7 +208,11 @@ export async function download(request: DownloadRequest): Promise<void> {
   }
   if (request.maxFilesizeBytes) args.push('--max-filesize', String(request.maxFilesizeBytes));
 
-  args.push('--', request.url);
+  if (request.loadInfoJsonPath) {
+    args.push('--load-info-json', request.loadInfoJsonPath);
+  } else {
+    args.push('--', request.url);
+  }
 
   const bytesByFormat = new Map<string, number>();
   let lastPercent = 0;
