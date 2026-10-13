@@ -116,14 +116,29 @@ export class RemoteOverHttp implements RemoteExtraction {
       signal?: AbortSignal;
     },
   ): Promise<{ media?: ResolvedMedia; files?: readonly RemoteFile[] }> {
-    const started = await this.call('POST', '/internal/extraction/dispatch', task);
+    const started = await this.call('POST', '/internal/extraction/dispatch', task, options.signal);
     const { taskId } = (await started.json()) as { taskId: string };
+
+    let seenStep: string | undefined;
+    let seenPercent: number | undefined;
 
     try {
       for (;;) {
         if (options.signal?.aborted) throw seraError('CANCELLED');
 
-        const response = await this.call('GET', `/internal/extraction/dispatch/${taskId}`);
+        const query = new URLSearchParams({ wait: '20' });
+        if (seenStep !== undefined) query.set('seenStep', seenStep);
+        if (seenPercent !== undefined) query.set('seenPercent', String(seenPercent));
+
+        const reqStart = Date.now();
+        const response = await this.call(
+          'GET',
+          `/internal/extraction/dispatch/${taskId}?${query.toString()}`,
+          undefined,
+          options.signal,
+        );
+        const reqDuration = Date.now() - reqStart;
+
         const state = (await response.json()) as {
           state: 'pending' | 'done' | 'failed';
           claimedBy?: string;
@@ -134,7 +149,11 @@ export class RemoteOverHttp implements RemoteExtraction {
         };
 
         if (state.claimedBy) options.onClaimed?.(state.claimedBy);
-        if (state.progress) options.onProgress?.(state.progress);
+        if (state.progress) {
+          options.onProgress?.(state.progress);
+          seenStep = state.progress.step;
+          seenPercent = state.progress.percent;
+        }
         if (state.state === 'done') return { ...state };
         if (state.state === 'failed') {
           const failure = state.error;
@@ -147,7 +166,10 @@ export class RemoteOverHttp implements RemoteExtraction {
             ...(failure?.detail ? { detail: failure.detail } : {}),
           });
         }
-        await new Promise((done) => setTimeout(done, this.pollIntervalMs));
+
+        if (reqDuration < 200) {
+          await new Promise((done) => setTimeout(done, 250));
+        }
       }
     } catch (error) {
       if (options.signal?.aborted || SeraError.from(error).code === 'CANCELLED') {
@@ -157,7 +179,14 @@ export class RemoteOverHttp implements RemoteExtraction {
     }
   }
 
-  private async call(method: string, path: string, body?: unknown): Promise<Response> {
+  private async call(
+    method: string,
+    path: string,
+    body?: unknown,
+    signal?: AbortSignal,
+  ): Promise<Response> {
+    const timeoutSignal = AbortSignal.timeout(30_000);
+    const combinedSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
     const response = await fetch(`${this.apiUrl}${path}`, {
       method,
       headers: {
@@ -165,7 +194,7 @@ export class RemoteOverHttp implements RemoteExtraction {
         ...(body === undefined ? {} : { 'content-type': 'application/json' }),
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      signal: AbortSignal.timeout(30_000),
+      signal: combinedSignal,
     });
     if (!response.ok) {
       throw seraError('PROVIDER_UNAVAILABLE', {

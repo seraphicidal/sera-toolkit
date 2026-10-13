@@ -71,6 +71,8 @@ const envSchema = z.object({
   SERA_QUEUE_DRIVER: z.enum(['memory', 'redis']).default('memory'),
   SERA_REDIS_URL: z.string().default('redis://127.0.0.1:6379'),
   SERA_WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(64).default(2),
+  SERA_ITEM_CONCURRENCY: z.coerce.number().int().min(1).max(8).default(3),
+  SERA_FFMPEG_THREADS: z.coerce.number().int().min(1).max(16).default(2),
   SERA_MAX_QUEUE_DEPTH: z.coerce.number().int().min(1).default(200),
   SERA_EMBEDDED_WORKER: booleanish.default(true),
 
@@ -150,6 +152,8 @@ export interface EngineConfig {
   readonly queueDriver: 'memory' | 'redis';
   readonly redisUrl: string;
   readonly workerConcurrency: number;
+  readonly itemConcurrency: number;
+  readonly ffmpegThreads: number;
   readonly maxQueueDepth: number;
   readonly embeddedWorker: boolean;
 
@@ -305,6 +309,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): EngineConfig {
     queueDriver: e.SERA_QUEUE_DRIVER,
     redisUrl: e.SERA_REDIS_URL,
     workerConcurrency: e.SERA_WORKER_CONCURRENCY,
+    itemConcurrency: e.SERA_ITEM_CONCURRENCY,
+    ffmpegThreads: e.SERA_FFMPEG_THREADS,
     maxQueueDepth: e.SERA_MAX_QUEUE_DEPTH,
     embeddedWorker: e.SERA_QUEUE_DRIVER === 'memory' ? true : e.SERA_EMBEDDED_WORKER,
 

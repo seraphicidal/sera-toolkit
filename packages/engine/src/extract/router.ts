@@ -14,7 +14,11 @@ export interface ExtractionBackend {
 
   isHealthy(): boolean;
 
-  resolve(url: URL, providerId: string, signal?: AbortSignal): Promise<ResolvedMedia>;
+  resolve(
+    url: URL,
+    providerId: string,
+    signal?: AbortSignal,
+  ): Promise<ResolvedMedia | { readonly media: ResolvedMedia; readonly rawInfoJson?: string }>;
 }
 
 export interface ExtractionOutcome {
@@ -25,6 +29,8 @@ export interface ExtractionOutcome {
   readonly fallbackUsed: boolean;
   readonly attempts: number;
   readonly firstFailure?: FailureClass;
+  readonly rawInfoJson?: string;
+  readonly resolvedAt?: number;
 }
 
 export interface RouterDependencies {
@@ -37,7 +43,7 @@ export interface RouterDependencies {
     url: URL,
     providerId: string,
     signal?: AbortSignal,
-  ) => Promise<ResolvedMedia>;
+  ) => Promise<ResolvedMedia | { readonly media: ResolvedMedia; readonly rawInfoJson?: string }>;
 }
 
 export class ExtractionRouter {
@@ -98,9 +104,11 @@ export class ExtractionRouter {
     providerId: string,
     failure: FailureClass,
     signal?: AbortSignal,
-  ): Promise<ResolvedMedia | undefined> {
+  ): Promise<{ media: ResolvedMedia; rawInfoJson?: string } | undefined> {
     if (!this.deps.lastResort || isDefinitive(failure)) return undefined;
-    return this.deps.lastResort(url, providerId, signal).catch(() => undefined);
+    const res = await this.deps.lastResort(url, providerId, signal).catch(() => undefined);
+    if (!res) return undefined;
+    return 'media' in res ? { media: res.media, rawInfoJson: res.rawInfoJson } : { media: res };
   }
 
   private async withAccount(
@@ -108,17 +116,19 @@ export class ExtractionRouter {
     providerId: string,
     failure: FailureClass,
     signal?: AbortSignal,
-  ): Promise<{ media: ResolvedMedia; backend: string } | undefined> {
+  ): Promise<{ media: ResolvedMedia; backend: string; rawInfoJson?: string } | undefined> {
     if (isDefinitive(failure)) return undefined;
     const backend = this.deps.authenticated?.(providerId);
     if (!backend?.isHealthy()) return undefined;
     try {
-      const media = await backend.resolve(url, providerId, signal);
+      const outcome = await backend.resolve(url, providerId, signal);
+      const media = 'media' in outcome ? outcome.media : outcome;
+      const rawInfoJson = 'rawInfoJson' in outcome ? outcome.rawInfoJson : undefined;
       this.deps.logger.info(
         { provider: providerId, backend: backend.id, items: media.items.length },
         'extraction succeeded on a node holding an account',
       );
-      return { media, backend: backend.id };
+      return { media, backend: backend.id, ...(rawInfoJson ? { rawInfoJson } : {}) };
     } catch (error) {
       const failed = classifyFailure(error);
       this.deps.logger.warn(
@@ -139,7 +149,9 @@ export class ExtractionRouter {
 
     for (const [index, backend] of chain.entries()) {
       try {
-        const media = await backend.resolve(url, providerId, signal);
+        const outcome = await backend.resolve(url, providerId, signal);
+        const media = 'media' in outcome ? outcome.media : outcome;
+        const rawInfoJson = 'rawInfoJson' in outcome ? outcome.rawInfoJson : undefined;
         if (index > 0) {
           logger.info(
             {
@@ -160,6 +172,8 @@ export class ExtractionRouter {
             fallbackUsed: true,
             attempts: index + 1,
             ...(firstFailure ? { firstFailure } : {}),
+            ...(rawInfoJson ? { rawInfoJson } : {}),
+            resolvedAt: Date.now(),
           };
         }
         return {
@@ -169,6 +183,8 @@ export class ExtractionRouter {
           remote: backend.kind === 'remote',
           fallbackUsed: false,
           attempts: 1,
+          ...(rawInfoJson ? { rawInfoJson } : {}),
+          resolvedAt: Date.now(),
         };
       } catch (error) {
         const failure = classifyFailure(error);
@@ -189,6 +205,8 @@ export class ExtractionRouter {
               fallbackUsed: true,
               attempts: index + 2,
               ...(firstFailure ? { firstFailure } : {}),
+              ...(signedIn.rawInfoJson ? { rawInfoJson: signedIn.rawInfoJson } : {}),
+              resolvedAt: Date.now(),
             };
           }
           const salvaged = await this.lastResort(url, providerId, failure, signal);
@@ -199,18 +217,20 @@ export class ExtractionRouter {
                 backend: 'degraded',
                 firstFailure,
                 fallbackUsed: true,
-                items: salvaged.items.length,
+                items: salvaged.media.items.length,
               },
               'every backend refused; returning a lesser public representation',
             );
             return {
-              media: salvaged,
+              media: salvaged.media,
               backend: 'degraded',
               networkClass: backend.networkClass,
               remote: false,
               fallbackUsed: true,
               attempts: index + 2,
               ...(firstFailure ? { firstFailure } : {}),
+              ...(salvaged.rawInfoJson ? { rawInfoJson: salvaged.rawInfoJson } : {}),
+              resolvedAt: Date.now(),
             };
           }
 

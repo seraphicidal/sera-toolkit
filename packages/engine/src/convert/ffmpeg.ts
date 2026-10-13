@@ -146,6 +146,7 @@ export interface ConvertRequest extends FfmpegOptions {
   readonly spec: ConversionSpec;
   readonly durationSeconds?: number;
   readonly maxOutputBytes?: number;
+  readonly threads?: number;
   readonly onProgress?: (percent: number) => void;
 }
 
@@ -200,7 +201,7 @@ function buildArgs(request: ConvertRequest, source: ProbeResult): string[] {
     '-i',
     request.input,
     '-threads',
-    '0',
+    String(request.threads ?? 2),
     '-max_muxing_queue_size',
     '1024',
   ];

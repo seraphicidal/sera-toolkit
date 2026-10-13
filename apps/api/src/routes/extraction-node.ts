@@ -143,6 +143,7 @@ interface Dispatched {
   error?: { code: string; message: string; detail?: string };
   readonly controller: AbortController;
   settledAt?: number;
+  readonly listeners: Set<() => void>;
 }
 
 export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: SeraEngine): void {
@@ -352,8 +353,16 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
         }
 
         const taskId = randomUUID().replace(/-/g, '');
-        const entry: Dispatched = { state: 'pending', controller: new AbortController() };
+        const entry: Dispatched = {
+          state: 'pending',
+          controller: new AbortController(),
+          listeners: new Set(),
+        };
         dispatched.set(taskId, entry);
+
+        const notify = () => {
+          for (const listener of entry.listeners) listener();
+        };
 
         const task = parsed.data;
         const options = {
@@ -371,9 +380,11 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
                 : {}),
               ...(progress.bytesTotal !== undefined ? { bytesTotal: progress.bytesTotal } : {}),
             };
+            notify();
           },
           onClaimed: (nodeId: string) => {
             entry.claimedBy = nodeId;
+            notify();
           },
           signal: entry.controller.signal,
         };
@@ -391,6 +402,7 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
           () => {
             entry.state = 'done';
             entry.settledAt = Date.now();
+            notify();
           },
           (error: unknown) => {
             const failure = SeraError.from(error);
@@ -401,6 +413,7 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
               ...(failure.detail ? { detail: failure.detail } : {}),
             };
             entry.settledAt = Date.now();
+            notify();
           },
         );
 
@@ -408,14 +421,57 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
       },
     );
 
-    app.get<{ Params: { taskId: string } }>(
+    app.get<{
+      Params: { taskId: string };
+      Querystring: { wait?: string; seenStep?: string; seenPercent?: string };
+    }>(
       '/internal/extraction/dispatch/:taskId',
       { config: { rateLimit: false } },
-      (request, reply) => {
+      async (request, reply) => {
         if (!authenticate(request, reply)) return reply;
 
         const entry = dispatched.get(request.params.taskId);
         if (!entry) throw seraError('NOT_FOUND', { detail: 'node: no such dispatch' });
+
+        const waitParam = Number.parseInt(request.query.wait ?? '0', 10);
+        const waitMs =
+          Number.isFinite(waitParam) && waitParam > 0 ? Math.min(20, waitParam) * 1000 : 0;
+
+        if (waitMs > 0 && entry.state === 'pending') {
+          const seenStep = request.query.seenStep;
+          const seenPercent =
+            request.query.seenPercent !== undefined
+              ? Number.parseFloat(request.query.seenPercent)
+              : undefined;
+
+          const isUnchanged = () =>
+            (seenStep === undefined && seenPercent === undefined && entry.progress === undefined) ||
+            (entry.progress !== undefined &&
+              (seenStep === undefined || entry.progress.step === seenStep) &&
+              (seenPercent === undefined || entry.progress.percent === seenPercent));
+
+          if (isUnchanged()) {
+            await new Promise<void>((resolve) => {
+              const listener = () => {
+                if (!isUnchanged() || entry.state !== 'pending') {
+                  cleanup();
+                  resolve();
+                }
+              };
+              const cleanup = () => {
+                clearTimeout(timer);
+                entry.listeners.delete(listener);
+                request.signal.removeEventListener('abort', listener);
+              };
+              const timer = setTimeout(() => {
+                cleanup();
+                resolve();
+              }, waitMs);
+              entry.listeners.add(listener);
+              request.signal.addEventListener('abort', listener);
+            });
+          }
+        }
 
         return reply.send({
           state: entry.state,
@@ -435,6 +491,9 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
         if (!authenticate(request, reply)) return reply;
         const entry = dispatched.get(request.params.taskId);
         entry?.controller.abort();
+        if (entry) {
+          for (const listener of entry.listeners) listener();
+        }
         return reply.send({ cancelled: entry !== undefined });
       },
     );
