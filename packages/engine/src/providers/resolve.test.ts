@@ -401,6 +401,59 @@ describe('X GIF post', () => {
     );
     expect(media.items[0]!.plans.some((p) => p.kind === 'gif')).toBe(false);
   });
+
+  it('expands a t.co link pointing to an X status', async () => {
+    let probedUrl: string | undefined;
+    const context: ProviderContext = {
+      ...contextFor(gifPost),
+      probe: (url) => {
+        probedUrl = url.toString();
+        return Promise.resolve(gifPost);
+      },
+      open: () =>
+        Promise.resolve({
+          status: 301,
+          headers: { location: 'https://twitter.com/jack/status/20' },
+          url: 'https://t.co/status123',
+          body: { destroy: () => undefined },
+        } as unknown as Awaited<ReturnType<NonNullable<ProviderContext['open']>>>),
+    };
+    const media = await new TwitterProvider().resolve(new URL('https://t.co/status123'), context);
+    expect(media.items.length).toBeGreaterThan(0);
+    expect(probedUrl).toBe('https://x.com/jack/status/20');
+  });
+
+  it('rejects a t.co link pointing to a non-status X URL', async () => {
+    const context: ProviderContext = {
+      ...contextFor(gifPost),
+      open: () =>
+        Promise.resolve({
+          status: 301,
+          headers: { location: 'https://twitter.com/explore' },
+          url: 'https://t.co/explore123',
+          body: { destroy: () => undefined },
+        } as unknown as Awaited<ReturnType<NonNullable<ProviderContext['open']>>>),
+    };
+    await expect(
+      new TwitterProvider().resolve(new URL('https://t.co/explore123'), context),
+    ).rejects.toMatchObject({ code: 'UNSUPPORTED_SOURCE' });
+  });
+
+  it('rejects a t.co link pointing to an off-site URL', async () => {
+    const context: ProviderContext = {
+      ...contextFor(gifPost),
+      open: () =>
+        Promise.resolve({
+          status: 301,
+          headers: { location: 'https://example.com/article' },
+          url: 'https://t.co/offsite123',
+          body: { destroy: () => undefined },
+        } as unknown as Awaited<ReturnType<NonNullable<ProviderContext['open']>>>),
+    };
+    await expect(
+      new TwitterProvider().resolve(new URL('https://t.co/offsite123'), context),
+    ).rejects.toMatchObject({ code: 'UNSUPPORTED_SOURCE' });
+  });
 });
 
 describe('SoundCloud track', () => {

@@ -228,6 +228,67 @@ describe('video download', () => {
     expect(probed.width).toBe(640);
   });
 
+  it('supports HTTP Range, HEAD, and conditional requests', async () => {
+    const info = await resolveUrl(origin.url('/clip.mp4'));
+    const option = pick(info, 'video', 'Original');
+    const job = await runJob({ infoId: info.id, optionIds: [option.id] });
+    const downloadPath = job.result!.downloadPath;
+    const totalSize = job.result!.sizeBytes;
+
+    const headRes = await app.inject({ method: 'HEAD', url: downloadPath });
+    expect(headRes.statusCode).toBe(200);
+    expect(headRes.headers['accept-ranges']).toBe('bytes');
+    expect(headRes.headers['content-length']).toBe(String(totalSize));
+    expect(headRes.body).toBe('');
+
+    const fullRes = await app.inject({ method: 'GET', url: downloadPath });
+    expect(fullRes.statusCode).toBe(200);
+    expect(fullRes.headers['accept-ranges']).toBe('bytes');
+    expect(fullRes.rawPayload.length).toBe(totalSize);
+
+    const rangeRes = await app.inject({
+      method: 'GET',
+      url: downloadPath,
+      headers: { range: 'bytes=0-99' },
+    });
+    expect(rangeRes.statusCode).toBe(206);
+    expect(rangeRes.headers['content-range']).toBe(`bytes 0-99/${totalSize}`);
+    expect(rangeRes.headers['content-length']).toBe('100');
+    expect(rangeRes.rawPayload.length).toBe(100);
+    expect(rangeRes.rawPayload).toEqual(fullRes.rawPayload.subarray(0, 100));
+
+    const openRangeRes = await app.inject({
+      method: 'GET',
+      url: downloadPath,
+      headers: { range: 'bytes=100-' },
+    });
+    expect(openRangeRes.statusCode).toBe(206);
+    expect(openRangeRes.headers['content-range']).toBe(`bytes 100-${totalSize - 1}/${totalSize}`);
+    expect(openRangeRes.rawPayload.length).toBe(totalSize - 100);
+    expect(openRangeRes.rawPayload).toEqual(fullRes.rawPayload.subarray(100));
+
+    const suffixRes = await app.inject({
+      method: 'GET',
+      url: downloadPath,
+      headers: { range: 'bytes=-50' },
+    });
+    expect(suffixRes.statusCode).toBe(206);
+    expect(suffixRes.headers['content-range']).toBe(
+      `bytes ${totalSize - 50}-${totalSize - 1}/${totalSize}`,
+    );
+    expect(suffixRes.rawPayload.length).toBe(50);
+    expect(suffixRes.rawPayload).toEqual(fullRes.rawPayload.subarray(totalSize - 50));
+
+    const badRangeRes = await app.inject({
+      method: 'GET',
+      url: downloadPath,
+      headers: { range: `bytes=${totalSize + 50}-${totalSize + 100}` },
+    });
+    expect(badRangeRes.statusCode).toBe(416);
+    expect(badRangeRes.headers['content-range']).toBe(`bytes */${totalSize}`);
+    expect(badRangeRes.headers['accept-ranges']).toBe('bytes');
+  });
+
   it('names the file from the metadata', async () => {
     const info = await resolveUrl(origin.url('/clip.mp4'));
     const job = await runJob({ infoId: info.id, optionIds: [pick(info, 'video').id] });

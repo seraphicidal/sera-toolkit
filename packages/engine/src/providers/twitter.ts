@@ -2,6 +2,8 @@ import type { ContainerFormat, ProviderCapabilities } from '@sera/contracts/type
 import { seraError } from '../errors.js';
 import { ensureRecommendations } from '../normalize/plans.js';
 import { formatBytes, nonEmpty, qualityLabel, truncate } from '../util/format.js';
+import { discard, header } from '../security/http.js';
+import { hostMatchesAny } from '../security/url.js';
 import type { DownloadPlan, ProviderContext, ResolvedItem, ResolvedMedia } from './types.js';
 import { YtdlpProvider } from './ytdlp-base.js';
 import { declare } from './capabilities.js';
@@ -27,11 +29,67 @@ export class TwitterProvider extends YtdlpProvider {
   });
 
   override normalize(url: URL): URL {
+    if (url.hostname.toLowerCase() === 't.co') return url;
     const out = new URL(url.toString());
     out.hostname = 'x.com';
     out.protocol = 'https:';
     out.pathname = out.pathname.replace(/\/(photo|video)\/\d+$/, '');
     return out;
+  }
+
+  override async resolve(url: URL, context: ProviderContext): Promise<ResolvedMedia> {
+    const target =
+      url.hostname.toLowerCase() === 't.co' ? await this.expandShortLink(url, context) : url;
+    return super.resolve(target, context);
+  }
+
+  private async expandShortLink(url: URL, context: ProviderContext): Promise<URL> {
+    if (!context.open) {
+      throw seraError('UNSUPPORTED_SOURCE', { detail: 't.co: no open helper available' });
+    }
+    const response = await context.open(url, { method: 'GET', followRedirects: false });
+    discard(response.body);
+    if (response.status < 300 || response.status >= 400) {
+      throw seraError('UNSUPPORTED_SOURCE', {
+        message: 'That short link did not redirect.',
+        detail: `t.co: returned HTTP ${response.status}`,
+      });
+    }
+    const location = header(response.headers, 'location');
+    if (!location) {
+      throw seraError('UNSUPPORTED_SOURCE', {
+        message: 'That short link has no redirect location.',
+        detail: 't.co: missing location header',
+      });
+    }
+    let target: URL;
+    try {
+      target = new URL(location, url);
+    } catch {
+      throw seraError('INVALID_URL', { detail: 't.co: malformed redirect location' });
+    }
+    if (target.protocol !== 'http:' && target.protocol !== 'https:') {
+      throw seraError('BLOCKED_ADDRESS', { detail: `t.co redirect to ${target.protocol}` });
+    }
+    if (hostMatchesAny(target.hostname, context.config.blockedHosts)) {
+      throw seraError('BLOCKED_ADDRESS', { detail: 't.co redirect to blocked host' });
+    }
+    const host = target.hostname.toLowerCase();
+    const isTwitterHost = [
+      'x.com',
+      'twitter.com',
+      'mobile.twitter.com',
+      'vxtwitter.com',
+      'fxtwitter.com',
+    ].some((h) => host === h || host.endsWith(`.${h}`));
+    const isStatus = /^\/[^/]+\/status\/\d+/i.test(target.pathname);
+    if (!isTwitterHost || !isStatus) {
+      throw seraError('UNSUPPORTED_SOURCE', {
+        message: 'That short link does not point to an X post.',
+        detail: `t.co: target ${target.hostname}${target.pathname} is not an X status`,
+      });
+    }
+    return this.normalize(target);
   }
 
   protected override treatsSilentShortVideoAsGif(): boolean {

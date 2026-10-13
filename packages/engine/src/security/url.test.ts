@@ -112,6 +112,15 @@ describe('normalizeUrl', () => {
     expect(a.toString()).toBe(b.toString());
   });
 
+  it('preserves signed parameters on non-social domains while stripping universal trackers', () => {
+    const normalized = normalizeUrl(
+      new URL('https://cdn.example.com/video.mp4?s=signature&t=1700000000&utm_source=newsletter'),
+    );
+    expect(normalized.searchParams.get('s')).toBe('signature');
+    expect(normalized.searchParams.get('t')).toBe('1700000000');
+    expect(normalized.searchParams.get('utm_source')).toBeNull();
+  });
+
   it('sorts the remaining query so ordering is not significant', () => {
     const a = normalizeUrl(new URL('https://e.com/x?b=2&a=1'));
     const b = normalizeUrl(new URL('https://e.com/x?a=1&b=2'));

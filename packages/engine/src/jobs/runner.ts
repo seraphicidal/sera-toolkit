@@ -140,7 +140,13 @@ export class JobRunner {
             report({
               state: 'downloading',
               step: progress.step,
-              progress: { percent: Math.min(99, progress.percent) },
+              progress: {
+                percent: Math.min(99, progress.percent),
+                ...(progress.bytesDownloaded !== undefined
+                  ? { bytesDownloaded: progress.bytesDownloaded }
+                  : {}),
+                ...(progress.bytesTotal !== undefined ? { bytesTotal: progress.bytesTotal } : {}),
+              },
             }),
           ...(signal ? { signal } : {}),
         },
@@ -1086,7 +1092,7 @@ async function findSingleFile(directory: string): Promise<string> {
   return join(directory, sized[0]!.name);
 }
 
-export { SeraError };
+export { lowerQualityAlternatives, SeraError };
 
 const FORMAT_FALLBACK_ANSWERS = new Set([
   'FORMAT_UNAVAILABLE',
@@ -1108,7 +1114,8 @@ function lowerQualityAlternatives(
         planKey(plan) !== planKey(chosen) &&
         (plan.height ?? 0) < ceiling,
     )
-    .sort((a, b) => (b.height ?? 0) - (a.height ?? 0));
+    .sort((a, b) => (b.height ?? 0) - (a.height ?? 0))
+    .slice(0, 2);
 }
 
 async function headOf(path: string): Promise<Buffer> {

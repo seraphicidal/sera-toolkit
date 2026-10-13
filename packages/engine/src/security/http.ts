@@ -85,6 +85,7 @@ export interface SafeFetchOptions {
   readonly timeoutMs?: number;
   readonly maxBytes?: number;
   readonly maxRedirects?: number;
+  readonly followRedirects?: boolean;
   readonly allowUrl?: (url: URL) => boolean;
   readonly headers?: Readonly<Record<string, string>>;
   readonly keepCookies?: boolean;
@@ -106,8 +107,8 @@ export interface OpenResponse {
 }
 
 export function discard(body: Readable): void {
-  body.on('error', () => undefined);
-  body.destroy();
+  body?.on?.('error', () => undefined);
+  body?.destroy?.();
 }
 
 const DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
@@ -170,6 +171,14 @@ export async function safeOpen(url: URL, options: SafeFetchOptions): Promise<Ope
     const headers = response.headers;
 
     if (response.statusCode >= 300 && response.statusCode < 400) {
+      if (options.followRedirects === false) {
+        return {
+          status: response.statusCode,
+          headers,
+          url: current.toString(),
+          body: response.body,
+        };
+      }
       const location = header(headers, 'location');
       discard(response.body);
       if (!location) {

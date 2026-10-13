@@ -17,7 +17,7 @@ function hasForbiddenUrlChar(value: string): boolean {
   return false;
 }
 
-const TRACKING_PARAMS = [
+const UNIVERSAL_TRACKING_PARAMS = [
   /^utm_/i,
   /^fbclid$/i,
   /^gclid$/i,
@@ -26,10 +26,15 @@ const TRACKING_PARAMS = [
   /^mc_[ce]id$/i,
   /^igshid$/i,
   /^igsh$/i,
-  /^si$/i,
-  /^feature$/i,
+  /^__twitter_impression$/i,
+  /^spm_id_from$/i,
   /^ref_src$/i,
   /^ref_url$/i,
+];
+
+const SOCIAL_TRACKING_PARAMS = [
+  /^si$/i,
+  /^feature$/i,
   /^s$/i,
   /^t$/i,
   /^_r$/i,
@@ -38,8 +43,19 @@ const TRACKING_PARAMS = [
   /^is_from_webapp$/i,
   /^sender_device$/i,
   /^web_id$/i,
-  /^__twitter_impression$/i,
-  /^spm_id_from$/i,
+];
+
+const KNOWN_SOCIAL_DOMAINS = [
+  'x.com',
+  'twitter.com',
+  't.co',
+  'vxtwitter.com',
+  'fxtwitter.com',
+  'youtube.com',
+  'youtu.be',
+  'tiktok.com',
+  'instagram.com',
+  'reddit.com',
 ];
 
 const PRESERVE_PARAMS = new Set(['v', 'list', 'index', 'id', 'p', 'story_fbid', 'set']);
@@ -109,10 +125,13 @@ export function normalizeUrl(url: URL): URL {
   out.hash = '';
   out.hostname = out.hostname.toLowerCase();
 
-  const params = [...out.searchParams.entries()].filter(
-    ([key]) =>
-      PRESERVE_PARAMS.has(key.toLowerCase()) || !TRACKING_PARAMS.some((re) => re.test(key)),
-  );
+  const isSocial = hostMatchesAny(out.hostname, KNOWN_SOCIAL_DOMAINS);
+  const params = [...out.searchParams.entries()].filter(([key]) => {
+    if (PRESERVE_PARAMS.has(key.toLowerCase())) return true;
+    if (UNIVERSAL_TRACKING_PARAMS.some((re) => re.test(key))) return false;
+    if (isSocial && SOCIAL_TRACKING_PARAMS.some((re) => re.test(key))) return false;
+    return true;
+  });
   out.search = '';
   for (const [key, value] of params.sort(([a], [b]) => a.localeCompare(b))) {
     out.searchParams.append(key, value);

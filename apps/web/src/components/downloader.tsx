@@ -343,17 +343,20 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
         else if (phase === 'ready' || phase === 'done' || phase === 'analyzing') reset();
         return;
       }
-      if (
-        (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) ||
-        (event.key === 'Enter' &&
-          !(
-            event.target instanceof HTMLElement &&
-            event.target.matches('input, select, textarea, button, [contenteditable="true"]')
-          ))
-      ) {
-        if (phase === 'ready' && selection?.optionIds.length && trim.state !== 'invalid') {
-          event.preventDefault();
-          void start();
+      if (event.key === 'Enter') {
+        const isModifier = event.metaKey || event.ctrlKey;
+        const isInteractive =
+          event.target instanceof Element &&
+          Boolean(
+            event.target.closest(
+              'a, summary, button, input, select, textarea, [role="button"], [contenteditable="true"]',
+            ),
+          );
+        if (isModifier || !isInteractive) {
+          if (phase === 'ready' && selection?.optionIds.length && trim.state !== 'invalid') {
+            event.preventDefault();
+            void start();
+          }
         }
       }
     };

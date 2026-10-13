@@ -233,14 +233,19 @@ export class JobService {
     const current = await backend.get(record.id);
     if (!current || isTerminalJobState(current.state)) return;
 
-    const controller = new AbortController();
-    this.inFlight.set(record.id, controller);
+    const cancelController = new AbortController();
+    const timeoutController = new AbortController();
+    const combinedSignal = AbortSignal.any([cancelController.signal, timeoutController.signal]);
+    this.inFlight.set(record.id, cancelController);
 
     const unwatch = backend.subscribe(record.id, (updated) => {
-      if (updated.state === 'cancelled') controller.abort();
+      if (updated.state === 'cancelled') cancelController.abort();
     });
 
-    const timeout = setTimeout(() => controller.abort(), this.deps.config.jobTimeoutSeconds * 1000);
+    const timeout = setTimeout(
+      () => timeoutController.abort(),
+      this.deps.config.jobTimeoutSeconds * 1000,
+    );
     timeout.unref();
 
     let lastPatch = 0;
@@ -270,7 +275,7 @@ export class JobService {
             inFlightFlush = (inFlightFlush ?? Promise.resolve()).then(() => flush());
           }
         },
-        controller.signal,
+        combinedSignal,
       );
 
       pending = undefined;
@@ -289,8 +294,16 @@ export class JobService {
     } catch (error) {
       pending = undefined;
       await inFlightFlush;
-      const seraErr = SeraError.from(error);
-      const cancelled = seraErr.code === 'CANCELLED' || controller.signal.aborted;
+      const isTimeout = timeoutController.signal.aborted;
+      const rawErr = SeraError.from(error);
+      const seraErr = isTimeout
+        ? seraError('TIMEOUT', {
+            message: 'That job took too long to complete.',
+            detail: `job timed out after ${this.deps.config.jobTimeoutSeconds}s`,
+          })
+        : rawErr;
+      const cancelled =
+        !isTimeout && (rawErr.code === 'CANCELLED' || cancelController.signal.aborted);
       if (!cancelled) this.count(record, { ok: false, code: seraErr.code });
 
       await backend.patch(record.id, {

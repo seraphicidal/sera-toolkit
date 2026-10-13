@@ -1,5 +1,5 @@
 import { createReadStream } from 'node:fs';
-import { Readable } from 'node:stream';
+import { Readable, Transform } from 'node:stream';
 import {
   hostMatchesAny,
   type JobRunner,
@@ -248,21 +248,44 @@ export class ExtractionNode {
     this.taskAbort = abort;
     let currentPercent = 0;
     let currentStep = 'Working';
+    let currentBytesDownloaded: number | undefined;
+    let currentBytesTotal: number | undefined;
     let lastSentAt = 0;
     const heartbeat = setInterval(() => {
       lastSentAt = Date.now();
-      void this.progress(task.id, currentPercent, currentStep, abort);
+      void this.progress(
+        task.id,
+        currentPercent,
+        currentStep,
+        abort,
+        currentBytesDownloaded,
+        currentBytesTotal,
+      );
     }, PROGRESS_INTERVAL_MS);
     heartbeat.unref();
 
-    const onProgress = (percent: number, step: string): void => {
+    const onProgress = (
+      percent: number,
+      step: string,
+      bytesDownloaded?: number,
+      bytesTotal?: number,
+    ): void => {
       const stepChanged = step !== currentStep;
       currentPercent = percent;
       currentStep = step;
+      currentBytesDownloaded = bytesDownloaded;
+      currentBytesTotal = bytesTotal;
       const now = Date.now();
       if (stepChanged || now - lastSentAt >= PROGRESS_THROTTLE_MS) {
         lastSentAt = now;
-        void this.progress(task.id, currentPercent, currentStep, abort);
+        void this.progress(
+          task.id,
+          currentPercent,
+          currentStep,
+          abort,
+          bytesDownloaded,
+          bytesTotal,
+        );
       }
     };
 
@@ -316,7 +339,12 @@ export class ExtractionNode {
     task: RemoteTask,
     url: URL,
     abort: AbortController,
-    onProgress: (percent: number, step: string) => void,
+    onProgress: (
+      percent: number,
+      step: string,
+      bytesDownloaded?: number,
+      bytesTotal?: number,
+    ) => void,
   ): Promise<void> {
     const jobId = newJobId();
     const media: ResolvedMedia = await this.resolver.resolveCanonical(
@@ -345,7 +373,12 @@ export class ExtractionNode {
       await this.runner.run(
         spec,
         (update) => {
-          onProgress(update.progress.percent, update.step);
+          onProgress(
+            update.progress.percent,
+            update.step,
+            update.progress.bytesDownloaded,
+            update.progress.bytesTotal,
+          );
         },
         abort.signal,
       );
@@ -353,10 +386,20 @@ export class ExtractionNode {
       const manifest = await this.workspaces.readManifest(jobId);
       if (!manifest) throw new Error('the job produced no manifest');
 
+      const totalBytes = manifest.files.reduce((sum, file) => sum + file.sizeBytes, 0);
+      let uploadedBytes = 0;
+
+      onProgress(0, 'Uploading', 0, totalBytes);
+
       for (const file of manifest.files) {
         if (abort.signal.aborted) throw seraError('CANCELLED');
         const path = await this.workspaces.resolveFile(jobId, file.name);
-        await this.upload(task.id, file.name, file.mimeType, path, abort.signal);
+        await this.upload(task.id, file.name, file.mimeType, path, abort, (chunkBytes) => {
+          uploadedBytes += chunkBytes;
+          const percent =
+            totalBytes > 0 ? Math.min(99, Math.round((uploadedBytes / totalBytes) * 100)) : 99;
+          onProgress(percent, 'Uploading', uploadedBytes, totalBytes);
+        });
       }
       await this.report(`/internal/extraction/${task.id}/complete`, {});
     } finally {
@@ -369,12 +412,26 @@ export class ExtractionNode {
     name: string,
     mimeType: string,
     path: string,
-    signal: AbortSignal,
+    abort: AbortController,
+    onProgress?: (chunkLength: number) => void,
   ): Promise<void> {
     const query = new URLSearchParams({ name, mime: mimeType });
     const stream = createReadStream(path);
+    let trackingStream: Transform | undefined;
+    let bodyStream: ReadableStream<Uint8Array>;
+    if (onProgress) {
+      trackingStream = new Transform({
+        transform(chunk: Buffer, _encoding, callback) {
+          onProgress(chunk.length);
+          callback(null, chunk);
+        },
+      });
+      bodyStream = Readable.toWeb(stream.pipe(trackingStream)) as ReadableStream<Uint8Array>;
+    } else {
+      bodyStream = Readable.toWeb(stream) as ReadableStream<Uint8Array>;
+    }
     const timeoutSignal = AbortSignal.timeout(UPLOAD_TIMEOUT_MS);
-    const combinedSignal = AbortSignal.any([signal, timeoutSignal]);
+    const combinedSignal = AbortSignal.any([abort.signal, timeoutSignal]);
     try {
       const response = await fetch(
         `${this.apiUrl}/internal/extraction/${taskId}/file?${query.toString()}`,
@@ -384,7 +441,7 @@ export class ExtractionNode {
             authorization: `Bearer ${this.token}`,
             'content-type': 'application/octet-stream',
           },
-          body: Readable.toWeb(stream),
+          body: bodyStream,
           duplex: 'half',
           signal: combinedSignal,
         },
@@ -399,6 +456,7 @@ export class ExtractionNode {
       }
     } finally {
       stream.destroy();
+      trackingStream?.destroy();
     }
   }
 
@@ -407,11 +465,15 @@ export class ExtractionNode {
     percent: number,
     step: string,
     abort: AbortController,
+    bytesDownloaded?: number,
+    bytesTotal?: number,
   ): Promise<void> {
     try {
       const response = await this.post(`/internal/extraction/${taskId}/progress`, {
         percent,
         step,
+        ...(bytesDownloaded !== undefined ? { bytesDownloaded } : {}),
+        ...(bytesTotal !== undefined ? { bytesTotal } : {}),
       });
       if (!response.ok) return;
       const body = (await response.json()) as { cancelled?: boolean };

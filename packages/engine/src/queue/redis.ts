@@ -87,31 +87,57 @@ export class RedisJobBackend implements JobBackend {
   }
 
   async patch(id: string, patch: JobPatch): Promise<JobRecord | undefined> {
-    const current = await this.get(id);
-    if (!current) return undefined;
+    const key = RECORD_PREFIX + id;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await this.connection.watch(key);
+      const raw = await this.connection.get(key);
+      if (!raw) {
+        await this.connection.unwatch();
+        return undefined;
+      }
 
-    if (isTerminalJobState(current.state)) return current;
+      let current: JobRecord;
+      try {
+        current = JSON.parse(raw) as JobRecord;
+      } catch {
+        await this.connection.unwatch();
+        return undefined;
+      }
 
-    const next: JobRecord = {
-      ...current,
-      ...patch,
-      ...(patch.progress
-        ? {
-            progress: {
-              ...patch.progress,
-              percent: Math.max(current.progress.percent, patch.progress.percent),
-            },
-          }
-        : {}),
-      updatedAt: new Date().toISOString(),
-    };
+      if (isTerminalJobState(current.state)) {
+        await this.connection.unwatch();
+        return current;
+      }
 
-    await this.write(next);
-    await this.connection.publish(UPDATE_CHANNEL, JSON.stringify(next));
-    if (!isActive(next.state)) {
-      await this.connection.srem(CLIENT_PREFIX + next.clientKey, next.id);
+      const next: JobRecord = {
+        ...current,
+        ...patch,
+        ...(patch.progress
+          ? {
+              progress: {
+                ...patch.progress,
+                percent: Math.max(current.progress.percent, patch.progress.percent),
+              },
+            }
+          : {}),
+        updatedAt: new Date().toISOString(),
+      };
+
+      const serialized = JSON.stringify(next);
+      const multi = this.connection.multi();
+      multi.set(key, serialized, 'EX', this.recordTtlSeconds);
+      multi.publish(UPDATE_CHANNEL, serialized);
+      if (!isActive(next.state)) {
+        multi.srem(CLIENT_PREFIX + next.clientKey, next.id);
+      }
+
+      const results = await multi.exec();
+      if (results === null) {
+        continue;
+      }
+      return next;
     }
-    return next;
+    return this.get(id);
   }
 
   ready(): Promise<void> {
