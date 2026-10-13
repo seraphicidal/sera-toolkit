@@ -77,6 +77,7 @@ export {
   type ResponseHeaders,
 } from './security/http.js';
 export { AbuseGuard, type AbuseGuardOptions } from './security/abuse.js';
+export { EgressGuard, confineToHttp, type EgressGuardOptions } from './security/egress.js';
 export { isPublicAddress, isIpLiteral } from './security/ip.js';
 export { parseRobots, isAllowed } from './security/robots.js';
 export {

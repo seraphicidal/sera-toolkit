@@ -41,6 +41,8 @@ export interface ProviderContext {
       readonly extractorArgs?: readonly string[];
       readonly timeoutMs?: number;
       readonly proxy?: string;
+      readonly useExtractors?: string;
+      readonly maxEntries?: number;
     },
   ) => Promise<YtdlpInfo>;
   readonly fetchText: (
@@ -64,6 +66,8 @@ export type FetchPlan =
       readonly audio?: { readonly format: string; readonly quality?: string };
       readonly remux?: ContainerFormat;
       readonly extractorArgs?: readonly string[];
+      readonly target?: string;
+      readonly useExtractors?: string;
     }
   | {
       readonly via: 'direct';

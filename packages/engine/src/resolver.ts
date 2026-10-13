@@ -37,6 +37,7 @@ import type {
   ResolvedMedia,
 } from './providers/types.js';
 import { planKey } from './providers/types.js';
+import { EgressGuard } from './security/egress.js';
 import { createSafeDispatcher, header, safeFetch } from './security/http.js';
 import { hostMatchesAny, normalizeUrl, parseUserUrl } from './security/url.js';
 import { TtlCache } from './util/cache.js';
@@ -86,14 +87,18 @@ export interface ResolverDependencies {
   readonly probe?: (
     url: string,
     options: {
+      providerId?: string;
       playlist?: boolean;
       flatPlaylist?: boolean;
       signal?: AbortSignal;
       extractorArgs?: readonly string[];
       timeoutMs?: number;
       proxy?: string;
+      useExtractors?: string;
+      maxEntries?: number;
     },
   ) => Promise<YtdlpInfo>;
+  readonly egress?: EgressGuard;
 }
 
 export class MediaResolver {
@@ -102,6 +107,7 @@ export class MediaResolver {
   readonly registry: ProviderRegistry;
   readonly dispatcher: Dispatcher;
   readonly importHosts: MediaHostPolicy;
+  readonly egress: EgressGuard;
 
   private readonly probeImpl: NonNullable<ResolverDependencies['probe']>;
   private readonly cache = new TtlCache<ExtractionOutcome>(200, 5 * 60_000);
@@ -113,6 +119,8 @@ export class MediaResolver {
       deps.logger ??
       createLogger({ level: deps.config.logLevel, pretty: !deps.config.isProduction });
     this.registry = deps.registry ?? new ProviderRegistry(undefined, deps.config);
+    this.egress =
+      deps.egress ?? new EgressGuard({ allowPrivateAddresses: deps.config.allowPrivateAddresses });
 
     this.router = new ExtractionRouter({
       primary: {
@@ -139,17 +147,31 @@ export class MediaResolver {
 
     this.probeImpl =
       deps.probe ??
-      ((url, options) =>
-        dumpInfo(url, {
+      (async (url, options = {}) => {
+        const upstream = options.proxy ?? this.config.proxyFor(options.providerId ?? '');
+        const proxy = await this.egressProxy(url, upstream);
+        return dumpInfo(url, {
           binary: this.config.ytdlpPath,
           ffmpegPath: this.config.ffmpegPath,
           timeoutMs: options.timeoutMs ?? this.config.resolveTimeoutSeconds * 1000,
           ...(options.playlist !== undefined ? { playlist: options.playlist } : {}),
           ...(options.flatPlaylist !== undefined ? { flatPlaylist: options.flatPlaylist } : {}),
           ...(options.extractorArgs?.length ? { extractorArgs: options.extractorArgs } : {}),
-          ...(options.proxy ? { proxy: options.proxy } : {}),
+          ...(options.useExtractors ? { useExtractors: options.useExtractors } : {}),
+          ...(options.maxEntries !== undefined ? { maxEntries: options.maxEntries } : {}),
+          ...(proxy ? { proxy } : {}),
           ...(options.signal ? { signal: options.signal } : {}),
-        }));
+        });
+      });
+  }
+
+  async egressProxy(url: string, upstreamProxy?: string): Promise<string> {
+    await this.egress.assertPublicDestination(url);
+    return this.egress.proxyUrl(upstreamProxy);
+  }
+
+  async close(): Promise<void> {
+    await this.egress.close();
   }
 
   private cachedExtractorVersion: string | undefined;

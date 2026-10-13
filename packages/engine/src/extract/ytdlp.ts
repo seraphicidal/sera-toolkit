@@ -1,5 +1,6 @@
 import { readdir } from 'node:fs/promises';
-import { seraError, type SeraError } from '../errors.js';
+import { seraError, SeraError } from '../errors.js';
+import { confineToHttp } from '../security/egress.js';
 import { run } from '../util/spawn.js';
 import type { YtdlpInfo } from './ytdlp-types.js';
 
@@ -11,6 +12,7 @@ export interface YtdlpOptions {
   readonly timeoutMs: number;
   readonly signal?: AbortSignal;
   readonly extractorArgs?: readonly string[];
+  readonly useExtractors?: string;
 }
 
 export interface DownloadRequest extends YtdlpOptions {
@@ -75,6 +77,18 @@ const POSTPROCESS_TEMPLATE = [
   '%(progress.postprocessor)s',
 ].join(SEP);
 
+function assertHttpUrl(url: string): void {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      throw seraError('BLOCKED_ADDRESS', { detail: `egress: protocol ${parsed.protocol}` });
+    }
+  } catch (error) {
+    if (error instanceof SeraError) throw error;
+    throw seraError('INVALID_URL', { detail: `invalid url: ${url}`, cause: error });
+  }
+}
+
 function baseArgs(options: YtdlpOptions): string[] {
   const args = [
     '--ignore-config',
@@ -96,20 +110,31 @@ function baseArgs(options: YtdlpOptions): string[] {
   for (const extractorArg of options.extractorArgs ?? []) {
     args.push('--extractor-args', extractorArg);
   }
+  const useExtractors = options.useExtractors ?? 'default,-generic';
+  args.push('--use-extractors', useExtractors);
   return args;
 }
 
 export async function dumpInfo(
   url: string,
-  options: YtdlpOptions & { readonly playlist?: boolean; readonly flatPlaylist?: boolean },
+  options: YtdlpOptions & {
+    readonly playlist?: boolean;
+    readonly flatPlaylist?: boolean;
+    readonly maxEntries?: number;
+  },
 ): Promise<YtdlpInfo> {
+  assertHttpUrl(url);
   const args = baseArgs(options);
+  let playlistEnd = options.playlist ? 100 : undefined;
+  if (options.maxEntries !== undefined) {
+    playlistEnd = Math.min(playlistEnd ?? options.maxEntries, options.maxEntries);
+  }
   if (options.playlist) {
     const index = args.indexOf('--no-playlist');
     if (index >= 0) args.splice(index, 1);
     args.push('--yes-playlist');
-    args.push('--playlist-end', '100');
   }
+  if (playlistEnd !== undefined) args.push('--playlist-end', String(playlistEnd));
   if (options.flatPlaylist) args.push('--flat-playlist');
 
   args.push('--dump-single-json', '--', url);
@@ -135,6 +160,7 @@ export async function dumpInfo(
 }
 
 export async function download(request: DownloadRequest): Promise<void> {
+  assertHttpUrl(request.url);
   const args = baseArgs(request);
 
   if (request.playlistItem !== undefined) {
@@ -161,7 +187,7 @@ export async function download(request: DownloadRequest): Promise<void> {
     '--output',
     request.outputTemplate,
     '--format',
-    request.format,
+    confineToHttp(request.format),
     '--no-overwrites',
     '--no-post-overwrites',
   );
@@ -254,6 +280,7 @@ export interface SubtitleDownloadRequest extends YtdlpOptions {
 }
 
 export async function downloadSubtitles(request: SubtitleDownloadRequest): Promise<string> {
+  assertHttpUrl(request.url);
   const args = baseArgs(request);
   if (request.playlistItem !== undefined) {
     const index = args.indexOf('--no-playlist');
@@ -374,6 +401,12 @@ export function classifyYtdlpFailure(stderr: string, exitCode: number): SeraErro
       'use --cookies',
       'account is required',
       "you're not signed in",
+      'only available for registered users',
+      'use --username',
+      'provide account credentials',
+      'you need to log in',
+      'please log in',
+      'login is required',
     )
   ) {
     return seraError('LOGIN_REQUIRED', { detail });
@@ -411,6 +444,13 @@ export function classifyYtdlpFailure(stderr: string, exitCode: number): SeraErro
   ) {
     return seraError('UNSUPPORTED_SOURCE', {
       detail: detail ? `no extractable video: ${detail}` : 'no extractable video',
+    });
+  }
+  if (has('primarily used for piracy')) {
+    return seraError('UNSUPPORTED_SOURCE', {
+      message: "This site isn't supported.",
+      hint: 'Try the link on the site that published the video.',
+      detail,
     });
   }
   if (

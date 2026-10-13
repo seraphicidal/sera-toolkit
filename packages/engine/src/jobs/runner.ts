@@ -444,6 +444,11 @@ export class JobRunner {
     const fetchPlan = plan.fetch;
     let sawPostprocessor: string | undefined;
 
+    const target = fetchPlan.target ?? args.resolved.url;
+    const proxy = this.deps.resolver.egressProxy
+      ? await this.deps.resolver.egressProxy(target, config.proxyFor(args.resolved.provider))
+      : config.proxyFor(args.resolved.provider);
+
     const download = (
       sections?: { start: number; end?: number; forceKeyframes: boolean },
       downloadSignal = signal,
@@ -452,14 +457,13 @@ export class JobRunner {
         binary: config.ytdlpPath,
         ffmpegPath: config.ffmpegPath,
         timeoutMs: config.jobTimeoutSeconds * 1000,
-        url: args.resolved.url,
+        url: target,
         format: fetchPlan.selector,
         workdir: scratch,
         outputTemplate: 'media.%(ext)s',
         maxFilesizeBytes: config.maxFilesizeBytes,
-        ...(config.proxyFor(args.resolved.provider)
-          ? { proxy: config.proxyFor(args.resolved.provider) }
-          : {}),
+        ...(proxy ? { proxy } : {}),
+        ...(fetchPlan.useExtractors ? { useExtractors: fetchPlan.useExtractors } : {}),
         ...(fetchPlan.merge ? { mergeContainer: fetchPlan.merge } : {}),
         ...(fetchPlan.remux ? { remuxContainer: fetchPlan.remux } : {}),
         ...(fetchPlan.audio
@@ -653,7 +657,10 @@ export class JobRunner {
     const { config } = this.deps;
     const workdir = join(args.workspace.scratchDir, `subs-${args.index}`);
     await mkdir(workdir, { recursive: true });
-    const proxy = config.proxyFor(args.resolved.provider);
+    const upstreamProxy = config.proxyFor(args.resolved.provider);
+    const proxy = this.deps.resolver.egressProxy
+      ? await this.deps.resolver.egressProxy(args.resolved.url, upstreamProxy)
+      : upstreamProxy;
     return downloadSubtitles({
       binary: config.ytdlpPath,
       ffmpegPath: config.ffmpegPath,

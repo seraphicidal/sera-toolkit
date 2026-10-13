@@ -245,6 +245,7 @@ export class SeraEngine {
     await this.worker?.close().catch(() => undefined);
     await this.backend.close().catch(() => undefined);
     await this.usage.close().catch(() => undefined);
+    await this.resolver.close().catch(() => undefined);
   }
 }
 
