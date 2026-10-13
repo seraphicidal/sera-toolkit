@@ -309,12 +309,23 @@ function parseNumeric(value: string | undefined): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+const versionCache = new Map<string, { version: string; expiresAt: number }>();
+const VERSION_CACHE_TTL_MS = 10 * 60_000;
+
 export async function version(binary: string, timeoutMs = 10_000): Promise<string> {
+  const cached = versionCache.get(binary);
+  if (cached && Date.now() < cached.expiresAt) return cached.version;
   const result = await run(binary, { args: ['--version'], timeoutMs, captureStdout: true });
   if (result.code !== 0) {
     throw seraError('INTERNAL', { detail: `yt-dlp --version exited ${result.code}` });
   }
-  return result.stdout.trim();
+  const resolved = result.stdout.trim();
+  versionCache.set(binary, { version: resolved, expiresAt: Date.now() + VERSION_CACHE_TTL_MS });
+  return resolved;
+}
+
+export function resetVersionCache(): void {
+  versionCache.clear();
 }
 
 export function scrubCredentials(text: string): string {

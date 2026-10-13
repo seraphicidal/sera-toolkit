@@ -28,10 +28,20 @@ if [ -z "$domain" ]; then
 fi
 
 healthy() {
+  local admin_token canary_token
+  admin_token=$(sed -n 's/^SERA_ADMIN_TOKEN=//p' "$DIR/.env" | tail -n 1 | tr -d '"'"'"' ')
+  canary_token=$(sed -n 's/^SERA_CANARY_TOKEN=//p' "$DIR/.env" | tail -n 1 | tr -d '"'"'"' ')
+  local auth_headers=()
+  if [ -n "$admin_token" ]; then
+    auth_headers=(-H "Authorization: Bearer $admin_token")
+  elif [ -n "$canary_token" ]; then
+    auth_headers=(-H "x-sera-canary: $canary_token")
+  fi
+
   local body
-  body=$(curl -fsS --max-time 10 --resolve "$domain:443:127.0.0.1" "https://$domain/health") || return 1
+  body=$(curl -fsS --max-time 10 --resolve "$domain:443:127.0.0.1" ${auth_headers[@]+"${auth_headers[@]}"} "https://$domain/health") || return 1
   echo "$body" | jq -e '[.checks[] | select(.name != "extraction-nodes") | .status == "ok"] | all' >/dev/null || return 1
-  curl -fsS --max-time 10 --resolve "$domain:443:127.0.0.1" -o /dev/null "https://$domain/ready" || return 1
+  curl -fsS --max-time 10 --resolve "$domain:443:127.0.0.1" ${auth_headers[@]+"${auth_headers[@]}"} -o /dev/null "https://$domain/ready" || return 1
   curl -fsS --max-time 10 --resolve "$domain:443:127.0.0.1" -o /dev/null "https://$domain/" || return 1
 }
 
