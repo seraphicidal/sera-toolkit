@@ -47,7 +47,18 @@ interface FfprobeOutput {
 
 export async function probe(path: string, options: FfmpegOptions): Promise<ProbeResult> {
   const result = await run(options.ffprobePath, {
-    args: ['-v', 'error', '-print_format', 'json', '-show_format', '-show_streams', '-i', path],
+    args: [
+      '-v',
+      'error',
+      '-protocol_whitelist',
+      'file,pipe,data',
+      '-print_format',
+      'json',
+      '-show_format',
+      '-show_streams',
+      '-i',
+      path,
+    ],
     timeoutMs: Math.min(options.timeoutMs, 30_000),
     captureStdout: true,
     maxStdoutBytes: 4 * 1024 * 1024,
@@ -184,6 +195,8 @@ function buildArgs(request: ConvertRequest, source: ProbeResult): string[] {
     '-loglevel',
     'error',
     '-y',
+    '-protocol_whitelist',
+    'file,pipe,data',
     '-i',
     request.input,
     '-threads',

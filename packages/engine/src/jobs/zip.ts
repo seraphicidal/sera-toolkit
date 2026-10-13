@@ -1,5 +1,5 @@
 import { createWriteStream } from 'node:fs';
-import { stat } from 'node:fs/promises';
+import { lstat, rm, stat } from 'node:fs/promises';
 import { once } from 'node:events';
 import { ZipFile } from 'yazl';
 import { seraError } from '../errors.js';
@@ -21,10 +21,12 @@ export async function createZip(request: CreateZipRequest): Promise<{ sizeBytes:
   if (!request.entries.length) {
     throw seraError('INTERNAL', { detail: 'createZip called with no entries' });
   }
+  if (request.signal?.aborted) throw seraError('CANCELLED');
 
   const zip = new ZipFile();
   const output = createWriteStream(request.destination);
   const finished = once(output, 'close');
+  finished.catch(() => undefined);
   zip.outputStream.on('error', (err: unknown) => {
     output.destroy(err instanceof Error ? err : new Error(String(err)));
   });
@@ -45,7 +47,7 @@ export async function createZip(request: CreateZipRequest): Promise<{ sizeBytes:
       const name = assertSafeFilename(entry.name);
       const unique = dedupe(name, taken);
 
-      const info = await stat(entry.path).catch(() => undefined);
+      const info = await lstat(entry.path).catch(() => undefined);
       if (!info?.isFile()) {
         throw seraError('INTERNAL', { detail: `missing archive entry: ${name}` });
       }
@@ -63,6 +65,7 @@ export async function createZip(request: CreateZipRequest): Promise<{ sizeBytes:
   } catch (error) {
     output.destroy();
     await finished.catch(() => undefined);
+    await rm(request.destination, { force: true }).catch(() => undefined);
     if (request.signal?.aborted) throw seraError('CANCELLED', { cause: error });
     throw error;
   } finally {

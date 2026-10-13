@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
 import type { SeraEngine } from '@sera/engine';
@@ -11,10 +11,10 @@ declare module 'fastify' {
 }
 
 export function matchesToken(presented: unknown, configured: string): boolean {
-  if (!configured || typeof presented !== 'string') return false;
-  const a = Buffer.from(presented);
-  const b = Buffer.from(configured);
-  return a.length === b.length && timingSafeEqual(a, b);
+  if (!configured || typeof presented !== 'string' || !presented) return false;
+  const a = createHash('sha256').update(presented).digest();
+  const b = createHash('sha256').update(configured).digest();
+  return timingSafeEqual(a, b);
 }
 
 export function isCanaryToken(presented: unknown, configured: string): boolean {
@@ -42,9 +42,13 @@ export function abuseGuardFor(engine: SeraEngine, request: FastifyRequest) {
 function addressOf(request: FastifyRequest, trustProxy: boolean): string {
   if (trustProxy) {
     const forwarded = request.headers['x-forwarded-for'];
-    const first = Array.isArray(forwarded) ? forwarded[0] : forwarded;
-    const candidate = first?.split(',')[0]?.trim();
-    if (candidate) return candidate;
+    const last = Array.isArray(forwarded) ? forwarded.at(-1) : forwarded;
+    const candidate = last
+      ?.split(',')
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .at(-1);
+    if (candidate && candidate.length <= 128) return candidate;
   }
   return request.ip;
 }

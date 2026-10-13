@@ -27,6 +27,8 @@ export async function keyframeAtOrBefore(
     args: [
       '-v',
       'error',
+      '-protocol_whitelist',
+      'file,pipe,data',
       '-select_streams',
       'v:0',
       '-skip_frame',
@@ -111,6 +113,8 @@ export async function trimMedia(request: TrimMediaRequest): Promise<{ reencoded:
     '-hide_banner',
     '-nostdin',
     '-y',
+    '-protocol_whitelist',
+    'file,pipe,data',
     '-ss',
     String(range.start),
     '-i',

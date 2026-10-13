@@ -62,4 +62,11 @@ describe('robots.txt', () => {
     expect(allow('User-agent: *\nDisallow: /', '/')).toBe(false);
     expect(allow('User-agent: *\nDisallow: /', '/anything')).toBe(false);
   });
+
+  it('evaluates pathological wildcard patterns in linear time without backtracking', () => {
+    const robots = `User-agent: *\nDisallow: /${'a*'.repeat(40)}b$`;
+    const started = Date.now();
+    expect(allow(robots, `/${'a'.repeat(120)}c`)).toBe(true);
+    expect(Date.now() - started).toBeLessThan(100);
+  });
 });

@@ -99,11 +99,18 @@ export function registerMediaRoutes(app: FastifyInstance, engine: SeraEngine): v
 
   app.get<{ Params: { token: string } }>('/api/thumb/:token', async (request, reply) => {
     const source = engine.resolver.verifyThumbnailToken(request.params.token);
+    let target: URL;
+    try {
+      target = new URL(source);
+    } catch {
+      throw seraError('NOT_FOUND');
+    }
 
-    const response = await safeFetch(new URL(source), {
+    const response = await safeFetch(target, {
       dispatcher: engine.resolver.dispatcher,
       timeoutMs: 10_000,
       maxBytes: MAX_THUMBNAIL_BYTES,
+      signal: clientAbortSignal(request, reply),
     });
 
     if (response.status >= 400) throw seraError('NOT_FOUND');

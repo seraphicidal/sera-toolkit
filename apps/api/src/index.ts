@@ -19,11 +19,14 @@ async function main(): Promise<void> {
 
   if (engine.config.embeddedWorker) engine.startWorker();
 
+  let shuttingDown = false;
   const shutdown = (signal: string): void => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     engine.logger.info({ signal }, 'shutting down');
+    setTimeout(() => process.exit(0), 5_000).unref();
     void (async () => {
-      await app.close().catch(() => undefined);
-      await engine.close().catch(() => undefined);
+      await Promise.allSettled([app.close(), engine.close()]);
       process.exit(0);
     })();
   };

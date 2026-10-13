@@ -63,6 +63,9 @@ const emptyTally = (): Tally => ({
   bytes: 0,
 });
 
+const isSafeKey = (key: string | undefined): key is string =>
+  Boolean(key && TOKEN.test(key) && !Object.hasOwn(Object.prototype, key));
+
 export function parseUsageDay(
   date: string,
   hash: Readonly<Record<string, string | number>>,
@@ -72,13 +75,13 @@ export function parseUsageDay(
     const value = Number(raw);
     if (!Number.isFinite(value)) continue;
     const [source, kind, outcome, code] = field.split(':');
-    if (!source || !kind) continue;
+    if (!isSafeKey(source) || !kind) continue;
     const entry = (sources[source] ??= emptyTally());
     if (kind === 'bytes') entry.bytes += value;
     else if (kind === 'resolve' || kind === 'download') {
       const outcomes = kind === 'resolve' ? entry.resolves : entry.downloads;
       if (outcome === 'ok') outcomes.ok += value;
-      else if (outcome === 'fail' && code)
+      else if (outcome === 'fail' && isSafeKey(code))
         outcomes.failed[code] = (outcomes.failed[code] ?? 0) + value;
     }
   }

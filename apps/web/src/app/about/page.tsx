@@ -194,6 +194,43 @@ export default async function AboutPage() {
         </p>
       </Section>
 
+      <Section title="Patch notes">
+        <ul className="flex flex-col gap-1.5 text-[0.875rem]">
+          <Limit
+            label="Latest security & bug-fix audit"
+            value="45 files · 696 lines changed (+565 / −131)"
+          />
+          <Limit
+            label="Cumulative audit changes"
+            value="100 file touches · 2,165 lines changed (+1,707 / −458)"
+          />
+        </ul>
+        <ul className="mt-1 list-disc space-y-1.5 pl-5 text-[0.875rem]">
+          <li>
+            Hardened SSRF and network boundaries across IPv6 transition ranges (IPv4-compatible,
+            SIIT, 6to4, Teredo, local NAT64, expanded IPv4-mapped addresses), redirect credentials
+            and non-standard ports, blocked-host checks, and HTTPS-only upstream media URLs.
+          </li>
+          <li>
+            Eliminated cross-purpose signed-token confusion on the thumbnail proxy, enforced
+            canonical base64url HMAC verification and SHA-256 constant-time bearer token checks, and
+            read the rightmost hop of <ExternalNote>X-Forwarded-For</ExternalNote> against spoofing.
+          </li>
+          <li>
+            Replaced regex-based <ExternalNote>robots.txt</ExternalNote> wildcard matching with a
+            linear-time matcher, bounded JSON and carousel recursion depth, restricted{' '}
+            <ExternalNote>FFmpeg</ExternalNote> and <ExternalNote>ffprobe</ExternalNote> protocol
+            whitelists to local files and pipes, and hardened symlink and upload limits on
+            extraction nodes.
+          </li>
+          <li>
+            Resolved state race conditions, duplicate polling loops, mixed-carousel format
+            switching, accessibility semantics, and zero-downtime deployment guards across the web
+            client and Oracle Cloud stack.
+          </li>
+        </ul>
+      </Section>
+
       <p className="border-t border-[var(--color-line)] pt-6">
         <Link
           href="/"

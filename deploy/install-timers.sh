@@ -2,6 +2,13 @@
 set -euo pipefail
 
 DIR="${SERA_DIR:-/opt/sera}"
+case "$DIR" in
+  /*) ;;
+  *) echo "SERA_DIR must be an absolute path" >&2; exit 1 ;;
+esac
+case "$DIR" in
+  *'#'*|*'&'*|*$'\n'*) echo "SERA_DIR contains unsupported characters" >&2; exit 1 ;;
+esac
 cd "$DIR/deploy/systemd"
 
 timers=()

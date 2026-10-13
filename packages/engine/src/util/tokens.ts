@@ -29,14 +29,20 @@ export function signToken<T extends object>(
   return `${encoded}${SEPARATOR}${b64url(hmac(secret, encoded))}`;
 }
 
+const BASE64URL_PART = /^[A-Za-z0-9_-]+$/;
+
 export function readToken<T extends object>(token: string, secret: Buffer): T & SignedPayload {
   const index = token.indexOf(SEPARATOR);
   if (index <= 0 || index === token.length - 1) {
     throw seraError('EXPIRED', { detail: 'malformed token' });
   }
   const encoded = token.slice(0, index);
-  const provided = Buffer.from(token.slice(index + 1), 'base64url');
-  const expected = hmac(secret, encoded);
+  const sig = token.slice(index + 1);
+  if (!BASE64URL_PART.test(encoded) || !BASE64URL_PART.test(sig)) {
+    throw seraError('EXPIRED', { detail: 'malformed token' });
+  }
+  const provided = Buffer.from(sig, 'utf8');
+  const expected = Buffer.from(b64url(hmac(secret, encoded)), 'utf8');
 
   if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) {
     throw seraError('EXPIRED', { detail: 'bad token signature' });

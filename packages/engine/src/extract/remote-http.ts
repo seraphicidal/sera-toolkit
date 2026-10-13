@@ -1,4 +1,4 @@
-import { SeraError, seraError } from '../errors.js';
+import { MESSAGES, SeraError, seraError } from '../errors.js';
 import type { Logger } from '../logging.js';
 import type { ResolvedMedia } from '../providers/types.js';
 import type {
@@ -84,7 +84,11 @@ export class RemoteOverHttp implements RemoteExtraction {
 
   async dispatch(
     task: Omit<RemoteTask, 'id' | 'createdAt'>,
-    options: { onProgress?: (progress: RemoteProgress) => void; signal?: AbortSignal } = {},
+    options: {
+      onProgress?: (progress: RemoteProgress) => void;
+      onClaimed?: (nodeId: string) => void;
+      signal?: AbortSignal;
+    } = {},
   ): Promise<ResolvedMedia> {
     const outcome = await this.run(task, options);
     if (!outcome.media) {
@@ -106,7 +110,11 @@ export class RemoteOverHttp implements RemoteExtraction {
 
   private async run(
     task: Omit<RemoteTask, 'id' | 'createdAt'>,
-    options: { onProgress?: (progress: RemoteProgress) => void; signal?: AbortSignal },
+    options: {
+      onProgress?: (progress: RemoteProgress) => void;
+      onClaimed?: (nodeId: string) => void;
+      signal?: AbortSignal;
+    },
   ): Promise<{ media?: ResolvedMedia; files?: readonly RemoteFile[] }> {
     const started = await this.call('POST', '/internal/extraction/dispatch', task);
     const { taskId } = (await started.json()) as { taskId: string };
@@ -118,21 +126,26 @@ export class RemoteOverHttp implements RemoteExtraction {
         const response = await this.call('GET', `/internal/extraction/dispatch/${taskId}`);
         const state = (await response.json()) as {
           state: 'pending' | 'done' | 'failed';
+          claimedBy?: string;
           progress?: RemoteProgress;
           media?: ResolvedMedia;
           files?: readonly RemoteFile[];
           error?: { code: string; message?: string; detail?: string };
         };
 
+        if (state.claimedBy) options.onClaimed?.(state.claimedBy);
         if (state.progress) options.onProgress?.(state.progress);
         if (state.state === 'done') return { ...state };
         if (state.state === 'failed') {
           const failure = state.error;
-          throw new SeraError(
-            (failure?.code ?? 'PROVIDER_UNAVAILABLE') as SeraError['code'],
-            failure?.message ?? 'The extraction node could not complete this.',
-            failure?.detail ? { detail: failure.detail } : {},
-          );
+          const code =
+            typeof failure?.code === 'string' && Object.hasOwn(MESSAGES, failure.code)
+              ? (failure.code as SeraError['code'])
+              : 'PROVIDER_UNAVAILABLE';
+          throw seraError(code, {
+            ...(failure?.message ? { message: failure.message } : {}),
+            ...(failure?.detail ? { detail: failure.detail } : {}),
+          });
         }
         await new Promise((done) => setTimeout(done, this.pollIntervalMs));
       }
@@ -152,6 +165,7 @@ export class RemoteOverHttp implements RemoteExtraction {
         ...(body === undefined ? {} : { 'content-type': 'application/json' }),
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      signal: AbortSignal.timeout(30_000),
     });
     if (!response.ok) {
       throw seraError('PROVIDER_UNAVAILABLE', {

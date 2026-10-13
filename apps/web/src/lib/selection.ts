@@ -3,10 +3,14 @@ import { KIND_LABELS } from './format';
 
 export type SelectableKind = Exclude<MediaKind, 'unknown'>;
 
-export function availableKinds(info: MediaInfo): SelectableKind[] {
+export function availableKinds(
+  info: MediaInfo,
+  selectedIds?: ReadonlySet<string>,
+): SelectableKind[] {
   const order: SelectableKind[] = ['video', 'audio', 'image', 'gif'];
   const present = new Set<SelectableKind>();
   for (const item of info.items) {
+    if (selectedIds?.size && !selectedIds.has(item.id)) continue;
     for (const option of item.options) present.add(option.kind);
   }
   return order.filter((kind) => present.has(kind));

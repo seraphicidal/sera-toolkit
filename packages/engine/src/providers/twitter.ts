@@ -151,7 +151,12 @@ interface SyndicatedTweet {
 }
 
 function usableMedia(tweet: SyndicatedTweet | undefined): readonly TweetMedia[] {
-  return tweet?.mediaDetails?.filter((entry) => nonEmpty(entry?.media_url_https)) ?? [];
+  return (
+    tweet?.mediaDetails?.filter((entry) => {
+      const url = nonEmpty(entry?.media_url_https);
+      return Boolean(url?.startsWith('https://'));
+    }) ?? []
+  );
 }
 
 function sizeFromVariantUrl(url: string): { width?: number; height?: number } {
@@ -160,10 +165,15 @@ function sizeFromVariantUrl(url: string): { width?: number; height?: number } {
   return { width: Number(match[1]), height: Number(match[2]) };
 }
 
-function originalPhotoUrl(url: string): string {
-  const out = new URL(url);
-  out.searchParams.set('name', 'orig');
-  return out.toString();
+function originalPhotoUrl(url: string): string | undefined {
+  try {
+    const out = new URL(url);
+    if (out.protocol !== 'https:') return undefined;
+    out.searchParams.set('name', 'orig');
+    return out.toString();
+  } catch {
+    return undefined;
+  }
 }
 
 function containerFor(url: string): ContainerFormat {
@@ -177,7 +187,7 @@ function containerFor(url: string): ContainerFormat {
 
 function toItem(media: TweetMedia, index: number): ResolvedItem | undefined {
   const source = media.media_url_https;
-  if (!source) return undefined;
+  if (!source?.startsWith('https://')) return undefined;
 
   const width = media.original_info?.width;
   const height = media.original_info?.height;
@@ -186,6 +196,7 @@ function toItem(media: TweetMedia, index: number): ResolvedItem | undefined {
 
   if (media.type === 'photo') {
     const url = originalPhotoUrl(source);
+    if (!url) return undefined;
     const container = containerFor(source);
     return {
       sourceId,
@@ -215,7 +226,9 @@ function toItem(media: TweetMedia, index: number): ResolvedItem | undefined {
   }
 
   const variants = (media.video_info?.variants ?? [])
-    .filter((variant) => variant.content_type === 'video/mp4' && variant.url)
+    .filter(
+      (variant) => variant.content_type === 'video/mp4' && variant.url?.startsWith('https://'),
+    )
     .sort((a, b) => (b.bitrate ?? 0) - (a.bitrate ?? 0));
   if (!variants.length) return undefined;
 

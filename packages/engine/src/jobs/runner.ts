@@ -27,6 +27,7 @@ import {
 import type { DownloadPlan, ResolvedItem, ResolvedMedia } from '../providers/types.js';
 import { planKey } from '../providers/types.js';
 import { contradicts, sniffContainer, sniffTextImposter, SNIFF_BYTES } from '../util/sniff.js';
+import { hostMatchesAny } from '../security/url.js';
 import type { MediaResolver } from '../resolver.js';
 import type { RemoteExtraction } from '../extract/remote.js';
 import { mimeTypeFor, type Workspace, type WorkspaceManager } from '../storage/workspace.js';
@@ -396,7 +397,9 @@ export class JobRunner {
         dispatcher: this.deps.resolver.dispatcher,
         maxBytes: config.maxFilesizeBytes,
         timeoutMs: config.jobTimeoutSeconds * 1000,
-        ...(importHosts ? { allowUrl: (url: URL) => isAllowedMediaUrl(url, importHosts) } : {}),
+        allowUrl: (url: URL) =>
+          !hostMatchesAny(url.hostname, config.blockedHosts) &&
+          (!importHosts || isAllowedMediaUrl(url, importHosts)),
         ...(signal ? { signal } : {}),
         onProgress: (progress) => {
           const fraction = progress.bytesTotal

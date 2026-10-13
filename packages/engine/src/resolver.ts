@@ -470,6 +470,8 @@ export class MediaResolver {
   }
 
   private providerContext(signal?: AbortSignal): ProviderContext {
+    const allowUrl = (candidate: URL) =>
+      !hostMatchesAny(candidate.hostname, this.config.blockedHosts);
     return {
       config: this.config,
       logger: this.logger,
@@ -480,6 +482,7 @@ export class MediaResolver {
           dispatcher: this.dispatcher,
           timeoutMs: this.config.resolveTimeoutSeconds * 1000,
           maxBytes: maxBytes ?? 2 * 1024 * 1024,
+          allowUrl,
           ...(options?.headers ? { headers: options.headers } : {}),
           ...(options?.keepCookies ? { keepCookies: true } : {}),
           ...(signal ? { signal } : {}),
@@ -497,6 +500,7 @@ export class MediaResolver {
           method: 'HEAD',
           timeoutMs: this.config.resolveTimeoutSeconds * 1000,
           maxBytes: 1,
+          allowUrl,
           ...(signal ? { signal } : {}),
         });
         const contentType = header(response.headers, 'content-type');
@@ -637,15 +641,28 @@ export class MediaResolver {
 
   verifyThumbnailToken(token: string): string {
     const payload = verifyToken<ThumbTokenPayload>(token, this.config.secret);
-    if (typeof payload.t !== 'string' || !payload.t) {
+    if (
+      'u' in payload ||
+      'p' in payload ||
+      'h' in payload ||
+      'm' in payload ||
+      typeof payload.t !== 'string' ||
+      !/^https?:\/\//i.test(payload.t)
+    ) {
       throw seraError('NOT_FOUND', { detail: 'thumbnail token without url' });
     }
-    return payload.t;
+    const { url } = parseUserUrl(payload.t, {
+      allowPrivateAddresses: this.config.allowPrivateAddresses,
+    });
+    if (hostMatchesAny(url.hostname, this.config.blockedHosts)) {
+      throw seraError('BLOCKED_ADDRESS', { detail: 'host is on the deny list' });
+    }
+    return url.toString();
   }
 
   verifyInfoId(infoId: string, now = Date.now()): InfoTokenPayload {
     const payload = readToken<InfoTokenPayload>(infoId, this.config.secret);
-    if (typeof payload.u !== 'string' || typeof payload.p !== 'string') {
+    if ('h' in payload || typeof payload.u !== 'string' || typeof payload.p !== 'string') {
       throw seraError('EXPIRED', { detail: 'malformed info token' });
     }
 
@@ -675,6 +692,8 @@ export class MediaResolver {
   verifyOptionId(optionId: string): OptionTokenPayload {
     const payload = verifyToken<OptionTokenPayload>(optionId, this.config.secret);
     if (
+      'u' in payload ||
+      't' in payload ||
       typeof payload.h !== 'string' ||
       typeof payload.i !== 'number' ||
       typeof payload.k !== 'string'

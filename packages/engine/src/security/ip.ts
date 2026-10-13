@@ -20,18 +20,23 @@ blocked.addSubnet('240.0.0.0', 4, 'ipv4');
 
 blocked.addAddress('::', 'ipv6');
 blocked.addAddress('::1', 'ipv6');
+blocked.addSubnet('::', 96, 'ipv6');
+blocked.addSubnet('::ffff:0:0:0', 96, 'ipv6');
 blocked.addSubnet('64:ff9b::', 96, 'ipv6');
+blocked.addSubnet('64:ff9b:1::', 48, 'ipv6');
 blocked.addSubnet('100::', 64, 'ipv6');
+blocked.addSubnet('2001::', 23, 'ipv6');
 blocked.addSubnet('2001:db8::', 32, 'ipv6');
+blocked.addSubnet('2002::', 16, 'ipv6');
 blocked.addSubnet('fc00::', 7, 'ipv6');
 blocked.addSubnet('fe80::', 10, 'ipv6');
 blocked.addSubnet('ff00::', 8, 'ipv6');
 
 export function unwrapIpv4Mapped(address: string): string | undefined {
   const lower = address.toLowerCase();
-  const dotted = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/.exec(lower);
+  const dotted = /^(?:::ffff|(?:0{1,4}:){5}ffff):(\d{1,3}(?:\.\d{1,3}){3})$/.exec(lower);
   if (dotted?.[1]) return dotted[1];
-  const hex = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(lower);
+  const hex = /^(?:::ffff|(?:0{1,4}:){5}ffff):([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(lower);
   if (hex?.[1] && hex[2]) {
     const high = parseInt(hex[1], 16);
     const low = parseInt(hex[2], 16);

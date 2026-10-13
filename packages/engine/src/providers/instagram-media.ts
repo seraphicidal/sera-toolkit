@@ -61,7 +61,7 @@ export function mediaIdFromShortcode(shortcode: string): string {
 
 export function coverItemFrom(oembed: InstagramOembed): ResolvedItem | undefined {
   const url = nonEmpty(oembed.thumbnail_url);
-  if (!url) return undefined;
+  if (!url?.startsWith('https://')) return undefined;
 
   const width = oembed.thumbnail_width;
   const height = oembed.thumbnail_height;

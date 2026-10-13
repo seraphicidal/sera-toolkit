@@ -336,4 +336,16 @@ describe('thumbnail proxy', () => {
     const response = await app.inject({ method: 'GET', url: '/api/thumb/not-a-real-token' });
     expect(response.statusCode).toBe(410);
   });
+
+  it('refuses an infoId or optionId token replayed against the thumbnail proxy', async () => {
+    const info = await resolveClip();
+    const fromInfo = await app.inject({ method: 'GET', url: `/api/thumb/${info.id}` });
+    expect(fromInfo.statusCode).toBe(404);
+
+    const fromOption = await app.inject({
+      method: 'GET',
+      url: `/api/thumb/${info.items[0]!.options[0]!.id}`,
+    });
+    expect(fromOption.statusCode).toBe(404);
+  });
 });

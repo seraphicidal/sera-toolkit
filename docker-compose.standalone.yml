@@ -19,6 +19,7 @@ services:
     read_only: true
     tmpfs:
       - /tmp
+      - /app/apps/web/.next/cache
     security_opt:
       - no-new-privileges:true
 

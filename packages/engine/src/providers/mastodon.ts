@@ -44,7 +44,7 @@ export class MastodonProvider extends YtdlpProvider {
   }
 
   protected override strategies(
-    _url: URL,
+    url: URL,
     _context: ProviderContext,
   ): readonly ExtractionStrategy[] {
     return [
@@ -69,6 +69,9 @@ export class MastodonProvider extends YtdlpProvider {
       {
         id: 'ytdlp',
         label: 'the extractor',
+        available: (ctx) =>
+          hostMatchesAny(url.hostname, this.hosts) ||
+          hostMatchesAny(url.hostname, ctx.config.extraAllowedHosts),
         run: (target, ctx) => this.runExtractor(target, ctx),
       },
       {
@@ -77,6 +80,11 @@ export class MastodonProvider extends YtdlpProvider {
         run: async (target, ctx) => {
           const media = await this.resolveViaApi(target, ctx);
           if (!media?.items.length) {
+            if (!hostMatchesAny(target.hostname, this.hosts)) {
+              throw seraError('UNSUPPORTED_SOURCE', {
+                detail: 'mastodon: nothing in the status',
+              });
+            }
             throw seraError('MEDIA_UNAVAILABLE', { detail: 'mastodon: nothing in the status' });
           }
           return media;
@@ -93,11 +101,23 @@ export class MastodonProvider extends YtdlpProvider {
     if (!id) return undefined;
 
     const endpoint = new URL(`/api/v1/statuses/${id}`, url.origin);
-    const { body } = await context.fetchText(endpoint, 512 * 1024);
-    const status = JSON.parse(body) as MastodonStatus;
+    let status: MastodonStatus;
+    try {
+      const { body } = await context.fetchText(endpoint, 512 * 1024);
+      status = JSON.parse(body) as MastodonStatus;
+    } catch (error) {
+      if (!hostMatchesAny(url.hostname, this.hosts)) {
+        throw seraError('UNSUPPORTED_SOURCE', {
+          detail: 'mastodon: not a known mastodon instance',
+          cause: error,
+        });
+      }
+      throw error;
+    }
+    if (!status || typeof status !== 'object') return undefined;
 
     const attachments = (status.media_attachments ?? []).filter(
-      (a) => typeof a?.url === 'string' && a.url.startsWith('https://'),
+      (a) => typeof a?.url === 'string' && a.url.startsWith('https://') && canParseUrl(a.url),
     );
     if (!attachments.length) return undefined;
 
@@ -204,12 +224,22 @@ function toItem(attachment: MastodonAttachment, index: number): ResolvedItem {
     index,
     kind,
     title: describe(attachment.description) ?? `Attachment ${index + 1}`,
-    ...(attachment.preview_url ? { thumbnailUrl: attachment.preview_url } : {}),
+    ...(attachment.preview_url?.startsWith('https://') && canParseUrl(attachment.preview_url)
+      ? { thumbnailUrl: attachment.preview_url }
+      : {}),
     ...(width ? { width } : {}),
     ...(height ? { height } : {}),
     container,
     plans: ensureRecommendations(plans),
   };
+}
+
+function canParseUrl(raw: string): boolean {
+  try {
+    return Boolean(new URL(raw));
+  } catch {
+    return false;
+  }
 }
 
 function atHandle(acct: string | undefined): string | undefined {

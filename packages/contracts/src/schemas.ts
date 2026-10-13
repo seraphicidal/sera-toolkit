@@ -110,17 +110,22 @@ export const resolveRequestSchema = z.object({
   url: z.string().trim().min(1, 'Enter a link.').max(MAX_URL_LENGTH, 'That link is too long.'),
 });
 
-function withoutNulls(value: unknown): unknown {
+function stripNulls(value: unknown, depth: number): unknown {
   if (value === null) return undefined;
-  if (Array.isArray(value)) return value.map(withoutNulls);
+  if (depth > 8) return value;
+  if (Array.isArray(value)) return value.map((item) => stripNulls(item, depth + 1));
   if (typeof value === 'object') {
     return Object.fromEntries(
       Object.entries(value as Record<string, unknown>)
-        .filter(([, entry]) => entry !== null)
-        .map(([key, entry]) => [key, withoutNulls(entry)]),
+        .filter(([key, entry]) => key !== '__proto__' && entry !== null)
+        .map(([key, entry]) => [key, stripNulls(entry, depth + 1)]),
     );
   }
   return value;
+}
+
+function withoutNulls(value: unknown): unknown {
+  return stripNulls(value, 0);
 }
 
 const importedCandidateSchema = z.object({

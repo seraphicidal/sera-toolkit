@@ -148,8 +148,28 @@ describe('readImportFragment', () => {
   });
 
   it('refuses a payload that is not shaped like a post', () => {
-    for (const bad of [{ url: 42, node: {} }, { url: POST }, { url: POST, node: [] }, {}]) {
+    for (const bad of [
+      { url: 42, node: {} },
+      { url: POST },
+      { url: POST, node: [] },
+      { url: 'https://evil.example/p/DcOX3hWFiey/', node: {} },
+      {},
+    ]) {
       expect(readImportFragment(windowWith(frag(bad)).win), JSON.stringify(bad)).toBeUndefined();
     }
+  });
+
+  it('refuses deeply nested carousel structures without overflowing the stack', () => {
+    let nested: Record<string, unknown> = {
+      media_type: 1,
+      image_versions2: { candidates: [{ url: cdn }] },
+    };
+    for (let i = 0; i < 20; i += 1) {
+      nested = { code: 'DcOX3hWFiey', media_type: 8, carousel_media: [nested] };
+    }
+    expect(readImportFragment(windowWith(frag({ url: POST, node: nested })).win)).toEqual({
+      ok: false,
+      reason: 'off-cdn',
+    });
   });
 });

@@ -3,7 +3,7 @@ import { mkdir, readdir, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { randomUUID, timingSafeEqual } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { ErrorCode } from '@sera/contracts/types';
 import {
@@ -17,6 +17,7 @@ import {
   type SeraEngine,
 } from '@sera/engine';
 import { z } from 'zod';
+import { matchesToken } from '../plugins/client.js';
 
 const claimSchema = z.object({
   nodeId: z.string().min(1).max(64),
@@ -73,10 +74,14 @@ const failedSchema = z.object({
 
 const RESOLVED_BODY_LIMIT = 4 * 1024 * 1024;
 
-function limitTo(maxBytes: number): Transform {
+function limitTo(maxBytes: number, isCancelled: () => boolean): Transform {
   let seen = 0;
   return new Transform({
     transform(chunk: Buffer, _encoding, done) {
+      if (isCancelled()) {
+        done(seraError('CANCELLED'));
+        return;
+      }
       seen += chunk.length;
       if (seen > maxBytes) {
         done(seraError('TOO_LARGE', { detail: 'node: upload exceeds the size limit' }));
@@ -87,11 +92,28 @@ function limitTo(maxBytes: number): Transform {
   });
 }
 
-function tokenMatches(presented: string, expected: string): boolean {
-  const a = Buffer.from(presented);
-  const b = Buffer.from(expected);
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(a, b);
+function isValidResolvedMedia(media: unknown): boolean {
+  if (!media || typeof media !== 'object') return false;
+  const record = media as {
+    url?: unknown;
+    provider?: unknown;
+    title?: unknown;
+    items?: unknown;
+  };
+  if (
+    typeof record.url !== 'string' ||
+    typeof record.provider !== 'string' ||
+    typeof record.title !== 'string' ||
+    !Array.isArray(record.items)
+  ) {
+    return false;
+  }
+  return record.items.every(
+    (item) =>
+      Boolean(item) &&
+      typeof item === 'object' &&
+      Array.isArray((item as { plans?: unknown }).plans),
+  );
 }
 
 function sanitizeUploadedFilename(requested: string): string {
@@ -142,7 +164,7 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
     const authenticate = (request: FastifyRequest, reply: FastifyReply): boolean => {
       const header = request.headers.authorization ?? '';
       const presented = header.startsWith('Bearer ') ? header.slice(7) : '';
-      if (presented && tokenMatches(presented, config.extractionNodes.token)) return true;
+      if (matchesToken(presented, config.extractionNodes.token)) return true;
       void reply.status(401).send({ error: { code: 'NOT_FOUND', message: 'Not found.' } });
       return false;
     };
@@ -194,11 +216,7 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
 
         const body = request.body as { media?: unknown };
         const media = body?.media;
-        if (
-          !media ||
-          typeof media !== 'object' ||
-          !Array.isArray((media as { items?: unknown }).items)
-        ) {
+        if (!isValidResolvedMedia(media)) {
           throw seraError('INTERNAL', { detail: 'node: resolved body had no media' });
         }
 
@@ -249,6 +267,17 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
         const directory = join(config.dataDir, `remote-${taskId}`);
         await mkdir(directory, { recursive: true });
         const existing = await readdir(directory).catch(() => [] as string[]);
+        if (existing.length >= config.maxItemsPerJob * 2) {
+          throw seraError('TOO_LARGE', { detail: 'node: too many uploaded files' });
+        }
+        let existingBytes = 0;
+        for (const entry of existing) {
+          existingBytes += await stat(join(directory, entry)).then(
+            (info) => info.size,
+            () => 0,
+          );
+        }
+        const remainingBytes = Math.max(0, config.maxFilesizeBytes - existingBytes);
         const taken = new Set(existing.map((entry) => entry.toLowerCase()));
         const name = dedupeFilename(
           sanitizeUploadedFilename(request.query.name ?? 'media.bin'),
@@ -257,9 +286,20 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
         const path = join(directory, name);
 
         try {
-          await pipeline(request.raw, limitTo(config.maxFilesizeBytes), createWriteStream(path));
+          await pipeline(
+            request.raw,
+            limitTo(remainingBytes, () => extractionNodes.isCancelled(taskId)),
+            createWriteStream(path),
+            { signal: AbortSignal.timeout(config.jobTimeoutSeconds * 1000) },
+          );
         } catch (error) {
-          await rm(path, { force: true });
+          await rm(path, { force: true }).catch(() => undefined);
+          if (existing.length === 0) {
+            await rm(directory, { recursive: true, force: true }).catch(() => undefined);
+          }
+          if (error instanceof SeraError && error.code === 'CANCELLED') {
+            return reply.status(409).send({ accepted: false, cancelled: true });
+          }
           if (error instanceof SeraError) throw error;
           throw seraError('NETWORK_ERROR', {
             detail: `node: upload failed: ${error instanceof Error ? error.message : 'unknown'}`,

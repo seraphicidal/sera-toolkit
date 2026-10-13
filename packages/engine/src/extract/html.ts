@@ -50,6 +50,15 @@ function absolute(candidate: string | undefined, base: URL): string | undefined 
   try {
     const resolved = new URL(trimmed, base);
     if (resolved.protocol !== 'http:' && resolved.protocol !== 'https:') return undefined;
+    if (resolved.username || resolved.password) return undefined;
+    if (
+      resolved.port !== '' &&
+      resolved.port !== '80' &&
+      resolved.port !== '443' &&
+      resolved.port !== base.port
+    ) {
+      return undefined;
+    }
     return resolved.toString();
   } catch {
     return undefined;

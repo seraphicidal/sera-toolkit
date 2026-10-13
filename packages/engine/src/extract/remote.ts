@@ -1,5 +1,7 @@
 import { classifyFailure, isDefinitive } from './failure.js';
 import { randomUUID } from 'node:crypto';
+import { rm } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import type { TrimRange } from '@sera/contracts/types';
 import { seraError, type SeraError } from '../errors.js';
 import type { Logger } from '../logging.js';
@@ -379,6 +381,8 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
           clearTimeout(pending.leaseTimer);
           this.pending.delete(id);
           if (outcome.error) {
+            cleanupFiles(pending.files);
+            pending.files.length = 0;
             reject(outcome.error);
             return;
           }
@@ -470,6 +474,7 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
     const silentNode = pending.claimedBy;
     this.pending.delete(previous.id);
 
+    cleanupFiles(pending.files);
     pending.task = { ...previous, id: newTaskId() };
     pending.files.length = 0;
     delete pending.claimedAt;
@@ -491,6 +496,16 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
 
     this.queue.unshift(pending.task);
     this.wakeOne();
+  }
+}
+
+function cleanupFiles(files: readonly RemoteFile[]): void {
+  const dirs = new Set<string>();
+  for (const file of files) {
+    if (file.path) dirs.add(dirname(file.path));
+  }
+  for (const dir of dirs) {
+    void rm(dir, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 

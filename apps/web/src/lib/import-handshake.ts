@@ -17,11 +17,24 @@ interface PayloadMessage {
   readonly node: unknown;
 }
 
+function onInstagramHost(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== 'https:' || url.port !== '' || url.username || url.password) return false;
+  const host = url.hostname.toLowerCase();
+  return host === 'instagram.com' || host === 'www.instagram.com';
+}
+
 function looksLikeImport(value: unknown): value is ImportRequest {
   if (typeof value !== 'object' || value === null) return false;
   const record = value as Record<string, unknown>;
   return (
-    typeof record.url === 'string' &&
+    onInstagramHost(record.url) &&
     typeof record.node === 'object' &&
     record.node !== null &&
     !Array.isArray(record.node)
@@ -37,7 +50,9 @@ export function trustedImport(
   const data = event.data as PayloadMessage | undefined;
   if (data?.type !== PAYLOAD) return undefined;
   const request = { url: data.url, node: data.node };
-  return looksLikeImport(request) ? request : undefined;
+  if (!looksLikeImport(request)) return undefined;
+  if (mediaUrlsOf(request.node).some((url) => !onInstagramCdn(url))) return undefined;
+  return request;
 }
 
 export interface ImportChannel {
@@ -97,8 +112,12 @@ function onInstagramCdn(value: unknown): boolean {
 
 function mediaUrlsOf(node: unknown): string[] {
   const out: string[] = [];
-  const walk = (value: unknown): void => {
+  const walk = (value: unknown, depth: number): void => {
     if (!value || typeof value !== 'object') return;
+    if (depth > 2) {
+      out.push('invalid://nested-too-deep');
+      return;
+    }
     const slide = value as {
       image_versions2?: { candidates?: unknown[] };
       video_versions?: unknown[];
@@ -112,9 +131,9 @@ function mediaUrlsOf(node: unknown): string[] {
       const url = (version as { url?: unknown })?.url;
       if (typeof url === 'string') out.push(url);
     }
-    for (const child of slide.carousel_media ?? []) walk(child);
+    for (const child of slide.carousel_media ?? []) walk(child, depth + 1);
   };
-  walk(node);
+  walk(node, 0);
   return out;
 }
 

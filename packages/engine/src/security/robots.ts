@@ -40,7 +40,7 @@ export function parseRobots(text: string, userAgent: string): RobotsRules {
 }
 
 function matches(pattern: string, path: string): number {
-  if (pattern === '') return -1;
+  if (pattern === '' || pattern.length > 512) return -1;
   const anchored = pattern.endsWith('$');
   const body = anchored ? pattern.slice(0, -1) : pattern;
 
@@ -49,12 +49,27 @@ function matches(pattern: string, path: string): number {
     return hit ? body.length : -1;
   }
 
-  const escaped = body
-    .split('*')
-    .map((part) => part.replace(/[.+?^${}()|[\]\\]/g, '\\$&'))
-    .join('.*');
-  const regex = new RegExp(`^${escaped}${anchored ? '$' : ''}`);
-  return regex.test(path) ? body.length : -1;
+  const parts = body.split('*');
+  const first = parts[0]!;
+  if (!path.startsWith(first)) return -1;
+
+  let cursor = first.length;
+  const last = parts[parts.length - 1]!;
+  if (anchored && (!path.endsWith(last) || path.length - last.length < cursor)) {
+    return -1;
+  }
+
+  const end = anchored ? path.length - last.length : path.length;
+  const limit = anchored ? parts.length - 1 : parts.length;
+  for (let i = 1; i < limit; i += 1) {
+    const part = parts[i]!;
+    if (!part) continue;
+    const found = path.indexOf(part, cursor);
+    if (found < 0 || found + part.length > end) return -1;
+    cursor = found + part.length;
+  }
+
+  return body.length;
 }
 
 export function isAllowed(rules: RobotsRules, path: string): boolean {

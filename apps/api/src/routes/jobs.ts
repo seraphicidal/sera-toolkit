@@ -65,6 +65,10 @@ export function registerJobRoutes(app: FastifyInstance, engine: SeraEngine): voi
       'cache-control': 'no-cache, no-transform',
       connection: 'keep-alive',
       'x-accel-buffering': 'no',
+      'x-content-type-options': 'nosniff',
+      'referrer-policy': 'no-referrer',
+      'x-frame-options': 'DENY',
+      'content-security-policy': "default-src 'none'; frame-ancestors 'none'",
     });
     reply.raw.write('retry: 3000\n\n');
 
@@ -74,7 +78,8 @@ export function registerJobRoutes(app: FastifyInstance, engine: SeraEngine): voi
         reply.raw.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'stream failed';
+      const message =
+        error instanceof SeraError ? error.message : 'Something went wrong on our side.';
       reply.raw.write(`event: error\ndata: ${JSON.stringify({ type: 'error', message })}\n\n`);
     } finally {
       reply.raw.end();

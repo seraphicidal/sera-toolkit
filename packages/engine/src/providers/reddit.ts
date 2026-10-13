@@ -148,6 +148,13 @@ function unescapeUrl(value: string): string {
   return value.replace(/&amp;/g, '&');
 }
 
+function httpsUrl(value: string | undefined): string | undefined {
+  const raw = nonEmpty(value);
+  if (!raw) return undefined;
+  const unescaped = unescapeUrl(raw);
+  return unescaped.startsWith('https://') ? unescaped : undefined;
+}
+
 function imagePlan(url: string, container: ContainerFormat, width?: number, height?: number) {
   return {
     kind: 'image' as const,
@@ -188,9 +195,9 @@ function galleryItems(post: RedditPost, limit: number): ResolvedItem[] {
     const media: RedditMediaMetadata | undefined = id ? metadata[id] : undefined;
     if (media?.status !== 'valid') continue;
 
-    const still = nonEmpty(media.s?.u);
-    const gif = nonEmpty(media.s?.gif);
-    const mp4 = nonEmpty(media.s?.mp4);
+    const still = httpsUrl(media.s?.u);
+    const gif = httpsUrl(media.s?.gif);
+    const mp4 = httpsUrl(media.s?.mp4);
     const width = media.s?.x;
     const height = media.s?.y;
 
@@ -206,7 +213,7 @@ function galleryItems(post: RedditPost, limit: number): ResolvedItem[] {
           ...(height ? { height } : {}),
           requiresConversion: false,
           recommended: true,
-          fetch: { via: 'direct', url: unescapeUrl(mp4) },
+          fetch: { via: 'direct', url: mp4 },
         });
       }
       if (gif) {
@@ -217,7 +224,7 @@ function galleryItems(post: RedditPost, limit: number): ResolvedItem[] {
           detail: 'Original',
           requiresConversion: false,
           recommended: !mp4,
-          fetch: { via: 'direct', url: unescapeUrl(gif) },
+          fetch: { via: 'direct', url: gif },
         });
       }
       items.push({
@@ -225,7 +232,7 @@ function galleryItems(post: RedditPost, limit: number): ResolvedItem[] {
         index: items.length,
         kind: 'gif',
         title: `GIF ${items.length + 1}`,
-        ...(still ? { thumbnailUrl: unescapeUrl(still) } : {}),
+        ...(still ? { thumbnailUrl: still } : {}),
         ...(width ? { width } : {}),
         ...(height ? { height } : {}),
         container: mp4 ? 'mp4' : 'gif',
@@ -235,7 +242,7 @@ function galleryItems(post: RedditPost, limit: number): ResolvedItem[] {
     }
 
     if (!still) continue;
-    const url = unescapeUrl(still);
+    const url = still;
     const container = containerFromMime(media.m, url);
     items.push({
       sourceId: id!,
@@ -254,10 +261,10 @@ function galleryItems(post: RedditPost, limit: number): ResolvedItem[] {
 }
 
 function videoSource(video: RedditVideo): { url: string; viaManifest: boolean } | undefined {
-  const manifest = nonEmpty(video.hls_url) ?? nonEmpty(video.dash_url);
-  if (manifest) return { url: unescapeUrl(manifest), viaManifest: true };
-  const fallback = nonEmpty(video.fallback_url);
-  if (fallback) return { url: unescapeUrl(fallback), viaManifest: false };
+  const manifest = httpsUrl(video.hls_url) ?? httpsUrl(video.dash_url);
+  if (manifest) return { url: manifest, viaManifest: true };
+  const fallback = httpsUrl(video.fallback_url);
+  if (fallback) return { url: fallback, viaManifest: false };
   return undefined;
 }
 
@@ -311,13 +318,13 @@ function videoItem(video: RedditVideo, post: RedditPost): ResolvedItem | undefin
     });
   }
 
-  const thumbnail = nonEmpty(post.preview?.images?.[0]?.source?.url);
+  const thumbnail = httpsUrl(post.preview?.images?.[0]?.source?.url);
   return {
     sourceId: 'video',
     index: 0,
     kind: isGif ? 'gif' : 'video',
     title: nonEmpty(post.title) ? truncate(post.title!, 120) : 'Video',
-    ...(thumbnail ? { thumbnailUrl: unescapeUrl(thumbnail) } : {}),
+    ...(thumbnail ? { thumbnailUrl: thumbnail } : {}),
     ...(video.width ? { width: video.width } : {}),
     ...(video.height ? { height: video.height } : {}),
     ...(video.duration ? { duration: video.duration } : {}),

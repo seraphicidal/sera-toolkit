@@ -21,7 +21,7 @@ export interface TagAudioRequest extends FfmpegOptions {
 }
 
 function escapeMetadata(value: string): string {
-  return value.replace(/[=;#\\\n]/g, (character) => `\\${character}`);
+  return value.replace(/[=;#\\\r\n]/g, (character) => `\\${character}`);
 }
 
 export function pictureBlock(jpeg: Buffer, width: number, height: number): string {
@@ -55,6 +55,8 @@ export async function squareCover(
       '-hide_banner',
       '-nostdin',
       '-y',
+      '-protocol_whitelist',
+      'file,pipe,data',
       '-i',
       input,
       '-vf',
@@ -105,6 +107,8 @@ export async function tagAudio(request: TagAudioRequest): Promise<void> {
     '-hide_banner',
     '-nostdin',
     '-y',
+    '-protocol_whitelist',
+    'file,pipe,data',
     '-i',
     request.input,
     '-i',

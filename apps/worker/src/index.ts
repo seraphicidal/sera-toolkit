@@ -25,7 +25,10 @@ async function main(): Promise<void> {
   }, HEARTBEAT_INTERVAL_MS);
   ticker.unref();
 
+  let shuttingDown = false;
   const shutdown = (signal: string): void => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     engine.logger.info({ signal }, 'draining worker');
     clearInterval(ticker);
     void (async () => {

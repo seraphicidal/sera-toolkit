@@ -122,6 +122,18 @@ export async function safeOpen(url: URL, options: SafeFetchOptions): Promise<Ope
     if (current.protocol !== 'http:' && current.protocol !== 'https:') {
       throw seraError('BLOCKED_ADDRESS', { detail: `redirect to ${current.protocol}` });
     }
+    if (current.username || current.password) {
+      throw seraError('BLOCKED_ADDRESS', { detail: 'credentials in url' });
+    }
+    if (
+      hop > 0 &&
+      current.port !== '' &&
+      current.port !== '80' &&
+      current.port !== '443' &&
+      current.port !== url.port
+    ) {
+      throw seraError('BLOCKED_ADDRESS', { detail: `redirect to port ${current.port}` });
+    }
     if (options.allowUrl && !options.allowUrl(current)) {
       throw seraError('BLOCKED_ADDRESS', {
         detail:
@@ -165,7 +177,11 @@ export async function safeOpen(url: URL, options: SafeFetchOptions): Promise<Ope
       }
       if (hop === maxRedirects) throw seraError('NETWORK_ERROR', { detail: 'too many redirects' });
       if (options.keepCookies) keepSetCookies(jar, headers['set-cookie']);
-      current = new URL(location, current);
+      try {
+        current = new URL(location, current);
+      } catch (cause) {
+        throw seraError('NETWORK_ERROR', { detail: 'invalid redirect location', cause });
+      }
       continue;
     }
 

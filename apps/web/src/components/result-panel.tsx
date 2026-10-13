@@ -5,6 +5,10 @@ import type { Job } from '@sera/contracts/types';
 import { CheckIcon, DownloadIcon } from './icons';
 import { formatBytes, pluralize } from '@/lib/format';
 
+function isSafeDownloadPath(path: string): boolean {
+  return path.startsWith('/api/') && !path.startsWith('//');
+}
+
 export function ResultPanel({ job, onReset }: { readonly job: Job; readonly onReset: () => void }) {
   const result = job.result;
   const startedFor = useRef<string | undefined>(undefined);
@@ -14,7 +18,7 @@ export function ResultPanel({ job, onReset }: { readonly job: Job; readonly onRe
     if (
       !result ||
       startedFor.current === result.downloadPath ||
-      !result.downloadPath.startsWith('/api/')
+      !isSafeDownloadPath(result.downloadPath)
     ) {
       return;
     }
@@ -50,7 +54,7 @@ export function ResultPanel({ job, onReset }: { readonly job: Job; readonly onRe
       </div>
 
       <a
-        href={result.downloadPath}
+        href={isSafeDownloadPath(result.downloadPath) ? result.downloadPath : '#'}
         download
         className="mt-4 flex h-12 w-full items-center justify-center gap-2 rounded-[var(--radius-input)] bg-[var(--color-accent)] text-[0.9375rem] font-medium text-[var(--color-accent-ink)] transition-colors hover:bg-[var(--color-accent-hover)]"
       >
@@ -66,9 +70,9 @@ export function ResultPanel({ job, onReset }: { readonly job: Job; readonly onRe
           </summary>
           <ul className="mt-2 flex flex-col gap-1 border-l border-[var(--color-line)] pl-3">
             {result.files.map((file) => (
-              <li key={file.name}>
+              <li key={file.downloadPath || file.name}>
                 <a
-                  href={file.downloadPath}
+                  href={isSafeDownloadPath(file.downloadPath) ? file.downloadPath : '#'}
                   download
                   className="flex items-center justify-between gap-3 rounded-md py-1 text-[0.8125rem] text-[var(--color-ink-muted)] transition-colors hover:text-[var(--color-accent)]"
                 >

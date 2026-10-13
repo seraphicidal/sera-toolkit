@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 import type { Logger } from '../logging.js';
 import { seraError } from '../errors.js';
@@ -67,7 +67,7 @@ export class WorkspaceManager {
       throw seraError('NOT_FOUND', { detail: 'path escaped workspace' });
     }
 
-    const info = await stat(path).catch(() => undefined);
+    const info = await lstat(path).catch(() => undefined);
     if (!info?.isFile()) throw seraError('NOT_FOUND');
     return path;
   }
@@ -131,9 +131,9 @@ async function directorySize(dir: string): Promise<number> {
   for (const entry of entries) {
     const path = join(dir, entry.name);
     if (entry.isDirectory()) total += await directorySize(path);
-    else
-      total += await stat(path)
-        .then((s) => s.size)
+    else if (entry.isFile())
+      total += await lstat(path)
+        .then((s) => (s.isFile() ? s.size : 0))
         .catch(() => 0);
   }
   return total;
@@ -186,5 +186,5 @@ export const MIME_TYPES: Readonly<Record<string, string>> = {
 
 export function mimeTypeFor(filename: string): string {
   const extension = filename.split('.').pop()?.toLowerCase() ?? '';
-  return MIME_TYPES[extension] ?? 'application/octet-stream';
+  return Object.hasOwn(MIME_TYPES, extension) ? MIME_TYPES[extension]! : 'application/octet-stream';
 }

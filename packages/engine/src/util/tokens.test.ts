@@ -67,6 +67,12 @@ describe('signToken / verifyToken', () => {
     const body = Buffer.from('{"u":', 'utf8').toString('base64url');
     expect(codeOf(() => verifyToken(`${body}.AAAA`, secret))).toBe('EXPIRED');
   });
+
+  it('refuses non-canonical base64url characters or padding', () => {
+    const token = signToken<Payload>({ u: 'https://e.com/x', p: 'youtube' }, secret, 3600);
+    expect(codeOf(() => verifyToken(`${token}=`, secret))).toBe('EXPIRED');
+    expect(codeOf(() => verifyToken(` ${token}`, secret))).toBe('EXPIRED');
+  });
 });
 
 describe('newJobId', () => {

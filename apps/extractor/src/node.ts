@@ -1,6 +1,7 @@
 import { createReadStream } from 'node:fs';
 import { Readable } from 'node:stream';
 import {
+  hostMatchesAny,
   type JobRunner,
   type MediaResolver,
   newJobId,
@@ -127,6 +128,7 @@ export class ExtractionNode {
   private readonly features: NodeFeature[];
   private stopping = false;
   private claimAbort: AbortController | undefined;
+  private taskAbort: AbortController | undefined;
 
   constructor(
     options: NodeOptions,
@@ -152,6 +154,7 @@ export class ExtractionNode {
   stop(): void {
     this.stopping = true;
     this.claimAbort?.abort();
+    this.taskAbort?.abort();
   }
 
   async run(): Promise<void> {
@@ -222,6 +225,9 @@ export class ExtractionNode {
     const { url } = parseUserUrl(task.url, {
       allowPrivateAddresses: this.config.allowPrivateAddresses,
     });
+    if (hostMatchesAny(url.hostname, this.config.blockedHosts)) {
+      throw seraError('UNSUPPORTED_SOURCE', { detail: 'node: host is on the deny list' });
+    }
 
     const detected = this.registry.detect(url);
     if (task.providerId !== 'generic' && detected?.id !== task.providerId) {
@@ -233,8 +239,13 @@ export class ExtractionNode {
   }
 
   private async handle(task: RemoteTask): Promise<void> {
+    if (typeof task.id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(task.id)) {
+      this.logger.warn({ taskId: task.id }, 'ignoring task with malformed id');
+      return;
+    }
     const started = Date.now();
     const abort = new AbortController();
+    this.taskAbort = abort;
     let currentPercent = 0;
     let currentStep = 'Working';
     let lastSentAt = 0;
@@ -297,6 +308,7 @@ export class ExtractionNode {
       }).catch(() => undefined);
     } finally {
       clearInterval(heartbeat);
+      if (this.taskAbort === abort) this.taskAbort = undefined;
     }
   }
 

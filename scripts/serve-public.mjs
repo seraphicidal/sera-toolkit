@@ -26,6 +26,7 @@ function loadOrCreateSecret() {
       `SERA_SECRET=${secret}`,
       '',
     ].join('\n'),
+    { mode: 0o600 },
   );
   console.log(`[sera] generated a signing secret in .env.production.local`);
   return secret;
@@ -208,7 +209,7 @@ if (!LOCAL_ONLY) {
         '36',
         (line) => {
           const match = /(https:\/\/[a-z0-9-]+\.trycloudflare\.com)/i.exec(line);
-          if (match?.[1] && !publicUrl) {
+          if (match?.[1] && match[1] !== publicUrl) {
             publicUrl = match[1];
             writeFileSync(join(ROOT, '.data', 'public-url.txt'), publicUrl);
             console.log(`\n  ┌${'─'.repeat(60)}┐`);

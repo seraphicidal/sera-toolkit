@@ -109,10 +109,13 @@ else
   echo ".env already exists; leaving it alone"
 fi
 
-set -a
-# shellcheck disable=SC1091  # .env is written above; there is nothing to follow at lint time
-. ./.env
-set +a
+read_env_var() {
+  local key="$1"
+  grep -E "^${key}=" .env 2>/dev/null | tail -n 1 | cut -d= -f2- | tr -d '\r' || true
+}
+
+SERA_DOMAIN="$(read_env_var SERA_DOMAIN)"
+SERA_TLS_EMAIL="$(read_env_var SERA_TLS_EMAIL)"
 
 mkdir -p deploy/caddy.globals
 if [ -n "${SERA_TLS_EMAIL:-}" ]; then

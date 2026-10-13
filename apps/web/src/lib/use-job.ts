@@ -44,6 +44,7 @@ export function useJob(jobId: string | undefined, initial?: Job): UseJobResult {
     setFollowing(true);
 
     let stopped = false;
+    let polling = false;
     let source: EventSource | undefined;
     let pollTimer: ReturnType<typeof setTimeout> | undefined;
     let graceTimer: ReturnType<typeof setTimeout> | undefined;
@@ -60,10 +61,10 @@ export function useJob(jobId: string | undefined, initial?: Job): UseJobResult {
     };
 
     const poll = (): void => {
-      if (stopped) return;
+      if (stopped || jobId !== activeId.current) return;
       void getJob(jobId, controller.signal)
         .then((next) => {
-          if (stopped) return;
+          if (stopped || jobId !== activeId.current) return;
           apply(next);
           if (!isRunning(next.state)) {
             finish();
@@ -72,7 +73,7 @@ export function useJob(jobId: string | undefined, initial?: Job): UseJobResult {
           pollTimer = setTimeout(poll, POLL_INTERVAL_MS);
         })
         .catch((caught: unknown) => {
-          if (stopped) return;
+          if (stopped || jobId !== activeId.current) return;
           if (caught instanceof ApiError && !caught.retryable) {
             setJob((previous) => ({
               id: jobId,
@@ -97,7 +98,12 @@ export function useJob(jobId: string | undefined, initial?: Job): UseJobResult {
     };
 
     const startPolling = (): void => {
-      if (stopped || pollTimer) return;
+      if (stopped || polling) return;
+      polling = true;
+      if (graceTimer) {
+        clearTimeout(graceTimer);
+        graceTimer = undefined;
+      }
       source?.close();
       source = undefined;
       poll();

@@ -35,16 +35,29 @@ describe('isPublicAddress', () => {
     }
   });
 
-  it('rejects loopback however it is spelled in IPv6', () => {
-    expect(isPublicAddress('::ffff:127.0.0.1')).toBe(false);
-    expect(isPublicAddress('::ffff:7f00:1')).toBe(false);
-    expect(isPublicAddress('::FFFF:127.0.0.1')).toBe(false);
-    expect(isPublicAddress('::ffff:169.254.169.254')).toBe(false);
-    expect(isPublicAddress('::ffff:10.0.0.1')).toBe(false);
+  it('rejects loopback and private ranges across IPv6 transition and tunneling prefixes', () => {
+    for (const address of [
+      '::ffff:127.0.0.1',
+      '::ffff:7f00:1',
+      '::FFFF:127.0.0.1',
+      '::ffff:169.254.169.254',
+      '::ffff:10.0.0.1',
+      '0:0:0:0:0:ffff:127.0.0.1',
+      '0000:0000:0000:0000:0000:ffff:7f00:0001',
+      '::127.0.0.1',
+      '::ffff:0:127.0.0.1',
+      '64:ff9b::127.0.0.1',
+      '64:ff9b:1::1',
+      '2001:0::1',
+      '2002:7f00:1::',
+    ]) {
+      expect(isPublicAddress(address), address).toBe(false);
+    }
   });
 
-  it('accepts a mapped public address', () => {
+  it('accepts a mapped public address in both compressed and expanded forms', () => {
     expect(isPublicAddress('::ffff:8.8.8.8')).toBe(true);
+    expect(isPublicAddress('0:0:0:0:0:ffff:8.8.8.8')).toBe(true);
   });
 
   it('ignores a zone index', () => {
@@ -59,10 +72,12 @@ describe('isPublicAddress', () => {
 });
 
 describe('unwrapIpv4Mapped', () => {
-  it('reads both the dotted and the hex spellings', () => {
+  it('reads compressed, expanded, dotted, and hex spellings', () => {
     expect(unwrapIpv4Mapped('::ffff:192.168.0.1')).toBe('192.168.0.1');
     expect(unwrapIpv4Mapped('::ffff:c0a8:1')).toBe('192.168.0.1');
     expect(unwrapIpv4Mapped('::ffff:7f00:1')).toBe('127.0.0.1');
+    expect(unwrapIpv4Mapped('0:0:0:0:0:ffff:127.0.0.1')).toBe('127.0.0.1');
+    expect(unwrapIpv4Mapped('0000:0000:0000:0000:0000:ffff:7f00:0001')).toBe('127.0.0.1');
   });
 
   it('returns nothing for an address that is not mapped', () => {

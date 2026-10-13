@@ -11,7 +11,13 @@ import type {
 import { ApiError, cancelJob, createJob, resolveMedia } from '@/lib/api';
 import { cx, formatBytes, formatDuration, isRunning, pluralize } from '@/lib/format';
 import { addToHistory } from '@/lib/history';
-import { initialKind, qualityLabels, resolveSelection, type SelectableKind } from '@/lib/selection';
+import {
+  availableKinds,
+  initialKind,
+  qualityLabels,
+  resolveSelection,
+  type SelectableKind,
+} from '@/lib/selection';
 import { urlFromFragment } from '@/lib/share';
 import {
   subtitleChoices,
@@ -179,6 +185,15 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
 
   useEffect(() => {
     if (!info) return;
+    const kinds = availableKinds(info, selectedIds);
+    if (kinds.length > 0 && !kinds.includes(kind)) {
+      const fallbackKind = kinds[0];
+      if (fallbackKind) {
+        setKind(fallbackKind);
+        setLabel(qualityLabels(info, fallbackKind, selectedIds)[0]);
+        return;
+      }
+    }
     const labels = qualityLabels(info, kind, selectedIds);
     if (!labels.length) {
       setLabel(undefined);
@@ -402,7 +417,10 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
                 <SubtitleFields
                   choices={subtitles}
                   track={subtitleTrack}
-                  onTrackChange={setSubtitleTrack}
+                  onTrackChange={(nextTrack) => {
+                    setSubtitleTrack(nextTrack);
+                    if (!nextTrack) setSubtitlesOnly(false);
+                  }}
                   format={subtitlesRequested?.format ?? subtitleFormat}
                   onFormatChange={(nextFormat) => {
                     if (nextFormat === 'embed') setSubtitlesOnly(false);
@@ -431,11 +449,17 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
                         start: trimStart,
                         end: trimEnd,
                         onStartChange: (next) => {
-                          if (next.trim()) setSubtitleTrack('');
+                          if (next.trim()) {
+                            setSubtitleTrack('');
+                            setSubtitlesOnly(false);
+                          }
                           setTrimStart(next);
                         },
                         onEndChange: (next) => {
-                          if (next.trim()) setSubtitleTrack('');
+                          if (next.trim()) {
+                            setSubtitleTrack('');
+                            setSubtitlesOnly(false);
+                          }
                           setTrimEnd(next);
                         },
                         summary: trim,

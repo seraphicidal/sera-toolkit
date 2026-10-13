@@ -55,6 +55,7 @@ export class RedditTokenSource {
           'user-agent': this.credentials.userAgent,
         },
         body: 'grant_type=client_credentials',
+        signal: AbortSignal.timeout(15_000),
       });
     } catch (error) {
       throw seraError('NETWORK_ERROR', {
@@ -152,10 +153,18 @@ export async function fetchPost(
   credentials: RedditCredentials,
   fetchImpl: typeof fetch = fetch,
 ): Promise<RedditPost> {
-  const call = async (token: string): Promise<Response> =>
-    fetchImpl(`https://oauth.reddit.com/comments/${postId}?raw_json=1&limit=1`, {
-      headers: { authorization: `Bearer ${token}`, 'user-agent': credentials.userAgent },
-    });
+  const call = async (token: string): Promise<Response> => {
+    try {
+      return await fetchImpl(`https://oauth.reddit.com/comments/${postId}?raw_json=1&limit=1`, {
+        headers: { authorization: `Bearer ${token}`, 'user-agent': credentials.userAgent },
+        signal: AbortSignal.timeout(15_000),
+      });
+    } catch (error) {
+      throw seraError('NETWORK_ERROR', {
+        detail: `reddit: post request failed: ${error instanceof Error ? error.message : 'unknown'}`,
+      });
+    }
+  };
 
   let response = await call(await tokens.token());
   if (response.status === 401) {

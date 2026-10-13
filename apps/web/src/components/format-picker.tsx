@@ -33,7 +33,7 @@ export function FormatPicker({
   readonly label: string | undefined;
   readonly onLabelChange: (label: string) => void;
 }) {
-  const kinds = availableKinds(info);
+  const kinds = availableKinds(info, selectedIds);
   const labels = qualityLabels(info, kind, selectedIds);
 
   const describing = info.items
