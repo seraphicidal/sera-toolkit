@@ -130,6 +130,10 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
   private readonly waiting: Waiter[] = [];
   private readonly pending = new Map<string, Pending>();
   private readonly nodes = new Map<string, NodeRecord>();
+  private readonly settled = new Map<
+    string,
+    { claimedBy?: string; cancelled: boolean; settledAt: number }
+  >();
 
   constructor(
     private readonly logger: Logger,
@@ -214,7 +218,21 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
 
   isCancelled(taskId: string): boolean {
     const pending = this.pending.get(taskId);
-    return !pending || pending.cancelled;
+    if (pending) return pending.cancelled;
+    const settled = this.settled.get(taskId);
+    if (settled) return settled.cancelled;
+    return true;
+  }
+
+  claimedBy(taskId: string): string | undefined {
+    return this.pending.get(taskId)?.claimedBy ?? this.settled.get(taskId)?.claimedBy;
+  }
+
+  private sweepSettled(): void {
+    const now = Date.now();
+    for (const [id, entry] of this.settled) {
+      if (now - entry.settledAt > 60_000) this.settled.delete(id);
+    }
   }
 
   reportProgress(taskId: string, progress: RemoteProgress): void {
@@ -380,6 +398,12 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
           clearTimeout(pending.timer);
           clearTimeout(pending.leaseTimer);
           this.pending.delete(id);
+          this.sweepSettled();
+          this.settled.set(id, {
+            claimedBy: pending.claimedBy,
+            cancelled: pending.cancelled || outcome.error?.code === 'CANCELLED',
+            settledAt: Date.now(),
+          });
           if (outcome.error) {
             cleanupFiles(pending.files);
             pending.files.length = 0;

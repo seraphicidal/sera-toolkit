@@ -78,8 +78,8 @@ if grep -q '^SERA_EXTRACTION_NODE_TOKEN=$' "$ENV_FILE"; then
   cat <<EOF
 One thing left: the token. Open $ENV_FILE
   nano $ENV_FILE
-and paste the server's token after SERA_EXTRACTION_NODE_TOKEN= (the same value as on the
-laptop). Then start the node:
+and paste this node's token after SERA_EXTRACTION_NODE_TOKEN= (must match this node's
+entry in the server's SERA_EXTRACTION_NODE_TOKENS). Then start the node:
   $DIR/deploy/node-android/run-node.sh &
 EOF
 else

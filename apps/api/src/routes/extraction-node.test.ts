@@ -392,3 +392,253 @@ describe('the dispatch route a standalone worker uses', () => {
     });
   });
 });
+
+describe('multi-node authentication and isolation', () => {
+  const LAPTOP_TOKEN = 'tok-laptop-1234567890';
+  const PHONE_TOKEN = 'tok-phone-0987654321';
+  const WORKER_TOKEN = 'tok-worker-abcdef123456';
+
+  let multiDataDir: string;
+  let multiEngine: SeraEngine;
+  let multiApp: FastifyInstance;
+
+  beforeAll(async () => {
+    multiDataDir = await mkdtemp(join(tmpdir(), 'sera-multi-node-'));
+    multiEngine = await SeraEngine.create({
+      config: loadConfig({
+        NODE_ENV: 'test',
+        LOG_LEVEL: 'silent',
+        SERA_SECRET: 'integration-secret',
+        SERA_DATA_DIR: multiDataDir,
+        SERA_EXTRACTION_NODE_TOKENS: `laptop:${LAPTOP_TOKEN},phone:${PHONE_TOKEN}`,
+        SERA_EXTRACTION_WORKER_TOKEN: WORKER_TOKEN,
+        SERA_EXTRACTION_CLAIM_HOLD_SECONDS: '1',
+      }),
+    });
+    multiApp = await buildServer(multiEngine);
+    await multiApp.ready();
+  });
+
+  afterAll(async () => {
+    await multiApp?.close();
+    await multiEngine?.close?.();
+    await rm(multiDataDir, { recursive: true, force: true });
+  });
+
+  it('allows laptop and phone to claim with their respective tokens', async () => {
+    const laptopClaim = await multiApp.inject({
+      method: 'POST',
+      url: '/internal/extraction/claim',
+      headers: { authorization: `Bearer ${LAPTOP_TOKEN}` },
+      payload: { nodeId: 'laptop', providers: ['youtube'], capacity: 1 },
+    });
+    expect(laptopClaim.statusCode).toBe(204);
+
+    const phoneClaim = await multiApp.inject({
+      method: 'POST',
+      url: '/internal/extraction/claim',
+      headers: { authorization: `Bearer ${PHONE_TOKEN}` },
+      payload: { nodeId: 'phone', providers: ['youtube'], capacity: 1 },
+    });
+    expect(phoneClaim.statusCode).toBe(204);
+  });
+
+  it('rejects claim with wrong token with 401', async () => {
+    const wrong = await multiApp.inject({
+      method: 'POST',
+      url: '/internal/extraction/claim',
+      headers: { authorization: 'Bearer wrong-token' },
+      payload: { nodeId: 'laptop', providers: ['youtube'], capacity: 1 },
+    });
+    expect(wrong.statusCode).toBe(401);
+  });
+
+  it('rejects claim when token does not match claimed nodeId with 403', async () => {
+    const mismatch = await multiApp.inject({
+      method: 'POST',
+      url: '/internal/extraction/claim',
+      headers: { authorization: `Bearer ${LAPTOP_TOKEN}` },
+      payload: { nodeId: 'phone', providers: ['youtube'], capacity: 1 },
+    });
+    expect(mismatch.statusCode).toBe(403);
+  });
+
+  it('rejects node token on worker dispatch and nodes endpoints with 401', async () => {
+    const dispatchWithNode = await multiApp.inject({
+      method: 'POST',
+      url: '/internal/extraction/dispatch',
+      headers: { authorization: `Bearer ${LAPTOP_TOKEN}` },
+      payload: { kind: 'resolve', url: 'https://www.youtube.com/watch?v=x', providerId: 'youtube' },
+    });
+    expect(dispatchWithNode.statusCode).toBe(401);
+
+    const nodesWithNode = await multiApp.inject({
+      method: 'GET',
+      url: '/internal/extraction/nodes',
+      headers: { authorization: `Bearer ${LAPTOP_TOKEN}` },
+    });
+    expect(nodesWithNode.statusCode).toBe(401);
+  });
+
+  it('accepts worker token on dispatch and nodes endpoints', async () => {
+    const nodes = await multiApp.inject({
+      method: 'GET',
+      url: '/internal/extraction/nodes',
+      headers: { authorization: `Bearer ${WORKER_TOKEN}` },
+    });
+    expect(nodes.statusCode).toBe(200);
+
+    const dispatch = await multiApp.inject({
+      method: 'POST',
+      url: '/internal/extraction/dispatch',
+      headers: { authorization: `Bearer ${WORKER_TOKEN}` },
+      payload: { kind: 'resolve', url: 'https://www.youtube.com/watch?v=x', providerId: 'youtube' },
+    });
+    expect(dispatch.statusCode).toBe(200);
+
+    const { taskId } = dispatch.json<{ taskId: string }>();
+    await multiApp.inject({
+      method: 'DELETE',
+      url: `/internal/extraction/dispatch/${taskId}`,
+      headers: { authorization: `Bearer ${WORKER_TOKEN}` },
+    });
+  });
+
+  it('prevents a different node from modifying or completing a claimed task', async () => {
+    multiEngine.extractionNodes.register('laptop', ['youtube'], 1);
+    const resolvePromise = multiEngine.extractionNodes.dispatch({
+      kind: 'resolve',
+      url: 'https://www.youtube.com/watch?v=test',
+      providerId: 'youtube',
+    });
+
+    const claimed = await multiApp.inject({
+      method: 'POST',
+      url: '/internal/extraction/claim',
+      headers: { authorization: `Bearer ${LAPTOP_TOKEN}` },
+      payload: { nodeId: 'laptop', providers: ['youtube'], capacity: 1 },
+    });
+    expect(claimed.statusCode).toBe(200);
+    const task = claimed.json<{ id: string }>();
+
+    const phoneProgress = await multiApp.inject({
+      method: 'POST',
+      url: `/internal/extraction/${task.id}/progress`,
+      headers: { authorization: `Bearer ${PHONE_TOKEN}` },
+      payload: { percent: 50, step: 'downloading' },
+    });
+    expect(phoneProgress.statusCode).toBe(403);
+
+    const phoneResolved = await multiApp.inject({
+      method: 'POST',
+      url: `/internal/extraction/${task.id}/resolved`,
+      headers: { authorization: `Bearer ${PHONE_TOKEN}` },
+      payload: { media: remoteMedia },
+    });
+    expect(phoneResolved.statusCode).toBe(403);
+
+    const phoneFailed = await multiApp.inject({
+      method: 'POST',
+      url: `/internal/extraction/${task.id}/failed`,
+      headers: { authorization: `Bearer ${PHONE_TOKEN}` },
+      payload: { code: 'PROVIDER_UNAVAILABLE' },
+    });
+    expect(phoneFailed.statusCode).toBe(403);
+
+    const phoneFile = await multiApp.inject({
+      method: 'POST',
+      url: `/internal/extraction/${task.id}/file`,
+      headers: {
+        authorization: `Bearer ${PHONE_TOKEN}`,
+        'content-type': 'application/octet-stream',
+      },
+      payload: Buffer.from('bytes'),
+    });
+    expect(phoneFile.statusCode).toBe(403);
+
+    const phoneComplete = await multiApp.inject({
+      method: 'POST',
+      url: `/internal/extraction/${task.id}/complete`,
+      headers: { authorization: `Bearer ${PHONE_TOKEN}` },
+      payload: {},
+    });
+    expect(phoneComplete.statusCode).toBe(403);
+
+    const laptopResolved = await multiApp.inject({
+      method: 'POST',
+      url: `/internal/extraction/${task.id}/resolved`,
+      headers: { authorization: `Bearer ${LAPTOP_TOKEN}` },
+      payload: { media: remoteMedia },
+    });
+    expect(laptopResolved.statusCode).toBe(200);
+    await resolvePromise;
+  });
+
+  it('returns 404 for task operations when taskId is unknown or unowned', async () => {
+    const unknownId = '11112222333344445555666677778888';
+    const progress = await multiApp.inject({
+      method: 'POST',
+      url: `/internal/extraction/${unknownId}/progress`,
+      headers: { authorization: `Bearer ${LAPTOP_TOKEN}` },
+      payload: { percent: 10, step: 'resolving' },
+    });
+    expect(progress.statusCode).toBe(404);
+
+    const failed = await multiApp.inject({
+      method: 'POST',
+      url: `/internal/extraction/${unknownId}/failed`,
+      headers: { authorization: `Bearer ${LAPTOP_TOKEN}` },
+      payload: { code: 'PROVIDER_UNAVAILABLE' },
+    });
+    expect(failed.statusCode).toBe(404);
+
+    const complete = await multiApp.inject({
+      method: 'POST',
+      url: `/internal/extraction/${unknownId}/complete`,
+      headers: { authorization: `Bearer ${LAPTOP_TOKEN}` },
+      payload: {},
+    });
+    expect(complete.statusCode).toBe(404);
+
+    const file = await multiApp.inject({
+      method: 'POST',
+      url: `/internal/extraction/${unknownId}/file`,
+      headers: {
+        authorization: `Bearer ${LAPTOP_TOKEN}`,
+        'content-type': 'application/octet-stream',
+      },
+      payload: Buffer.from('data'),
+    });
+    expect(file.statusCode).toBe(404);
+  });
+
+  it('rejects malformed resolved payload with 400', async () => {
+    multiEngine.extractionNodes.register('laptop', ['youtube'], 1);
+    const resolvePromise = multiEngine.extractionNodes
+      .dispatch({
+        kind: 'resolve',
+        url: 'https://www.youtube.com/watch?v=badpayload',
+        providerId: 'youtube',
+      })
+      .catch(() => undefined);
+
+    const claimed = await multiApp.inject({
+      method: 'POST',
+      url: '/internal/extraction/claim',
+      headers: { authorization: `Bearer ${LAPTOP_TOKEN}` },
+      payload: { nodeId: 'laptop', providers: ['youtube'], capacity: 1 },
+    });
+    const task = claimed.json<{ id: string }>();
+
+    const badPayload = await multiApp.inject({
+      method: 'POST',
+      url: `/internal/extraction/${task.id}/resolved`,
+      headers: { authorization: `Bearer ${LAPTOP_TOKEN}` },
+      payload: { media: { invalid: true } },
+    });
+    expect(badPayload.statusCode).toBe(400);
+
+    multiEngine.extractionNodes.fail(task.id, seraError('SOURCE_BLOCKED'));
+    await resolvePromise;
+  });
+});
