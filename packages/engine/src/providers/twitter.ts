@@ -47,15 +47,42 @@ export class TwitterProvider extends YtdlpProvider {
     if (!context.open) {
       throw seraError('UNSUPPORTED_SOURCE', { detail: 't.co: no open helper available' });
     }
-    const response = await context.open(url, { method: 'GET', followRedirects: false });
-    discard(response.body);
-    if (response.status < 300 || response.status >= 400) {
+    const response = await context.open(url, {
+      method: 'GET',
+      followRedirects: false,
+      headers: { 'user-agent': 'curl/8.7.1' },
+    });
+    let location = header(response.headers, 'location');
+    if (!location && response.status === 200) {
+      let html = '';
+      try {
+        for await (const chunk of response.body) {
+          const text =
+            typeof chunk === 'string'
+              ? chunk
+              : chunk instanceof Uint8Array
+                ? Buffer.from(chunk).toString('utf8')
+                : String(chunk);
+          html += text;
+          if (html.length > 64 * 1024) break;
+        }
+      } catch {}
+      discard(response.body);
+      const match =
+        /content=["']\d+;\s*url=([^"'>]+)["']/i.exec(html) ??
+        /location\.replace\(["']([^"']+)["']\)/i.exec(html);
+      if (match?.[1]) {
+        location = match[1].replace(/\\/g, '');
+      }
+    } else {
+      discard(response.body);
+    }
+    if (!location && (response.status < 300 || response.status >= 400)) {
       throw seraError('UNSUPPORTED_SOURCE', {
         message: 'That short link did not redirect.',
         detail: `t.co: returned HTTP ${response.status}`,
       });
     }
-    const location = header(response.headers, 'location');
     if (!location) {
       throw seraError('UNSUPPORTED_SOURCE', {
         message: 'That short link has no redirect location.',

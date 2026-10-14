@@ -45,6 +45,7 @@ beforeAll(async () => {
     SERA_FFMPEG_PATH: ffmpegPath,
     SERA_FFPROBE_PATH: ffprobePath,
     SERA_TRUST_PROXY: 'true',
+    SERA_RATE_LIMIT_THUMB_PER_MINUTE: '60',
   });
 
   engine = await SeraEngine.create({ config });

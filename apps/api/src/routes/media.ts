@@ -181,7 +181,7 @@ export function registerMediaRoutes(app: FastifyInstance, engine: SeraEngine): v
     {
       config: {
         rateLimit: {
-          max: 60,
+          max: engine.config.rateLimitThumbnailsPerMinute,
           timeWindow: '1 minute',
         },
       },

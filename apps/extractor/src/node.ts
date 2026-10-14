@@ -377,8 +377,9 @@ export class ExtractionNode {
       await this.runner.run(
         spec,
         (update) => {
+          const downloadPercent = Math.min(85, Math.round((update.progress.percent / 100) * 85));
           onProgress(
-            update.progress.percent,
+            downloadPercent,
             update.step,
             update.progress.bytesDownloaded,
             update.progress.bytesTotal,
@@ -393,7 +394,7 @@ export class ExtractionNode {
       const totalBytes = manifest.files.reduce((sum, file) => sum + file.sizeBytes, 0);
       let uploadedBytes = 0;
 
-      onProgress(0, 'Uploading', 0, totalBytes);
+      onProgress(85, 'Uploading', 0, totalBytes);
 
       const queue = [...manifest.files];
       let uploadError: unknown;
@@ -406,8 +407,8 @@ export class ExtractionNode {
             const path = await this.workspaces.resolveFile(jobId, file.name);
             await this.upload(task.id, file.name, file.mimeType, path, abort, (chunkBytes) => {
               uploadedBytes += chunkBytes;
-              const percent =
-                totalBytes > 0 ? Math.min(99, Math.round((uploadedBytes / totalBytes) * 100)) : 99;
+              const uploadFrac = totalBytes > 0 ? uploadedBytes / totalBytes : 1;
+              const percent = Math.min(99, Math.round(85 + uploadFrac * 14));
               onProgress(percent, 'Uploading', uploadedBytes, totalBytes);
             });
           } catch (error) {

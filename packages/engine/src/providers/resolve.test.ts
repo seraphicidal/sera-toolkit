@@ -7,6 +7,7 @@ import type { DownloadPlan, ProviderContext, ResolvedMedia } from './types.js';
 import { InstagramProvider } from './instagram.js';
 import { RedditProvider } from './reddit.js';
 import { SoundCloudProvider } from './soundcloud.js';
+import { GenericProvider } from './generic.js';
 import { TwitterProvider } from './twitter.js';
 import { YouTubeProvider } from './youtube.js';
 
@@ -423,6 +424,29 @@ describe('X GIF post', () => {
     expect(probedUrl).toBe('https://x.com/jack/status/20');
   });
 
+  it('expands a t.co link returning HTTP 200 with meta-refresh HTML', async () => {
+    let probedUrl: string | undefined;
+    const html =
+      '<noscript><META http-equiv="refresh" content="0;URL=https://twitter.com/jack/status/20"></noscript>';
+    const context: ProviderContext = {
+      ...contextFor(gifPost),
+      probe: (url) => {
+        probedUrl = url.toString();
+        return Promise.resolve(gifPost);
+      },
+      open: () =>
+        Promise.resolve({
+          status: 200,
+          headers: {},
+          url: 'https://t.co/status123',
+          body: [Buffer.from(html)],
+        } as unknown as Awaited<ReturnType<NonNullable<ProviderContext['open']>>>),
+    };
+    const media = await new TwitterProvider().resolve(new URL('https://t.co/status123'), context);
+    expect(media.items.length).toBeGreaterThan(0);
+    expect(probedUrl).toBe('https://x.com/jack/status/20');
+  });
+
   it('rejects a t.co link pointing to a non-status X URL', async () => {
     const context: ProviderContext = {
       ...contextFor(gifPost),
@@ -593,6 +617,30 @@ describe('extractor tuning reaches the download', () => {
     expect(media.items.length).toBeGreaterThan(0);
     for (const plan of media.items[0]!.plans) {
       if (plan.fetch.via === 'ytdlp') expect(plan.fetch.extractorArgs).toBeUndefined();
+    }
+  });
+
+  it('sets useExtractors default for extraAllowedHosts with GenericProvider', async () => {
+    let probeOptions: Parameters<ProviderContext['probe']>[1];
+    const genericContext: ProviderContext = {
+      ...contextFor(youtubeInfo),
+      config: { ...config, extraAllowedHosts: ['example.com'] },
+      probe: (_url, opts) => {
+        probeOptions = opts;
+        return Promise.resolve(youtubeInfo);
+      },
+    };
+    const media = await new GenericProvider().resolve(
+      new URL('https://example.com/video.mp4'),
+      genericContext,
+    );
+    expect(probeOptions?.useExtractors).toBe('default');
+    const ytdlpPlans = media.items[0]!.plans.filter((plan) => plan.fetch.via === 'ytdlp');
+    expect(ytdlpPlans.length).toBeGreaterThan(0);
+    for (const plan of ytdlpPlans) {
+      if (plan.fetch.via === 'ytdlp') {
+        expect(plan.fetch.useExtractors).toBe('default');
+      }
     }
   });
 });

@@ -47,9 +47,18 @@ export class MemoryJobBackend implements JobBackend {
 
     if (isTerminalJobState(current.state)) return Promise.resolve(current);
 
+    const cleanedSpec = current.spec
+      ? {
+          ...current.spec,
+          resolvedMedia: undefined,
+          rawInfoJson: undefined,
+        }
+      : current.spec;
+
     const next: JobRecord = {
       ...current,
       ...patch,
+      ...(cleanedSpec ? { spec: cleanedSpec } : {}),
       ...(patch.progress
         ? {
             progress: {

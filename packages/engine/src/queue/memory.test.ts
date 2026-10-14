@@ -49,6 +49,33 @@ describe('MemoryJobBackend', () => {
     await backend.close();
   });
 
+  it('strips large resolvedMedia and rawInfoJson from spec on patch', async () => {
+    const backend = new MemoryJobBackend(silentLogger());
+    const initial = {
+      ...record('a-bloated'),
+      spec: {
+        ...record('a-bloated').spec,
+        resolvedMedia: {
+          provider: 'test',
+          providerLabel: 'Test',
+          url: 'https://example.com',
+          type: 'single',
+          title: 'T',
+          items: [],
+        } as never,
+        rawInfoJson: '{"large":true}',
+      },
+    };
+    await backend.submit(initial);
+    expect((await backend.get('a-bloated'))?.spec.rawInfoJson).toBe('{"large":true}');
+
+    const patched = await backend.patch('a-bloated', { state: 'downloading', step: 'Downloading' });
+    expect(patched?.spec.resolvedMedia).toBeUndefined();
+    expect(patched?.spec.rawInfoJson).toBeUndefined();
+    expect((await backend.get('a-bloated'))?.spec.rawInfoJson).toBeUndefined();
+    await backend.close();
+  });
+
   it('refuses to move a job out of a terminal state', async () => {
     const backend = new MemoryJobBackend(silentLogger());
     await backend.submit(record('a-terminal'));

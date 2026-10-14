@@ -561,6 +561,7 @@ export class MediaResolver {
           followRedirects: options?.followRedirects ?? true,
           timeoutMs: options?.timeoutMs ?? this.config.resolveTimeoutSeconds * 1000,
           allowUrl,
+          ...(options?.headers ? { headers: options.headers } : {}),
           ...(options?.signal ? { signal: options.signal } : signal ? { signal } : {}),
         });
       },

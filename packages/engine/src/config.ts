@@ -80,6 +80,7 @@ const envSchema = z.object({
 
   SERA_RATE_LIMIT_RESOLVE_PER_MINUTE: z.coerce.number().int().min(1).default(20),
   SERA_RATE_LIMIT_JOBS_PER_MINUTE: z.coerce.number().int().min(1).default(10),
+  SERA_RATE_LIMIT_THUMB_PER_MINUTE: z.coerce.number().int().min(1).optional(),
   SERA_MAX_CONCURRENT_JOBS_PER_CLIENT: z.coerce.number().int().min(1).default(3),
   SERA_TRUST_PROXY: booleanish.default(false),
 
@@ -164,6 +165,7 @@ export interface EngineConfig {
 
   readonly rateLimitResolvePerMinute: number;
   readonly rateLimitJobsPerMinute: number;
+  readonly rateLimitThumbnailsPerMinute: number;
   readonly maxConcurrentJobsPerClient: number;
   readonly trustProxy: boolean;
 
@@ -307,7 +309,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): EngineConfig {
     adminToken: e.SERA_ADMIN_TOKEN,
 
     extractionNodes: {
-      token: legacyToken || (nodeTokens.values().next().value ?? ''),
+      token: legacyTokenUsed ? legacyToken : (nodeTokens.values().next().value ?? ''),
       tokens: nodeTokens,
       workerToken,
       enabled: nodesEnabled,
@@ -347,6 +349,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): EngineConfig {
 
     rateLimitResolvePerMinute: e.SERA_RATE_LIMIT_RESOLVE_PER_MINUTE,
     rateLimitJobsPerMinute: e.SERA_RATE_LIMIT_JOBS_PER_MINUTE,
+    rateLimitThumbnailsPerMinute:
+      e.SERA_RATE_LIMIT_THUMB_PER_MINUTE ??
+      Math.max(300, e.SERA_RATE_LIMIT_RESOLVE_PER_MINUTE * (e.SERA_MAX_ITEMS_PER_JOB + 1)),
     maxConcurrentJobsPerClient: e.SERA_MAX_CONCURRENT_JOBS_PER_CLIENT,
     trustProxy: e.SERA_TRUST_PROXY,
 

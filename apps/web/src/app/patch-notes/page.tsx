@@ -27,6 +27,42 @@ interface PatchRecord {
 
 const PATCHES: readonly PatchRecord[] = [
   {
+    id: 'node-isolation-memory-concurrency',
+    title: 'Per-Node Isolation, Short-Link Resolution, Redis Memory Safety & Upload Concurrency',
+    stats: {
+      files: 19,
+      insertions: 318,
+      deletions: 46,
+      total: 364,
+    },
+    categories: [
+      {
+        name: 'Node Authentication & Upload Concurrency',
+        items: [
+          'Enforced strict per-node token isolation (SERA_EXTRACTION_NODE_TOKENS), disabling legacy fallback token bypasses when per-node credentials are configured.',
+          'Hardened concurrent extraction node uploads with aggregate in-memory byte streaming bounds, preventing total size quota circumvention (413 TOO_LARGE).',
+          'Resolved file naming collisions during concurrent worker uploads and prevented recursive workspace directory deletion on single-stream errors.',
+        ],
+      },
+      {
+        name: 'Provider Resolution & Extraction',
+        items: [
+          'Fixed t.co URL expansion by sending a curl User-Agent for reliable HTTP 301 redirects, backed by an HTML meta-refresh and location fallback parser.',
+          'Allowed generic yt-dlp extractor fallback for custom whitelisted domains configured in SERA_EXTRA_ALLOWED_HOSTS.',
+          'Forwarded SERA_EXTRA_ALLOWED_HOSTS through Docker Compose orchestration across API and Worker containers.',
+        ],
+      },
+      {
+        name: 'Queue Memory Footprint & Web Client',
+        items: [
+          'Pruned resolvedMedia and rawInfoJson from Redis and in-memory job records during patch execution, slashing Redis memory usage and SSE/PubSub broadcast sizes.',
+          'Smoothed extraction node upload progress tracking from 85% to 99%, eliminating progress lock-ups caused by queue Math.max clamping.',
+          'Dynamically scaled thumbnail proxy rate limits (SERA_RATE_LIMIT_THUMB_PER_MINUTE) and added exponential retry backoff in web item picker.',
+        ],
+      },
+    ],
+  },
+  {
     id: 'security-hardening-performance',
     title: 'Egress Guard, Atomic Queuing, Download Acceleration & Per-Node Tokens',
     stats: {

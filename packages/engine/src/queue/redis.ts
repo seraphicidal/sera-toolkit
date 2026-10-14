@@ -39,6 +39,10 @@ if patch.progress then
   current.progress.percent = maxPercent
 end
 current.updatedAt = ARGV[4]
+if current.spec then
+  current.spec.resolvedMedia = nil
+  current.spec.rawInfoJson = nil
+end
 local encoded = cjson.encode(current)
 redis.call('set', KEYS[1], encoded, 'EX', ARGV[2])
 redis.call('publish', ARGV[3], encoded)

@@ -32,6 +32,9 @@ export class GenericProvider implements MediaProvider {
     readonly id = 'generic';
     readonly label = 'Web page';
     readonly hosts: readonly string[] = [];
+    protected override useExtractors(): string {
+      return 'default';
+    }
   })();
 
   canHandle(): boolean {

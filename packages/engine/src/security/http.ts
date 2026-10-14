@@ -236,7 +236,10 @@ function hopHeaders(
   jar: Map<string, string>,
 ): Record<string, string> {
   const { cookie: _given, ...rest } = options.headers ?? {};
-  const headers: Record<string, string> = { ...DEFAULT_HEADERS, ...rest };
+  const headers: Record<string, string> = { ...DEFAULT_HEADERS };
+  for (const [key, value] of Object.entries(rest)) {
+    headers[key.toLowerCase()] = value;
+  }
   if (jar.size && current.hostname === first.hostname) {
     headers.cookie = [...jar].map(([name, value]) => `${name}=${value}`).join('; ');
   }

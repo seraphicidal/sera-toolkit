@@ -264,6 +264,41 @@ describe('extraction node endpoints', () => {
     expect(await dispatched).toEqual([]);
   });
 
+  it('enforces size limit across concurrent uploads and preserves intact files on single upload error', async () => {
+    engine.extractionNodes.register('test-node', ['youtube'], 1);
+    const dispatched = engine.extractionNodes
+      .dispatchJob({
+        kind: 'job',
+        url: 'https://www.youtube.com/watch?v=x',
+        providerId: 'youtube',
+        planKeys: ['video/mp4/1080p'],
+      })
+      .catch(() => []);
+    const task = (await claim()).json();
+
+    const chunk1 = Buffer.alloc(40 * 1024, 0x41);
+    const chunk2 = Buffer.alloc(40 * 1024, 0x42);
+
+    const [res1, res2] = await Promise.all([
+      fetch(`http://127.0.0.1:${String(port)}/internal/extraction/${task.id}/file?name=part1.mp4`, {
+        method: 'POST',
+        headers: { ...auth, 'content-type': 'application/octet-stream' },
+        body: chunk1,
+      }),
+      fetch(`http://127.0.0.1:${String(port)}/internal/extraction/${task.id}/file?name=part2.mp4`, {
+        method: 'POST',
+        headers: { ...auth, 'content-type': 'application/octet-stream' },
+        body: chunk2,
+      }),
+    ]);
+
+    const statuses = [res1.status, res2.status];
+    expect(statuses).toContain(413);
+
+    engine.extractionNodes.fail(task.id, seraError('TOO_LARGE'));
+    expect(await dispatched).toEqual([]);
+  });
+
   it('puts an upload where the reaper can find it on its own', async () => {
     engine.extractionNodes.register('test-node', ['youtube'], 1);
     const dispatched = engine.extractionNodes.dispatchJob({
@@ -411,6 +446,7 @@ describe('multi-node authentication and isolation', () => {
         SERA_SECRET: 'integration-secret',
         SERA_DATA_DIR: multiDataDir,
         SERA_EXTRACTION_NODE_TOKENS: `laptop:${LAPTOP_TOKEN},phone:${PHONE_TOKEN}`,
+        SERA_EXTRACTION_NODE_TOKEN: 'old-legacy-secret',
         SERA_EXTRACTION_WORKER_TOKEN: WORKER_TOKEN,
         SERA_EXTRACTION_CLAIM_HOLD_SECONDS: '1',
       }),
@@ -423,6 +459,16 @@ describe('multi-node authentication and isolation', () => {
     await multiApp?.close();
     await multiEngine?.close?.();
     await rm(multiDataDir, { recursive: true, force: true });
+  });
+
+  it('rejects old legacy shared token when per-node tokens are configured', async () => {
+    const legacyClaim = await multiApp.inject({
+      method: 'POST',
+      url: '/internal/extraction/claim',
+      headers: { authorization: 'Bearer old-legacy-secret' },
+      payload: { nodeId: 'laptop', providers: ['youtube'], capacity: 1 },
+    });
+    expect(legacyClaim.statusCode).toBe(401);
   });
 
   it('allows laptop and phone to claim with their respective tokens', async () => {

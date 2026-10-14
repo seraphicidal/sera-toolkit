@@ -74,24 +74,6 @@ const failedSchema = z.object({
 
 const RESOLVED_BODY_LIMIT = 4 * 1024 * 1024;
 
-function limitTo(maxBytes: number, isCancelled: () => boolean): Transform {
-  let seen = 0;
-  return new Transform({
-    transform(chunk: Buffer, _encoding, done) {
-      if (isCancelled()) {
-        done(seraError('CANCELLED'));
-        return;
-      }
-      seen += chunk.length;
-      if (seen > maxBytes) {
-        done(seraError('TOO_LARGE', { detail: 'node: upload exceeds the size limit' }));
-        return;
-      }
-      done(null, chunk);
-    },
-  });
-}
-
 const resolvedPlanSchema = z.object({
   kind: z.enum(['video', 'audio', 'image', 'gif', 'carousel']),
   container: z.string().min(1).max(16),
@@ -220,11 +202,17 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
 
   const dispatched = new Map<string, Dispatched>();
   const DISPATCH_KEEP_MS = 60_000;
+  const taskByteTrackers = new Map<string, { bytes: number }>();
+  const taskInFlightFiles = new Map<string, Set<string>>();
 
   const sweep = setInterval(() => {
     const now = Date.now();
     for (const [id, entry] of dispatched) {
-      if (entry.settledAt && now - entry.settledAt > DISPATCH_KEEP_MS) dispatched.delete(id);
+      if (entry.settledAt && now - entry.settledAt > DISPATCH_KEEP_MS) {
+        dispatched.delete(id);
+        taskByteTrackers.delete(id);
+        taskInFlightFiles.delete(id);
+      }
     }
   }, 30_000);
   sweep.unref();
@@ -248,7 +236,11 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
       for (const [nodeId, token] of config.extractionNodes.tokens) {
         if (matchesToken(presented, token)) return { nodeId };
       }
-      if (config.extractionNodes.token && matchesToken(presented, config.extractionNodes.token)) {
+      if (
+        config.extractionNodes.legacyTokenUsed &&
+        config.extractionNodes.token &&
+        matchesToken(presented, config.extractionNodes.token)
+      ) {
         return { nodeId: 'legacy', isLegacy: true };
       }
       void reply.status(401).send({ error: { code: 'NOT_FOUND', message: 'Not found.' } });
@@ -391,6 +383,8 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
             })
           : seraError('PROVIDER_UNAVAILABLE', { detail: 'node: malformed failure report' });
 
+        taskByteTrackers.delete(request.params.taskId);
+        taskInFlightFiles.delete(request.params.taskId);
         const accepted = extractionNodes.fail(request.params.taskId, error);
         return reply.send({ accepted });
       },
@@ -425,24 +419,53 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
             () => 0,
           );
         }
-        const remainingBytes = Math.max(0, config.maxFilesizeBytes - existingBytes);
-        const taken = new Set(existing.map((entry) => entry.toLowerCase()));
+        let tracker = taskByteTrackers.get(taskId);
+        if (!tracker) {
+          tracker = { bytes: existingBytes };
+          taskByteTrackers.set(taskId, tracker);
+        }
+
+        let inFlight = taskInFlightFiles.get(taskId);
+        if (!inFlight) {
+          inFlight = new Set<string>();
+          taskInFlightFiles.set(taskId, inFlight);
+        }
+        for (const entry of existing) inFlight.add(entry.toLowerCase());
+
         const name = dedupeFilename(
           sanitizeUploadedFilename(request.query.name ?? 'media.bin'),
-          taken,
+          inFlight,
         );
+        inFlight.add(name.toLowerCase());
         const path = join(directory, name);
 
+        let streamBytes = 0;
+        const limiter = new Transform({
+          transform(chunk: Buffer, _encoding, done) {
+            if (extractionNodes.isCancelled(taskId)) {
+              done(seraError('CANCELLED'));
+              return;
+            }
+            tracker.bytes += chunk.length;
+            streamBytes += chunk.length;
+            if (tracker.bytes > config.maxFilesizeBytes) {
+              done(seraError('TOO_LARGE', { detail: 'node: upload exceeds the size limit' }));
+              return;
+            }
+            done(null, chunk);
+          },
+        });
+
         try {
-          await pipeline(
-            request.raw,
-            limitTo(remainingBytes, () => extractionNodes.isCancelled(taskId)),
-            createWriteStream(path),
-            { signal: AbortSignal.timeout(config.jobTimeoutSeconds * 1000) },
-          );
+          await pipeline(request.raw, limiter, createWriteStream(path), {
+            signal: AbortSignal.timeout(config.jobTimeoutSeconds * 1000),
+          });
         } catch (error) {
+          tracker.bytes -= streamBytes;
+          inFlight.delete(name.toLowerCase());
           await rm(path, { force: true }).catch(() => undefined);
-          if (existing.length === 0) {
+          const remaining = await readdir(directory).catch(() => [] as string[]);
+          if (remaining.length === 0) {
             await rm(directory, { recursive: true, force: true }).catch(() => undefined);
           }
           if (error instanceof SeraError && error.code === 'CANCELLED') {
@@ -461,7 +484,15 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
           mimeType: request.query.mime ?? 'application/octet-stream',
           path,
         });
-        if (!accepted) await rm(directory, { recursive: true, force: true });
+        if (!accepted) {
+          tracker.bytes -= streamBytes;
+          inFlight.delete(name.toLowerCase());
+          await rm(path, { force: true }).catch(() => undefined);
+          const remaining = await readdir(directory).catch(() => [] as string[]);
+          if (remaining.length === 0) {
+            await rm(directory, { recursive: true, force: true }).catch(() => undefined);
+          }
+        }
         return reply.send({ accepted, sizeBytes: written.size });
       },
     );
@@ -473,6 +504,8 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
         const auth = authenticateNode(request, reply);
         if (!auth) return reply;
         if (!validateTaskOwnership(request.params.taskId, auth, reply)) return reply;
+        taskByteTrackers.delete(request.params.taskId);
+        taskInFlightFiles.delete(request.params.taskId);
         return reply.send({ accepted: extractionNodes.completeJob(request.params.taskId) });
       },
     );

@@ -50,6 +50,10 @@ export abstract class YtdlpProvider implements MediaProvider {
     return [];
   }
 
+  protected useExtractors(_url: URL, _context: ProviderContext): string | undefined {
+    return undefined;
+  }
+
   protected treatsSilentShortVideoAsGif(): boolean {
     return false;
   }
@@ -87,10 +91,12 @@ export abstract class YtdlpProvider implements MediaProvider {
 
   protected async runExtractor(url: URL, context: ProviderContext): Promise<ResolvedMedia> {
     const proxy = context.config.proxyFor(this.id);
+    const useExtractors = this.useExtractors(url, context);
     const info = await context.probe(url.toString(), {
       playlist: this.wantsPlaylist(url),
       extractorArgs: this.extractorArgs(url, context),
       timeoutMs: context.config.resolveTimeoutMsFor(this.id),
+      ...(useExtractors ? { useExtractors } : {}),
       ...(proxy ? { proxy } : {}),
     });
     return this.toResolvedMedia(info, url, context);
@@ -110,13 +116,21 @@ export abstract class YtdlpProvider implements MediaProvider {
     });
 
     const args = this.extractorArgs(url, context);
-    if (args.length) {
+    const useExtractorsVal = this.useExtractors(url, context);
+    if (args.length || useExtractorsVal) {
       for (const [index, item] of items.entries()) {
         items[index] = {
           ...item,
           plans: item.plans.map((plan) =>
             plan.fetch.via === 'ytdlp'
-              ? { ...plan, fetch: { ...plan.fetch, extractorArgs: args } }
+              ? {
+                  ...plan,
+                  fetch: {
+                    ...plan.fetch,
+                    ...(args.length ? { extractorArgs: args } : {}),
+                    ...(useExtractorsVal ? { useExtractors: useExtractorsVal } : {}),
+                  },
+                }
               : plan,
           ),
         };

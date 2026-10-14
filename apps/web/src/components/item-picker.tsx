@@ -77,6 +77,7 @@ function ItemTile({
   readonly selected: boolean;
   readonly onToggle: () => void;
 }) {
+  const [retries, setRetries] = useState(0);
   const [thumbnailFailed, setThumbnailFailed] = useState(false);
   const Icon = KIND_ICON[item.kind];
   const showThumbnail = Boolean(item.thumbnail) && !thumbnailFailed;
@@ -102,11 +103,21 @@ function ItemTile({
       <div className="relative aspect-4/3 w-full bg-[var(--color-sunken)]">
         {showThumbnail ? (
           <img
-            src={item.thumbnail}
+            src={
+              retries > 0 && item.thumbnail
+                ? `${item.thumbnail}${item.thumbnail.includes('?') ? '&' : '?'}retry=${retries}`
+                : item.thumbnail
+            }
             alt=""
             loading="lazy"
             decoding="async"
-            onError={() => setThumbnailFailed(true)}
+            onError={() => {
+              if (retries < 2) {
+                setTimeout(() => setRetries((r) => r + 1), 1000 * (retries + 1));
+              } else {
+                setThumbnailFailed(true);
+              }
+            }}
             className="size-full object-cover"
           />
         ) : (

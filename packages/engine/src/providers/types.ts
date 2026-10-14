@@ -64,6 +64,7 @@ export interface ProviderContext {
       readonly followRedirects?: boolean;
       readonly timeoutMs?: number;
       readonly signal?: AbortSignal;
+      readonly headers?: Readonly<Record<string, string>>;
     },
   ) => Promise<OpenResponse>;
 }
