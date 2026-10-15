@@ -1,5 +1,28 @@
-import type { YtdlpFormat } from '../extract/ytdlp-types.js';
+import type { YtdlpFormat, YtdlpInfo } from '../extract/ytdlp-types.js';
 import { num, str } from '../extract/ytdlp-types.js';
+
+export const IMAGE_EXTENSIONS: ReadonlySet<string> = new Set([
+  'jpg',
+  'jpeg',
+  'png',
+  'webp',
+  'avif',
+  'bmp',
+  'heic',
+  'tif',
+  'tiff',
+]);
+export const AUDIO_EXTENSIONS: ReadonlySet<string> = new Set([
+  'mp3',
+  'm4a',
+  'aac',
+  'opus',
+  'ogg',
+  'oga',
+  'wav',
+  'flac',
+  'wma',
+]);
 
 export interface UsableFormat {
   readonly id: string;
@@ -44,6 +67,29 @@ function isRedundantTwin(format: YtdlpFormat): boolean {
   return note.includes('drc') || note.includes('premium');
 }
 
+export function entryFormats(info: YtdlpInfo): readonly YtdlpFormat[] | undefined {
+  if (info.formats?.length) return info.formats;
+  const id = str(info.format_id);
+  const url = str(info.url);
+  if (!id || !url) return undefined;
+  const ext = str(info.ext);
+  const protocol = str(info.protocol);
+  return [
+    {
+      format_id: id,
+      url,
+      ...(ext ? { ext } : {}),
+      ...(protocol ? { protocol } : {}),
+      vcodec: info.vcodec ?? null,
+      acodec: info.acodec ?? null,
+      width: info.width ?? null,
+      height: info.height ?? null,
+      filesize: info.filesize ?? null,
+      filesize_approx: info.filesize_approx ?? null,
+    },
+  ];
+}
+
 export function toUsableFormats(formats: readonly YtdlpFormat[] | undefined): UsableFormat[] {
   if (!formats?.length) return [];
   const out: UsableFormat[] = [];
@@ -58,8 +104,11 @@ export function toUsableFormats(formats: readonly YtdlpFormat[] | undefined): Us
 
     const vcodec = str(format.vcodec);
     const acodec = str(format.acodec);
-    const hasVideo = Boolean(vcodec) && vcodec !== 'none';
-    const hasAudio = Boolean(acodec) && acodec !== 'none';
+    const ext = (str(format.ext) ?? '').toLowerCase();
+    const codecsUnknown = format.vcodec == null && format.acodec == null;
+    if (codecsUnknown && IMAGE_EXTENSIONS.has(ext)) continue;
+    const hasVideo = codecsUnknown ? !AUDIO_EXTENSIONS.has(ext) : Boolean(vcodec);
+    const hasAudio = codecsUnknown || Boolean(acodec);
     if (!hasVideo && !hasAudio) continue;
 
     const exact = num(format.filesize);
@@ -122,6 +171,13 @@ export function fitsInMp4(vcodec: string | undefined, acodec: string | undefined
     a.startsWith('ac-3') ||
     a.startsWith('ec-3');
   return videoOk && audioOk;
+}
+
+export function fitsInMov(vcodec: string | undefined, acodec: string | undefined): boolean {
+  const v = (vcodec ?? '').toLowerCase();
+  const videoOk =
+    v.startsWith('avc') || v.startsWith('h264') || v.startsWith('hev') || v.startsWith('hvc');
+  return videoOk && fitsInMp4(vcodec, acodec);
 }
 
 export interface FormatSplit {

@@ -277,6 +277,7 @@ describe('RedditProvider', () => {
       via: 'ytdlp',
       selector: 'best',
       merge: 'mp4',
+      useExtractors: 'generic',
     });
     expect(manifestUrlFor(withManifest)).toBe('https://v.redd.it/a/HLSPlaylist.m3u8');
 
@@ -288,6 +289,17 @@ describe('RedditProvider', () => {
       url: 'https://v.redd.it/b/DASH_720.mp4',
     });
     expect(manifestUrlFor(onlyFile)).toBeUndefined();
+  });
+
+  it('opens the generic extractor only for manifests on the v.redd.it host', () => {
+    const elsewhere: RedditPost = {
+      secure_media: { reddit_video: { hls_url: 'https://cdn.example.com/a/HLSPlaylist.m3u8' } },
+    };
+    expect(itemsFrom(elsewhere, 50)[0]?.plans[0]?.fetch).toEqual({
+      via: 'ytdlp',
+      selector: 'best',
+      merge: 'mp4',
+    });
   });
 
   it('says when hosted video has no sound instead of letting it be discovered later', () => {

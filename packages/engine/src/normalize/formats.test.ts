@@ -4,7 +4,9 @@ import {
   audioBitrateChoices,
   bestAudio,
   bestVideoPerHeight,
+  entryFormats,
   estimateSize,
+  fitsInMov,
   fitsInMp4,
   nativeContainer,
   splitFormats,
@@ -182,6 +184,67 @@ describe('toUsableFormats', () => {
   it('drops entries with neither a video nor an audio codec', () => {
     expect(toUsableFormats([{ format_id: 'x', vcodec: 'none', acodec: 'none' }])).toEqual([]);
   });
+
+  it('keeps a video rendition yt-dlp names no codecs for, as picture and sound', () => {
+    const [format] = toUsableFormats([
+      { format_id: '720', ext: 'mp4', protocol: 'https', height: 720 },
+    ]);
+    expect(format).toMatchObject({ id: '720', hasVideo: true, hasAudio: true, height: 720 });
+  });
+
+  it('reads a codec-less audio file as sound only', () => {
+    const [format] = toUsableFormats([{ format_id: 'a', ext: 'm4a', protocol: 'https' }]);
+    expect(format).toMatchObject({ hasVideo: false, hasAudio: true });
+  });
+
+  it('does not mistake a codec-less image for a video', () => {
+    expect(toUsableFormats([{ format_id: 'i', ext: 'jpg', protocol: 'https' }])).toEqual([]);
+  });
+
+  it('still trusts a codec that says a stream is absent', () => {
+    const [format] = toUsableFormats([
+      { format_id: 'v', ext: 'mp4', vcodec: 'avc1.64001f', acodec: 'none', height: 720 },
+    ]);
+    expect(format).toMatchObject({ hasVideo: true, hasAudio: false });
+  });
+});
+
+describe('entryFormats', () => {
+  it('returns the list yt-dlp gave', () => {
+    const formats = [{ format_id: '18', ext: 'mp4' }];
+    expect(entryFormats({ formats })).toBe(formats);
+  });
+
+  it('reads a single-rendition result as its own format', () => {
+    expect(
+      entryFormats({
+        format_id: '0',
+        url: 'https://cdn.example.com/v.mp4',
+        ext: 'mp4',
+        protocol: 'https',
+        width: 540,
+        height: 960,
+      }),
+    ).toEqual([
+      {
+        format_id: '0',
+        url: 'https://cdn.example.com/v.mp4',
+        ext: 'mp4',
+        protocol: 'https',
+        vcodec: null,
+        acodec: null,
+        width: 540,
+        height: 960,
+        filesize: null,
+        filesize_approx: null,
+      },
+    ]);
+  });
+
+  it('finds nothing when there is neither a list nor a rendition', () => {
+    expect(entryFormats({ title: 'x' })).toBeUndefined();
+    expect(entryFormats({ url: 'https://example.com/a.mp4' })).toBeUndefined();
+  });
 });
 
 describe('splitFormats', () => {
@@ -239,6 +302,23 @@ describe('container reasoning', () => {
     expect(fitsInMp4('vp09.00.40.08', 'mp4a.40.2')).toBe(true);
     expect(fitsInMp4('vp09.00.40.08', 'opus')).toBe(false);
     expect(fitsInMp4('vp8', 'mp4a.40.2')).toBe(false);
+  });
+});
+
+describe('fitsInMov', () => {
+  it('accepts the codecs a MOV remux can carry', () => {
+    expect(fitsInMov('avc1.640028', 'mp4a.40.2')).toBe(true);
+    expect(fitsInMov('hvc1.1.6.L120', 'none')).toBe(true);
+  });
+
+  it('refuses VP9, AV1 and Opus, which FFmpeg only writes into MP4', () => {
+    expect(fitsInMov('vp09.00.40.08', 'mp4a.40.5')).toBe(false);
+    expect(fitsInMov('av01.0.08M.08', 'mp4a.40.2')).toBe(false);
+    expect(fitsInMov('avc1.640028', 'opus')).toBe(false);
+  });
+
+  it('does not promise a remux when the codec is unknown', () => {
+    expect(fitsInMov(undefined, undefined)).toBe(false);
   });
 });
 

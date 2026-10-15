@@ -4,11 +4,15 @@ import { num, str } from '../extract/ytdlp-types.js';
 import type { DownloadPlan } from '../providers/types.js';
 import { codecLabel, formatBytes, qualityLabel } from '../util/format.js';
 import {
+  AUDIO_EXTENSIONS,
   audioBitrateChoices,
   bestAudio,
   bestVideoPerHeight,
+  entryFormats,
   estimateSize,
+  fitsInMov,
   fitsInMp4,
+  IMAGE_EXTENSIONS,
   nativeContainer,
   splitFormats,
   toUsableFormats,
@@ -20,26 +24,13 @@ export interface PlanBuildOptions {
   readonly maxFilesizeBytes?: number;
 }
 
-const IMAGE_EXTENSIONS = new Set([
-  'jpg',
-  'jpeg',
-  'png',
-  'webp',
-  'avif',
-  'bmp',
-  'heic',
-  'tif',
-  'tiff',
-]);
-const AUDIO_EXTENSIONS = new Set(['mp3', 'm4a', 'aac', 'opus', 'ogg', 'oga', 'wav', 'flac', 'wma']);
-
 export function kindOf(info: YtdlpInfo): MediaKind {
   const ext = (str(info.ext) ?? '').toLowerCase();
   if (ext === 'gif') return 'gif';
   if (IMAGE_EXTENSIONS.has(ext)) return 'image';
   if (AUDIO_EXTENSIONS.has(ext)) return 'audio';
 
-  const formats = toUsableFormats(info.formats);
+  const formats = toUsableFormats(entryFormats(info));
   if (formats.length) {
     const { videoOnly, progressive, audioOnly } = splitFormats(formats);
     if (videoOnly.length || progressive.length) {
@@ -185,7 +176,7 @@ export function buildAlternateContainerPlans(best: DownloadPlan | undefined): Do
   if (best?.kind !== 'video' || best.fetch.via !== 'ytdlp') return [];
   const plans: DownloadPlan[] = [];
 
-  if (best.container === 'mp4' && fitsInMp4(best.videoCodec, best.audioCodec)) {
+  if (best.container === 'mp4' && fitsInMov(best.videoCodec, best.audioCodec)) {
     plans.push({
       ...best,
       container: 'mov',
@@ -230,7 +221,7 @@ export function buildAudioPlans(
   options: PlanBuildOptions,
 ): DownloadPlan[] {
   const { audioOnly, progressive } = splitFormats(formats);
-  const pool = audioOnly.length ? audioOnly : progressive;
+  const pool = audioOnly.length ? audioOnly : progressive.filter((format) => format.acodec);
   if (!bestAudio(pool)) return [];
 
   const plans: DownloadPlan[] = [];

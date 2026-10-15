@@ -79,6 +79,8 @@ export interface YtdlpInfo {
   readonly width?: number | null;
   readonly height?: number | null;
   readonly url?: string | null;
+  readonly format_id?: string | null;
+  readonly protocol?: string | null;
   readonly vcodec?: string | null;
   readonly acodec?: string | null;
   readonly filesize?: number | null;
