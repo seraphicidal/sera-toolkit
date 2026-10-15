@@ -203,6 +203,48 @@
     }
   },
   {
+    "id": "threads-video",
+    "url": "https://www.threads.com/@instagram/post/DeexnW4nw3V",
+    "expect": {
+      "kinds": ["video"]
+    },
+    "download": [
+      {
+        "kind": "video"
+      },
+      {
+        "kind": "audio"
+      }
+    ]
+  },
+  {
+    "id": "threads-short-link",
+    "url": "https://www.threads.net/t/DeexnW4nw3V",
+    "expect": {
+      "kinds": ["video"]
+    }
+  },
+  {
+    "id": "threads-photos",
+    "url": "https://www.threads.com/@nasa/post/Decc755lYhC",
+    "expect": {
+      "minItems": 4,
+      "kinds": ["image"]
+    },
+    "download": [
+      {
+        "kind": "image"
+      }
+    ]
+  },
+  {
+    "id": "threads-text-reply",
+    "url": "https://www.threads.com/@nasa/post/Decc8jiFYaY",
+    "expect": {
+      "failure": "DELETED_CONTENT"
+    }
+  },
+  {
     "id": "mastodon",
     "url": "https://mastodon.world/@toms_travels/117229304292401389",
     "expect": {
