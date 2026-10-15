@@ -12,7 +12,7 @@ import {
   type RedditVideo,
 } from './reddit-api.js';
 import type { ExtractionStrategy } from '../extract/strategy.js';
-import { readViaEmbed, videoBaseFromUrl } from './reddit-embed.js';
+import { MANIFEST_EXTRACTORS, readViaEmbed, videoBaseFromUrl } from './reddit-embed.js';
 import type { DownloadPlan, ProviderContext, ResolvedItem, ResolvedMedia } from './types.js';
 import { YtdlpProvider } from './ytdlp-base.js';
 
@@ -146,6 +146,14 @@ export function postIdFrom(url: URL): string | undefined {
 
 function unescapeUrl(value: string): string {
   return value.replace(/&amp;/g, '&');
+}
+
+function onRedditVideoHost(url: string): boolean {
+  try {
+    return videoBaseFromUrl(new URL(url)) !== undefined;
+  } catch {
+    return false;
+  }
 }
 
 function httpsUrl(value: string | undefined): string | undefined {
@@ -282,7 +290,12 @@ function videoItem(video: RedditVideo, post: RedditPost): ResolvedItem | undefin
   const isGif = video.is_gif === true;
 
   const fetchPlan: DownloadPlan['fetch'] = viaManifest
-    ? { via: 'ytdlp', selector: 'best', merge: 'mp4' }
+    ? {
+        via: 'ytdlp',
+        selector: 'best',
+        merge: 'mp4',
+        ...(onRedditVideoHost(url) ? { useExtractors: MANIFEST_EXTRACTORS } : {}),
+      }
     : { via: 'direct', url };
 
   const plans: DownloadPlan[] = [

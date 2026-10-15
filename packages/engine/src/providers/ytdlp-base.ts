@@ -4,7 +4,7 @@ import { declare } from './capabilities.js';
 import { seraError } from '../errors.js';
 import type { YtdlpInfo, YtdlpThumbnail } from '../extract/ytdlp-types.js';
 import { num, str } from '../extract/ytdlp-types.js';
-import { toUsableFormats } from '../normalize/formats.js';
+import { entryFormats, toUsableFormats } from '../normalize/formats.js';
 import {
   buildAlternateContainerPlans,
   buildAudioPlans,
@@ -178,7 +178,7 @@ export abstract class YtdlpProvider implements MediaProvider {
     planOptions: PlanBuildOptions,
   ): ResolvedItem | undefined {
     const kind = kindOf(entry);
-    const formats = toUsableFormats(entry.formats);
+    const formats = toUsableFormats(entryFormats(entry));
     const duration = num(entry.duration);
     const plans: DownloadPlan[] = [];
 

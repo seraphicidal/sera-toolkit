@@ -183,6 +183,23 @@ describe('YouTube video', () => {
     expect(mov?.fetch).toMatchObject({ remux: 'mov' });
   });
 
+  it('offers no MOV when the best rendition is VP9, which MOV cannot hold', async () => {
+    const vp9: YtdlpInfo = {
+      ...youtubeInfo,
+      formats: youtubeInfo
+        .formats!.filter((format) => format.acodec !== 'opus')
+        .map((format) =>
+          format.vcodec?.startsWith('avc1') ? { ...format, vcodec: 'vp09.00.40.08' } : format,
+        ),
+    };
+    const media = await new YouTubeProvider().resolve(
+      new URL(youtubeInfo.webpage_url!),
+      contextFor(vp9),
+    );
+    expect(media.items[0]!.plans.find((p) => p.container === 'mp4')).toBeDefined();
+    expect(media.items[0]!.plans.find((p) => p.container === 'mov')).toBeUndefined();
+  });
+
   it('marks exactly one default per kind', async () => {
     const media = await new YouTubeProvider().resolve(
       new URL(youtubeInfo.webpage_url!),
@@ -518,6 +535,71 @@ describe('SoundCloud track', () => {
   });
 });
 
+describe('renditions yt-dlp names no codecs for', () => {
+  const clip: YtdlpInfo = {
+    id: 'clip',
+    _type: 'video',
+    title: 'CUUUT',
+    duration: 30,
+    ext: 'mp4',
+    formats: [360, 480, 720, 1080].map((height) => ({
+      format_id: String(height),
+      ext: 'mp4',
+      protocol: 'https',
+      height,
+      url: `https://clips.example.net/${height}.mp4`,
+    })),
+  };
+
+  it('offers a Twitch clip at every height it comes in', async () => {
+    const { TwitchProvider } = await import('./twitch.js');
+    const media = await new TwitchProvider().resolve(
+      new URL('https://clips.twitch.tv/BadCoweringGoshawkHeyGuys'),
+      contextFor(clip),
+    );
+    expect(media.items[0]?.kind).toBe('video');
+    expect(labelsFor(media, 'video')).toEqual(['1080p', '720p', '480p', '360p']);
+    expect(media.items[0]?.plans.find((p) => p.kind === 'video')?.fetch).toEqual({
+      via: 'ytdlp',
+      selector: '1080',
+    });
+  });
+
+  it('offers no audio extraction from a file whose sound it cannot confirm', async () => {
+    const { TwitchProvider } = await import('./twitch.js');
+    const media = await new TwitchProvider().resolve(
+      new URL('https://clips.twitch.tv/BadCoweringGoshawkHeyGuys'),
+      contextFor(clip),
+    );
+    expect(labelsFor(media, 'audio')).toEqual([]);
+  });
+
+  it('offers a Snapchat Spotlight that yt-dlp returns as a single rendition', async () => {
+    const { SnapchatProvider } = await import('./snapchat.js');
+    const spotlight: YtdlpInfo = {
+      id: 'spot',
+      _type: 'video',
+      title: 'Spotlight',
+      duration: 15,
+      format_id: '0',
+      url: 'https://bolt-gcdn.sc-cdn.net/x/abc.27.IRZXSOY',
+      ext: 'mp4',
+      protocol: 'https',
+      width: 540,
+      height: 960,
+    };
+    const media = await new SnapchatProvider().resolve(
+      new URL('https://www.snapchat.com/spotlight/W7_EDlXWTBiXAEEniNoMPwAAYYXV'),
+      contextFor(spotlight),
+    );
+    expect(media.items[0]?.kind).toBe('video');
+    expect(media.items[0]?.plans.find((p) => p.kind === 'video')?.fetch).toEqual({
+      via: 'ytdlp',
+      selector: '0',
+    });
+  });
+});
+
 describe('failure handling', () => {
   it('reports a link with nothing downloadable rather than returning an empty result', async () => {
     const empty: YtdlpInfo = { id: 'x', title: 'nothing here', formats: [] };
@@ -570,6 +652,41 @@ describe('failure handling', () => {
       new TwitchProvider().resolve(new URL('https://www.twitch.tv/somestreamer'), context),
     ).rejects.toMatchObject({ code: 'LIVE_IN_PROGRESS' });
     expect(probed).toBe(false);
+  });
+
+  it('reads a Spotlight link copied from the creator page as the Spotlight itself', async () => {
+    const { SnapchatProvider } = await import('./snapchat.js');
+    const { normalizeForProvider } = await import('./index.js');
+    const provider = new SnapchatProvider();
+    const canonical = normalizeForProvider(
+      provider,
+      new URL('https://www.snapchat.com/@kkaymamaz/spotlight/W7_EDlXWTBiXAEEniNoMPwAAYcnR?lang=en'),
+    );
+    expect(canonical.toString()).toBe(
+      'https://www.snapchat.com/spotlight/W7_EDlXWTBiXAEEniNoMPwAAYcnR?lang=en',
+    );
+
+    let probed: string | undefined;
+    const context: ProviderContext = {
+      ...contextFor({}),
+      probe: (url) => {
+        probed = url;
+        return Promise.reject(new SeraError('MEDIA_UNAVAILABLE', 'stop here'));
+      },
+    };
+    await expect(provider.resolve(canonical, context)).rejects.toMatchObject({
+      code: 'MEDIA_UNAVAILABLE',
+    });
+    expect(probed).toBe(canonical.toString());
+  });
+
+  it('leaves other Snapchat paths for the public-surface check', async () => {
+    const { SnapchatProvider } = await import('./snapchat.js');
+    const { normalizeForProvider } = await import('./index.js');
+    expect(
+      normalizeForProvider(new SnapchatProvider(), new URL('https://www.snapchat.com/@kkaymamaz'))
+        .pathname,
+    ).toBe('/@kkaymamaz');
   });
 
   it('refuses a non-public Snapchat path before making a request', async () => {

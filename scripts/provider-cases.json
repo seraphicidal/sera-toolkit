@@ -82,6 +82,30 @@
     }
   },
   {
+    "id": "facebook-video",
+    "url": "https://www.facebook.com/NASA/videos/2144422086394464",
+    "expect": {
+      "kinds": ["video"]
+    },
+    "download": [
+      {
+        "kind": "video"
+      }
+    ]
+  },
+  {
+    "id": "pinterest-video",
+    "url": "https://www.pinterest.com/pin/146859637843415228/",
+    "expect": {
+      "kinds": ["video"]
+    },
+    "download": [
+      {
+        "kind": "video"
+      }
+    ]
+  },
+  {
     "id": "twitch-vod",
     "url": "https://www.twitch.tv/videos/2865128806",
     "expect": {
@@ -94,6 +118,18 @@
     "expect": {
       "failure": "UNSUPPORTED_MEDIA"
     }
+  },
+  {
+    "id": "twitch-clip",
+    "url": "https://clips.twitch.tv/BadCoweringGoshawkHeyGuys",
+    "expect": {
+      "kinds": ["video"]
+    },
+    "download": [
+      {
+        "kind": "video"
+      }
+    ]
   },
   {
     "id": "soundcloud",
@@ -218,6 +254,30 @@
       "label": "Mastodon",
       "kind": "image"
     }
+  },
+  {
+    "id": "tumblr-video",
+    "url": "https://staff.tumblr.com/post/802565427665502208",
+    "expect": {
+      "kinds": ["video"]
+    },
+    "download": [
+      {
+        "kind": "video"
+      }
+    ]
+  },
+  {
+    "id": "snapchat-spotlight",
+    "url": "https://www.snapchat.com/spotlight/W7_EDlXWTBiXAEEniNoMPwAAYYXV3bWJscm55AaBjjza0AaBjjxpoAAAAAQ",
+    "expect": {
+      "kinds": ["video"]
+    },
+    "download": [
+      {
+        "kind": "video"
+      }
+    ]
   },
   {
     "id": "instagram-reel",

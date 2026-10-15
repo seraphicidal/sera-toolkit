@@ -118,6 +118,16 @@ describe('reading a post', () => {
     expect(media.items[0]?.plans.map((plan) => plan.kind)).toEqual(['video', 'audio']);
   });
 
+  it('lets yt-dlp read the manifest, which only its generic extractor understands', async () => {
+    const { fetchText } = serving(bothHosts(videoPage));
+    const media = await readViaEmbed(POST, fetchText, 50);
+
+    expect(media.items[0]?.plans.map((plan) => plan.fetch)).toEqual([
+      expect.objectContaining({ via: 'ytdlp', useExtractors: 'generic' }),
+      expect.objectContaining({ via: 'ytdlp', useExtractors: 'generic' }),
+    ]);
+  });
+
   it('still resolves when oEmbed will not answer', async () => {
     const { fetchText } = serving({ 'https://embed.reddit.com/': imagePage });
     const media = await readViaEmbed(POST, fetchText, 50);

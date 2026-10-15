@@ -6,6 +6,8 @@ import type { ResolvedItem, ResolvedMedia } from './types.js';
 
 export const REDDIT_EMBED_AGENT = 'SERA.toolkit (+https://github.com/seraphicidal/sera-toolkit)';
 
+export const MANIFEST_EXTRACTORS = 'generic';
+
 interface ScreenviewData {
   readonly post?: {
     readonly id?: string;
@@ -111,7 +113,12 @@ function videoItem(base: string): ResolvedItem {
         detail: 'MP4 · from the streaming manifest',
         requiresConversion: false,
         recommended: true,
-        fetch: { via: 'ytdlp', selector: 'bestvideo*+bestaudio/best', merge: 'mp4' },
+        fetch: {
+          via: 'ytdlp',
+          selector: 'bestvideo*+bestaudio/best',
+          merge: 'mp4',
+          useExtractors: MANIFEST_EXTRACTORS,
+        },
       },
       {
         kind: 'audio',
@@ -125,6 +132,7 @@ function videoItem(base: string): ResolvedItem {
           via: 'ytdlp',
           selector: 'bestaudio/best',
           audio: { format: 'mp3', quality: '192' },
+          useExtractors: MANIFEST_EXTRACTORS,
         },
       },
     ]),
