@@ -1,0 +1,118 @@
+name: Update yt-dlp
+
+on:
+  schedule:
+    - cron: '17 5 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: update-ytdlp
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+jobs:
+  update:
+    name: Pin, test and merge a new yt-dlp
+    if: vars.YTDLP_AUTO_UPDATE != 'off'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '24.18.1'
+          cache: npm
+
+      - name: Look for a newer release
+        id: bump
+        run: |
+          before=$(node -p "require('./scripts/tools.manifest.json').ytdlp.version")
+          node scripts/update-providers.mjs --write
+          after=$(node -p "require('./scripts/tools.manifest.json').ytdlp.version")
+          echo "version=$after" >> "$GITHUB_OUTPUT"
+          echo "branch=auto/yt-dlp-$after" >> "$GITHUB_OUTPUT"
+          if git diff --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "yt-dlp $before is the latest release."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "yt-dlp $before → $after"
+          fi
+
+      - name: Push the branch and open the pull request
+        if: steps.bump.outputs.changed == 'true'
+        env:
+          VERSION: ${{ steps.bump.outputs.version }}
+          BRANCH: ${{ steps.bump.outputs.branch }}
+        run: |
+          git config user.name 'seraphicidal'
+          git config user.email '113634308+seraphicidal@users.noreply.github.com'
+          git switch -c "$BRANCH"
+          git commit -am "Update yt-dlp to $VERSION"
+          git push --force origin "$BRANCH"
+          if ! gh pr view "$BRANCH" --json state -q .state 2>/dev/null | grep -qx OPEN; then
+            gh pr create --base main --head "$BRANCH" \
+              --title "Update yt-dlp to $VERSION" \
+              --body ""
+          fi
+
+      - name: Install
+        if: steps.bump.outputs.changed == 'true'
+        run: npm ci --ignore-scripts
+
+      - name: Install FFmpeg
+        if: steps.bump.outputs.changed == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+
+      - name: Fetch the new yt-dlp
+        if: steps.bump.outputs.changed == 'true'
+        run: |
+          npm run tools:fetch -- --only=ytdlp
+          .tools/yt-dlp --version
+
+      - name: Build
+        if: steps.bump.outputs.changed == 'true'
+        run: npm run build
+
+      - name: Live smoke test
+        if: steps.bump.outputs.changed == 'true'
+        run: |
+          cases=(dailymotion soundcloud bandcamp)
+          npm run check:providers -- --download "${cases[@]}" ||
+            { sleep 60; npm run check:providers -- --download "${cases[@]}"; }
+
+      - name: Run CI on the branch
+        if: steps.bump.outputs.changed == 'true'
+        env:
+          BRANCH: ${{ steps.bump.outputs.branch }}
+        run: |
+          sha=$(git rev-parse HEAD)
+          gh workflow run ci.yml --ref "$BRANCH"
+          for _ in $(seq 1 30); do
+            run=$(gh run list --workflow ci.yml --branch "$BRANCH" --event workflow_dispatch \
+              --json databaseId,headSha -q "map(select(.headSha == \"$sha\")) | .[0].databaseId")
+            [ -n "$run" ] && break
+            sleep 10
+          done
+          test -n "$run" || { echo 'CI did not start'; exit 1; }
+          gh run watch "$run" --exit-status --interval 30
+
+      - name: Merge
+        if: steps.bump.outputs.changed == 'true'
+        env:
+          BRANCH: ${{ steps.bump.outputs.branch }}
+        run: gh pr merge "$BRANCH" --rebase --delete-branch
+
+      - name: Publish the images
+        if: steps.bump.outputs.changed == 'true'
+        run: gh workflow run ci.yml --ref main

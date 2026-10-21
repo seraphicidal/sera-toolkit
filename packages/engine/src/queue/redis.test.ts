@@ -1,0 +1,230 @@
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { Redis } from 'ioredis';
+import { silentLogger } from '../logging.js';
+import type { JobSpec } from '../jobs/runner.js';
+import { QUEUE_NAME, RedisJobBackend } from './redis.js';
+import type { JobRecord } from './types.js';
+
+describe('queue naming', () => {
+  it('has no colon, which BullMQ rejects', () => {
+    expect(QUEUE_NAME).not.toContain(':');
+  });
+
+  it('is a plain identifier', () => {
+    expect(QUEUE_NAME).toMatch(/^[a-z0-9][a-z0-9-]*$/);
+  });
+
+  it('is still namespaced to this application', () => {
+    expect(QUEUE_NAME.startsWith('sera')).toBe(true);
+  });
+});
+
+describe('a job carrying an imported post', () => {
+  it('survives the round trip the Redis driver puts it through', () => {
+    const job = importedRecord('i0');
+    expect(JSON.parse(JSON.stringify(job))).toEqual(job);
+  });
+});
+
+const REDIS_URL = process.env.SERA_TEST_REDIS_URL;
+
+function record(id: string, clientKey = 'client-a'): JobRecord {
+  const spec: JobSpec = {
+    jobId: id,
+    provider: 'direct',
+    url: 'https://example.com/a.mp4',
+    selections: [{ itemIndex: 0, planKey: 'video/mp4/Original' }],
+    packaging: 'auto',
+  };
+  const now = new Date().toISOString();
+  return {
+    id,
+    state: 'queued',
+    step: 'Waiting to start',
+    progress: { percent: 0 },
+    provider: 'direct',
+    createdAt: now,
+    updatedAt: now,
+    spec,
+    clientKey,
+  };
+}
+
+function importedRecord(id: string): JobRecord {
+  const base = record(id);
+  return {
+    ...base,
+    provider: 'instagram',
+    spec: {
+      ...base.spec,
+      provider: 'instagram',
+      url: 'https://www.instagram.com/p/DcOX3hWFiey',
+      selections: [{ itemIndex: 0, sourceId: 'slide-1', planKey: 'image/jpg/Original' }],
+      imported: {
+        entries: [
+          {
+            s: 'slide-1',
+            kind: 'image',
+            url: 'https://scontent-vie1-1.cdninstagram.com/v/t51/a.jpg?oh=00_x&oe=6A0B0C0D',
+            w: 1440,
+            h: 1800,
+            container: 'jpg',
+          },
+          {
+            s: 'slide-2',
+            kind: 'video',
+            url: 'https://instagram.fvie1-1.fna.fbcdn.net/o1/v/t16/b.mp4?oh=00_y&oe=6A0B0C0D',
+            w: 720,
+            h: 1280,
+            container: 'mp4',
+            d: 12.5,
+          },
+        ],
+        title: 'Three pictures',
+        author: 'NASA',
+        expiresAt: 1_778_060_301,
+      },
+    },
+  };
+}
+
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function until(predicate: () => boolean, timeoutMs = 5000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await wait(25);
+  }
+  throw new Error('condition not met within ' + String(timeoutMs) + 'ms');
+}
+
+describe.skipIf(!REDIS_URL)('RedisJobBackend against a live Redis', () => {
+  let backend: RedisJobBackend;
+
+  beforeAll(async () => {
+    const admin = new Redis(REDIS_URL!, { maxRetriesPerRequest: null });
+    await admin.flushdb();
+    admin.disconnect();
+    backend = new RedisJobBackend(REDIS_URL!, silentLogger());
+    await backend.ready();
+  });
+
+  afterAll(async () => {
+    await backend?.close();
+  });
+
+  it('constructs without BullMQ rejecting the queue name', () => {
+    expect(backend.driver).toBe('redis');
+  });
+
+  it('accepts our job ids as BullMQ custom ids', async () => {
+    const id = 'a'.repeat(32);
+    await backend.submit(record(id));
+    expect((await backend.get(id))?.state).toBe('queued');
+  });
+
+  it('round-trips a record through Redis', async () => {
+    await backend.submit(record('b1'));
+    const stored = await backend.get('b1');
+    expect(stored?.spec.url).toBe('https://example.com/a.mp4');
+    expect(stored?.clientKey).toBe('client-a');
+    expect(await backend.get('missing')).toBeUndefined();
+  });
+
+  it('publishes patches to a subscriber', async () => {
+    await backend.submit(record('b2'));
+    const seen: JobRecord[] = [];
+    const unsubscribe = backend.subscribe('b2', (r) => seen.push(r));
+
+    await backend.patch('b2', { state: 'downloading', step: 'Downloading' });
+    await until(() => seen.length > 0);
+
+    expect(seen[0]?.state).toBe('downloading');
+    unsubscribe();
+
+    await backend.patch('b2', { state: 'converting', step: 'Converting' });
+    await wait(200);
+    expect(seen).toHaveLength(1);
+  });
+
+  it('never lets progress move backwards', async () => {
+    await backend.submit(record('b3'));
+    await backend.patch('b3', { progress: { percent: 60 } });
+    const regressed = await backend.patch('b3', { progress: { percent: 20 } });
+    expect(regressed?.progress.percent).toBe(60);
+  });
+
+  it('counts a client only while its jobs are active', async () => {
+    await backend.submit(record('b4', 'client-b'));
+    await backend.submit(record('b5', 'client-b'));
+    expect(await backend.activeCountFor('client-b')).toBe(2);
+
+    await backend.patch('b4', { state: 'ready' });
+    expect(await backend.activeCountFor('client-b')).toBe(1);
+
+    await backend.patch('b5', { state: 'failed' });
+    expect(await backend.activeCountFor('client-b')).toBe(0);
+    expect(await backend.activeCountFor('client-never-seen')).toBe(0);
+  });
+
+  it('hands queued jobs to a worker', async () => {
+    const handled: string[] = [];
+    const worker = backend.startWorker((r) => {
+      handled.push(r.id);
+      return Promise.resolve();
+    }, 1);
+
+    await backend.submit(record('b6', 'client-c'));
+    await until(() => handled.includes('b6'), 15_000);
+
+    await worker.close();
+  }, 20_000);
+
+  it('refuses to move a job out of a terminal state', async () => {
+    await backend.submit(record('b7'));
+    await backend.patch('b7', { state: 'cancelled', step: 'Cancelled' });
+    const late = await backend.patch('b7', { state: 'failed', step: 'Failed' });
+    expect(late?.state).toBe('cancelled');
+    expect((await backend.get('b7'))?.state).toBe('cancelled');
+  });
+
+  it('interleaves concurrent cancel and progress patches atomically without overwriting cancellation', async () => {
+    await backend.submit(record('b10'));
+    await Promise.all([
+      backend.patch('b10', { progress: { percent: 10 } }),
+      backend.patch('b10', { state: 'cancelled', step: 'Cancelled' }),
+      backend.patch('b10', { progress: { percent: 50 }, step: 'Downloading' }),
+      backend.patch('b10', { progress: { percent: 90 }, step: 'Downloading' }),
+    ]);
+    const finalRecord = await backend.get('b10');
+    expect(finalRecord?.state).toBe('cancelled');
+    expect(finalRecord?.progress.percent).toBeGreaterThanOrEqual(10);
+  });
+
+  it('carries a cancellation to a second process', async () => {
+    const worker = new RedisJobBackend(REDIS_URL!, silentLogger());
+    try {
+      await worker.ready();
+      await backend.submit(record('b8'));
+
+      const seen: string[] = [];
+      worker.subscribe('b8', (r) => seen.push(r.state));
+
+      await backend.patch('b8', { state: 'cancelled', step: 'Cancelled' });
+      await until(() => seen.includes('cancelled'), 5000);
+    } finally {
+      await worker.close();
+    }
+  });
+
+  it('keeps an imported post intact through Redis itself', async () => {
+    const job = importedRecord('b9');
+    await backend.submit(job);
+    expect((await backend.get('b9'))?.spec.imported).toEqual(job.spec.imported);
+  });
+
+  it('reports the waiting count', async () => {
+    expect(await backend.waitingCount()).toBeGreaterThanOrEqual(0);
+  });
+});

@@ -1,0 +1,1291 @@
+import { mkdir, open, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { basename, dirname, extname, join } from 'node:path';
+import type {
+  JobProgress,
+  JobResult,
+  JobState,
+  PackagingMode,
+  TrimRange,
+} from '@sera/contracts/types';
+import { trimSuffix } from '@sera/contracts/types';
+import type { EngineConfig } from '../config.js';
+import { convert, probe, type ConversionSpec } from '../convert/ffmpeg.js';
+import { squareCover, tagAudio, TAGGABLE_AUDIO } from '../convert/tags.js';
+import { trimMedia } from '../convert/trim.js';
+import { seraError, SeraError } from '../errors.js';
+import { downloadDirect } from '../extract/direct-download.js';
+import { download as ytdlpDownload, downloadSubtitles } from '../extract/ytdlp.js';
+import { classifyFailure } from '../extract/failure.js';
+import { logSafeUrl, type Logger } from '../logging.js';
+import {
+  importExpired,
+  importRefused,
+  isAllowedMediaUrl,
+  mediaFromImport,
+  type ImportedEntry,
+} from '../providers/instagram-media.js';
+import type { DownloadPlan, ResolvedItem, ResolvedMedia } from '../providers/types.js';
+import { planKey } from '../providers/types.js';
+import { contradicts, sniffContainer, sniffTextImposter, SNIFF_BYTES } from '../util/sniff.js';
+import { hostMatchesAny } from '../security/url.js';
+import type { MediaResolver } from '../resolver.js';
+import type { RemoteExtraction } from '../extract/remote.js';
+import { mimeTypeFor, type Workspace, type WorkspaceManager } from '../storage/workspace.js';
+import { dedupeFilename, mediaFilename, sanitizeStem } from '../util/filename.js';
+import { createZip } from './zip.js';
+
+export interface JobSelection {
+  readonly itemIndex: number;
+  readonly sourceId?: string;
+  readonly planKey: string;
+}
+
+export interface JobSpec {
+  readonly jobId: string;
+  readonly provider: string;
+  readonly url: string;
+  readonly selections: readonly JobSelection[];
+  readonly packaging: PackagingMode;
+  readonly filename?: string;
+  readonly trim?: TrimRange;
+  readonly subtitles?: JobSubtitles;
+  readonly imported?: ImportedJob;
+  readonly resolvedMedia?: ResolvedMedia;
+  readonly rawInfoJson?: string;
+  readonly resolvedAt?: number;
+}
+
+export interface JobSubtitles {
+  readonly lang: string;
+  readonly auto: boolean;
+  readonly format: 'srt' | 'vtt' | 'embed';
+  readonly only: boolean;
+}
+
+export interface ImportedJob {
+  readonly entries: readonly ImportedEntry[];
+  readonly title: string;
+  readonly author?: string;
+  readonly expiresAt?: number;
+}
+
+export interface JobUpdate {
+  readonly state: JobState;
+  readonly step: string;
+  readonly progress: JobProgress;
+}
+
+export type ReportFn = (update: JobUpdate) => void;
+
+export interface JobRunnerDependencies {
+  readonly config: EngineConfig;
+  readonly logger: Logger;
+  readonly resolver: MediaResolver;
+  readonly workspaces: WorkspaceManager;
+  readonly remote?: RemoteExtraction;
+}
+
+const DOWNLOAD_SHARE = 0.85;
+
+export class JobRunner {
+  constructor(private readonly deps: JobRunnerDependencies) {}
+
+  async run(spec: JobSpec, report: ReportFn, signal?: AbortSignal): Promise<JobResult> {
+    const startedAt = Date.now();
+    const { config, logger, resolver, workspaces } = this.deps;
+
+    if (spec.selections.length > config.maxItemsPerJob) {
+      throw seraError('TOO_LARGE', {
+        message: `A single download can include at most ${config.maxItemsPerJob} items.`,
+        detail: `${spec.selections.length} selections`,
+      });
+    }
+
+    report({ state: 'resolving', step: 'Reading the link', progress: { percent: 0 } });
+
+    const isResolvedFresh =
+      Boolean(spec.resolvedMedia) &&
+      (!spec.resolvedAt || Date.now() - spec.resolvedAt < 30 * 60_000);
+
+    const resolved = spec.imported
+      ? mediaFromImport({
+          url: spec.url,
+          title: spec.imported.title,
+          ...(spec.imported.author ? { author: spec.imported.author } : {}),
+          entries: spec.imported.entries,
+        })
+      : isResolvedFresh
+        ? spec.resolvedMedia!
+        : await resolver.resolveCanonical(new URL(spec.url), spec.provider, signal);
+    const matched = spec.selections.map((selection) => matchSelection(resolved, selection));
+
+    assertWithinLimits(matched, config);
+
+    const workspace = await workspaces.create(spec.jobId);
+    const totalFiles = matched.length;
+    const produced: { path: string; name: string }[] = [];
+    const taken = new Set<string>();
+    const delivered: { requested: string; actual: string }[] = [];
+
+    const remoteBackend = resolved.remoteBackend;
+    if (remoteBackend && this.deps.remote) {
+      report({ state: 'downloading', step: 'Downloading', progress: { percent: 0 } });
+      const files = await this.deps.remote.dispatchJob(
+        {
+          kind: 'job',
+          url: spec.url,
+          providerId: spec.provider,
+          planKeys: matched.map(({ plan }) => planKey(plan)),
+          items: matched.map(({ item }) => ({
+            index: item.index,
+            ...(item.sourceId ? { sourceId: item.sourceId } : {}),
+          })),
+          ...(spec.filename ? { filename: spec.filename } : {}),
+          ...(spec.trim ? { trim: spec.trim } : {}),
+          ...(spec.subtitles ? { subtitles: spec.subtitles } : {}),
+        },
+        {
+          onProgress: (progress) =>
+            report({
+              state: 'downloading',
+              step: progress.step,
+              progress: {
+                percent: Math.min(99, progress.percent),
+                ...(progress.bytesDownloaded !== undefined
+                  ? { bytesDownloaded: progress.bytesDownloaded }
+                  : {}),
+                ...(progress.bytesTotal !== undefined ? { bytesTotal: progress.bytesTotal } : {}),
+              },
+            }),
+          ...(signal ? { signal } : {}),
+        },
+      );
+
+      for (const file of files) {
+        const name = dedupeFilename(file.name, taken);
+        const destination = workspace.outputPath(name);
+        await rename(file.path, destination);
+        produced.push({ path: destination, name });
+      }
+      const uploads = [...new Set(files.map((file) => dirname(file.path)))].filter((directory) =>
+        basename(directory).startsWith('remote-'),
+      );
+      for (const directory of uploads) {
+        await rm(directory, { recursive: true, force: true }).catch(() => undefined);
+      }
+
+      logger.info(
+        {
+          jobId: spec.jobId,
+          provider: spec.provider,
+          strategy: remoteBackend,
+          files: produced.length,
+        },
+        'job completed on a remote extraction backend',
+      );
+    } else {
+      type ItemResult =
+        | {
+            readonly kind: 'subtitles';
+            readonly index: number;
+            readonly path: string;
+            readonly item: ResolvedItem;
+            readonly plan: DownloadPlan;
+          }
+        | {
+            readonly kind: 'media';
+            readonly index: number;
+            readonly finished: string;
+            readonly used: DownloadPlan;
+            readonly item: ResolvedItem;
+            readonly plan: DownloadPlan;
+            readonly subtitlePath?: string;
+          };
+
+      const results = new Array<ItemResult>(totalFiles);
+      const itemFractions = new Array<number>(totalFiles).fill(0);
+      let lastReportedPercent = 0;
+
+      const concurrency = Math.max(1, Math.min(config.itemConcurrency, totalFiles));
+      const itemAbort = new AbortController();
+      const onAbort = () => itemAbort.abort();
+      signal?.addEventListener('abort', onAbort);
+
+      const queue = matched.map((entry, index) => ({ ...entry, index }));
+      let firstError: unknown;
+
+      const processItem = async (
+        index: number,
+        item: ResolvedItem,
+        plan: DownloadPlan,
+        itemSignal: AbortSignal,
+      ): Promise<ItemResult> => {
+        if (itemSignal.aborted) throw seraError('CANCELLED');
+        if (spec.imported) assertImportFresh(spec.imported);
+
+        const fileProgress = (fraction: number, extra: Partial<JobProgress> = {}): JobProgress => {
+          itemFractions[index] = Math.min(1, Math.max(0, fraction));
+          const sum = itemFractions.reduce((a, b) => a + b, 0);
+          const percent = Math.min(99, Math.max(lastReportedPercent, (sum / totalFiles) * 100));
+          lastReportedPercent = percent;
+          const currentFile = Math.min(totalFiles, itemFractions.filter((f) => f >= 1).length + 1);
+          return {
+            percent,
+            ...(totalFiles > 1 ? { currentFile, totalFiles } : {}),
+            ...extra,
+          };
+        };
+
+        const itemReport: ReportFn = (update) => {
+          report(update);
+        };
+
+        if (spec.subtitles) assertSubtitlesOffered(item, spec.subtitles);
+
+        if (spec.subtitles?.only) {
+          itemReport({
+            state: 'downloading',
+            step: 'Downloading subtitles',
+            progress: fileProgress(0),
+          });
+          const path = await this.fetchSubtitles({
+            resolved,
+            item,
+            workspace,
+            index,
+            subtitles: spec.subtitles,
+            signal: itemSignal,
+          });
+          itemFractions[index] = 1;
+          fileProgress(1);
+          return { kind: 'subtitles', index, path, item, plan };
+        }
+
+        const { path: downloaded, plan: used } = await this.fetchWithFallback({
+          workspace,
+          resolved,
+          item,
+          plan,
+          index,
+          report: itemReport,
+          fileProgress,
+          rawInfoJson: isResolvedFresh ? spec.rawInfoJson : undefined,
+          ...(spec.imported ? { imported: true } : {}),
+          ...(spec.trim ? { trim: spec.trim } : {}),
+          ...(spec.subtitles?.format === 'embed' ? { embedSubtitles: spec.subtitles } : {}),
+          signal: itemSignal,
+        });
+
+        const converted = used.convert
+          ? await this.convertOne({
+              input: downloaded,
+              spec: used.convert,
+              workspace,
+              index,
+              report: itemReport,
+              fileProgress,
+              ...(item.duration !== undefined ? { durationSeconds: item.duration } : {}),
+              signal: itemSignal,
+            })
+          : downloaded;
+
+        const finished =
+          used.kind === 'audio'
+            ? await this.tagOne({
+                input: converted,
+                resolved,
+                item,
+                workspace,
+                index,
+                ...(spec.imported ? { imported: true } : {}),
+                signal: itemSignal,
+              })
+            : converted;
+
+        let subtitlePath: string | undefined;
+        if (spec.subtitles && spec.subtitles.format !== 'embed') {
+          itemReport({
+            state: 'downloading',
+            step: 'Downloading subtitles',
+            progress: fileProgress(0.99),
+          });
+          subtitlePath = await this.fetchSubtitles({
+            resolved,
+            item,
+            workspace,
+            index,
+            subtitles: spec.subtitles,
+            signal: itemSignal,
+          });
+        }
+
+        itemFractions[index] = 1;
+        fileProgress(1);
+        return { kind: 'media', index, finished, used, item, plan, subtitlePath };
+      };
+
+      try {
+        const worker = async () => {
+          while (queue.length > 0) {
+            if (itemAbort.signal.aborted) break;
+            const next = queue.shift();
+            if (!next) break;
+            try {
+              results[next.index] = await processItem(
+                next.index,
+                next.item,
+                next.plan,
+                itemAbort.signal,
+              );
+            } catch (error) {
+              firstError ??= error;
+              itemAbort.abort();
+              break;
+            }
+          }
+        };
+
+        await Promise.all(Array.from({ length: concurrency }, () => worker()));
+      } finally {
+        signal?.removeEventListener('abort', onAbort);
+      }
+
+      if (firstError) throw SeraError.from(firstError);
+      if (signal?.aborted) throw seraError('CANCELLED');
+
+      for (let i = 0; i < totalFiles; i++) {
+        const res = results[i];
+        if (!res) throw seraError('INTERNAL', { detail: 'missing item result' });
+        if (res.kind === 'subtitles') {
+          const name = dedupeFilename(
+            subtitleName(
+              this.nameFor(spec, resolved, res.item, res.plan, res.path, totalFiles),
+              spec.subtitles!.lang,
+            ),
+            taken,
+          );
+          const destination = workspace.outputPath(name);
+          await rename(res.path, destination);
+          produced.push({ path: destination, name });
+        } else {
+          if (res.used !== res.plan) {
+            delivered.push({ requested: res.plan.label, actual: res.used.label });
+          }
+          const name = dedupeFilename(
+            this.nameFor(spec, resolved, res.item, res.used, res.finished, totalFiles),
+            taken,
+          );
+          const destination = workspace.outputPath(name);
+          await rename(res.finished, destination);
+          produced.push({ path: destination, name });
+
+          if (res.subtitlePath) {
+            const subtitle = dedupeFilename(
+              subtitleName(
+                name.replace(/\.[^.]+$/, `.${spec.subtitles!.format}`),
+                spec.subtitles!.lang,
+              ),
+              taken,
+            );
+            const subtitleDestination = workspace.outputPath(subtitle);
+            await rename(res.subtitlePath, subtitleDestination);
+            produced.push({ path: subtitleDestination, name: subtitle });
+          }
+        }
+      }
+    }
+
+    const packaged = await this.package(spec, resolved, workspace, produced, report, signal);
+    const backend = spec.imported ? 'visitor-browser' : (remoteBackend ?? 'local');
+    const result: JobResult = {
+      ...packaged,
+      delivery: {
+        backend,
+        ...(delivered.length ? { substituted: delivered } : {}),
+      },
+    };
+
+    await workspace.clearScratch();
+    await this.validate(produced, result);
+
+    logger.info(
+      {
+        jobId: spec.jobId,
+        provider: spec.provider,
+        source: logSafeUrl(spec.url),
+        strategy: backend,
+        ...(delivered.length ? { substituted: delivered } : {}),
+        mediaType: resolved.type,
+        mediaKinds: [...new Set(matched.map(({ item }) => item.kind))],
+        outputFormat: result.isArchive
+          ? 'zip'
+          : [...new Set(matched.map(({ plan }) => plan.container))].join(','),
+        files: produced.length,
+        bytes: result.sizeBytes,
+        durationMs: Date.now() - startedAt,
+        outcome: 'success',
+      },
+      'job complete',
+    );
+
+    return result;
+  }
+
+  private async fetchWithFallback(args: {
+    workspace: Workspace;
+    resolved: ResolvedMedia;
+    item: ResolvedItem;
+    plan: DownloadPlan;
+    index: number;
+    report: ReportFn;
+    fileProgress: (fraction: number, extra?: Partial<JobProgress>) => JobProgress;
+    rawInfoJson?: string;
+    imported?: boolean;
+    trim?: TrimRange;
+    embedSubtitles?: JobSubtitles;
+    signal?: AbortSignal;
+  }): Promise<{ path: string; plan: DownloadPlan }> {
+    const candidates = [args.plan, ...lowerQualityAlternatives(args.item, args.plan)];
+
+    for (const [attempt, plan] of candidates.entries()) {
+      try {
+        return { path: await this.fetchOne({ ...args, plan }), plan };
+      } catch (error) {
+        const failure = classifyFailure(error);
+        const next = candidates[attempt + 1];
+        if (!next || !FORMAT_FALLBACK_ANSWERS.has(failure)) throw error;
+
+        this.deps.logger.info(
+          {
+            jobId: args.workspace.jobId,
+            provider: args.resolved.provider,
+            failureClass: failure,
+            requested: plan.label,
+            fallingBackTo: next.label,
+          },
+          'the requested format could not be fetched; stepping down',
+        );
+      }
+    }
+
+    throw seraError('MEDIA_UNAVAILABLE', { detail: 'no format could be fetched' });
+  }
+
+  private async fetchOne(args: {
+    workspace: Workspace;
+    resolved: ResolvedMedia;
+    item: ResolvedItem;
+    plan: DownloadPlan;
+    index: number;
+    report: ReportFn;
+    fileProgress: (fraction: number, extra?: Partial<JobProgress>) => JobProgress;
+    rawInfoJson?: string;
+    imported?: boolean;
+    trim?: TrimRange;
+    embedSubtitles?: JobSubtitles;
+    signal?: AbortSignal;
+  }): Promise<string> {
+    const { config } = this.deps;
+    const { workspace, plan, item, index, report, fileProgress, signal } = args;
+
+    const scratch = join(workspace.scratchDir, `sel-${index}`);
+    await mkdir(scratch, { recursive: true });
+
+    let loadInfoJsonPath: string | undefined;
+    if (args.rawInfoJson) {
+      loadInfoJsonPath = join(scratch, 'info.json');
+      await writeFile(loadInfoJsonPath, args.rawInfoJson, 'utf8');
+    }
+
+    const step = args.resolved.items.length > 1 ? `Downloading ${index + 1}` : 'Downloading';
+    report({ state: 'downloading', step, progress: fileProgress(0) });
+
+    if (plan.fetch.via === 'direct') {
+      if (args.embedSubtitles) {
+        throw seraError('MEDIA_UNAVAILABLE', {
+          message: 'Subtitles cannot be embedded in this file.',
+          detail: 'embed requested on a direct download',
+        });
+      }
+      const destination = join(scratch, `media.${plan.container}`);
+      const importHosts = args.imported ? this.deps.resolver.importHosts : undefined;
+      await downloadDirect({
+        url: plan.fetch.url,
+        destination,
+        dispatcher: this.deps.resolver.dispatcher,
+        maxBytes: config.maxFilesizeBytes,
+        timeoutMs: config.jobTimeoutSeconds * 1000,
+        allowUrl: (url: URL) =>
+          !hostMatchesAny(url.hostname, config.blockedHosts) &&
+          (!importHosts || isAllowedMediaUrl(url, importHosts)),
+        ...(signal ? { signal } : {}),
+        onProgress: (progress) => {
+          const fraction = progress.bytesTotal
+            ? (progress.bytesDownloaded / progress.bytesTotal) * DOWNLOAD_SHARE
+            : 0;
+          report({
+            state: 'downloading',
+            step,
+            progress: fileProgress(fraction, {
+              bytesDownloaded: progress.bytesDownloaded,
+              ...(progress.bytesTotal ? { bytesTotal: progress.bytesTotal } : {}),
+              ...(progress.speedBytesPerSecond
+                ? { speedBytesPerSecond: progress.speedBytesPerSecond }
+                : {}),
+              ...(progress.etaSeconds !== undefined ? { etaSeconds: progress.etaSeconds } : {}),
+            }),
+          });
+        },
+      }).catch((error: unknown) => {
+        throw importHosts && isForbidden(error)
+          ? importRefused('import: the cdn answered 403')
+          : error;
+      });
+      const fetched = await renameToActualFormat(destination, plan.container);
+      if (!args.trim) return fetched;
+
+      report({ state: 'converting', step: 'Trimming', progress: fileProgress(DOWNLOAD_SHARE) });
+      const trimmed = join(scratch, `trimmed${extname(fetched)}`);
+      await trimMedia({
+        input: fetched,
+        output: trimmed,
+        range: args.trim,
+        ffmpegPath: config.ffmpegPath,
+        ffprobePath: config.ffprobePath,
+        timeoutMs: config.jobTimeoutSeconds * 1000,
+        ...(signal ? { signal } : {}),
+      });
+      await rm(fetched, { force: true });
+      return trimmed;
+    }
+
+    const fetchPlan = plan.fetch;
+    let sawPostprocessor: string | undefined;
+
+    const target = fetchPlan.target ?? args.resolved.url;
+    const proxy = this.deps.resolver.egressProxy
+      ? await this.deps.resolver.egressProxy(target, config.proxyFor(args.resolved.provider))
+      : config.proxyFor(args.resolved.provider);
+
+    const runDownload = (
+      infoPath?: string,
+      sections?: { start: number; end?: number; forceKeyframes: boolean },
+      downloadSignal = signal,
+    ) =>
+      ytdlpDownload({
+        binary: config.ytdlpPath,
+        ffmpegPath: config.ffmpegPath,
+        timeoutMs: config.jobTimeoutSeconds * 1000,
+        url: target,
+        format: fetchPlan.selector,
+        workdir: scratch,
+        outputTemplate: 'media.%(ext)s',
+        maxFilesizeBytes: config.maxFilesizeBytes,
+        ...(proxy ? { proxy } : {}),
+        ...(fetchPlan.useExtractors ? { useExtractors: fetchPlan.useExtractors } : {}),
+        ...(infoPath ? { loadInfoJsonPath: infoPath } : {}),
+        ...(fetchPlan.merge ? { mergeContainer: fetchPlan.merge } : {}),
+        ...(fetchPlan.remux ? { remuxContainer: fetchPlan.remux } : {}),
+        ...(fetchPlan.audio
+          ? {
+              audioFormat: fetchPlan.audio.format,
+              ...(fetchPlan.audio.quality ? { audioQuality: fetchPlan.audio.quality } : {}),
+            }
+          : {}),
+        ...(args.resolved.items.length > 1 ? { playlistItem: item.index + 1 } : {}),
+        ...(plan.filesizeBytes ? { expectedTotalBytes: plan.filesizeBytes } : {}),
+        ...(fetchPlan.extractorArgs ? { extractorArgs: fetchPlan.extractorArgs } : {}),
+        ...(args.embedSubtitles
+          ? { subtitles: { lang: args.embedSubtitles.lang, auto: args.embedSubtitles.auto } }
+          : {}),
+        ...(sections ? { sections } : {}),
+        ...(downloadSignal ? { signal: downloadSignal } : {}),
+        onProgress: (progress) => {
+          if (progress.postprocessor && progress.postprocessor !== sawPostprocessor) {
+            sawPostprocessor = progress.postprocessor;
+          }
+          const state: JobState = sawPostprocessor
+            ? sawPostprocessor === 'ExtractAudio'
+              ? 'converting'
+              : 'merging'
+            : 'downloading';
+          report({
+            state,
+            step: sawPostprocessor ? stepForPostprocessor(sawPostprocessor, plan) : step,
+            progress: fileProgress((progress.percent / 100) * DOWNLOAD_SHARE, {
+              bytesDownloaded: progress.bytesDownloaded,
+              ...(progress.bytesTotal ? { bytesTotal: progress.bytesTotal } : {}),
+              ...(progress.speedBytesPerSecond
+                ? { speedBytesPerSecond: progress.speedBytesPerSecond }
+                : {}),
+              ...(progress.etaSeconds !== undefined ? { etaSeconds: progress.etaSeconds } : {}),
+            }),
+          });
+        },
+      });
+
+    const download = async (
+      sections?: { start: number; end?: number; forceKeyframes: boolean },
+      downloadSignal = signal,
+    ) => {
+      if (loadInfoJsonPath) {
+        try {
+          await runDownload(loadInfoJsonPath, sections, downloadSignal);
+          return;
+        } catch (error) {
+          if (downloadSignal?.aborted) throw error;
+          const failure = classifyFailure(error);
+          if (
+            failure === 'STREAM_403' ||
+            failure === 'CDN_DOWNLOAD_FAILURE' ||
+            failure === 'FORMAT_UNAVAILABLE' ||
+            failure === 'NETWORK_ERROR'
+          ) {
+            this.deps.logger.warn(
+              { error, failure },
+              'cached info.json download failed; retrying with direct url',
+            );
+            await runDownload(undefined, sections, downloadSignal);
+            return;
+          }
+          throw error;
+        }
+      }
+      await runDownload(undefined, sections, downloadSignal);
+    };
+
+    if (!args.trim) {
+      await download();
+      return findSingleFile(scratch);
+    }
+
+    const range = args.trim;
+    const stalled = new AbortController();
+    const stopWatching = watchGrowth(scratch, SECTION_STALL_MS, () => stalled.abort());
+    try {
+      await download(
+        {
+          start: range.start,
+          ...(range.end !== undefined ? { end: range.end } : {}),
+          forceKeyframes: range.start > 0,
+        },
+        signal ? AbortSignal.any([signal, stalled.signal]) : stalled.signal,
+      );
+      stopWatching();
+      const cut = await findSingleFile(scratch);
+      const probed = await probe(cut, {
+        ffmpegPath: config.ffmpegPath,
+        ffprobePath: config.ffprobePath,
+        timeoutMs: 30_000,
+        ...(signal ? { signal } : {}),
+      }).catch(() => undefined);
+      if (sectionIsUsable(probed, range, item.duration)) return cut;
+      this.deps.logger.warn(
+        { jobId: workspace.jobId, provider: args.resolved.provider, got: probed?.durationSeconds },
+        'section download came back wrong; cutting the full file instead',
+      );
+    } catch (error) {
+      stopWatching();
+      if (signal?.aborted) throw error;
+      this.deps.logger.warn(
+        {
+          jobId: workspace.jobId,
+          provider: args.resolved.provider,
+          ...(stalled.signal.aborted ? { stalledMs: SECTION_STALL_MS } : { err: error }),
+        },
+        stalled.signal.aborted
+          ? 'section download stalled; cutting the full file instead'
+          : 'section download failed; cutting the full file instead',
+      );
+    }
+
+    await rm(scratch, { recursive: true, force: true });
+    await mkdir(scratch, { recursive: true });
+    sawPostprocessor = undefined;
+    await download();
+    const full = await findSingleFile(scratch);
+    report({ state: 'converting', step: 'Trimming', progress: fileProgress(DOWNLOAD_SHARE) });
+    const trimmed = join(scratch, `trimmed${extname(full)}`);
+    await trimMedia({
+      input: full,
+      output: trimmed,
+      range,
+      ffmpegPath: config.ffmpegPath,
+      ffprobePath: config.ffprobePath,
+      timeoutMs: config.jobTimeoutSeconds * 1000,
+      ...(signal ? { signal } : {}),
+    });
+    await rm(full, { force: true });
+    return trimmed;
+  }
+
+  private async tagOne(args: {
+    input: string;
+    resolved: ResolvedMedia;
+    item: ResolvedItem;
+    workspace: Workspace;
+    index: number;
+    imported?: boolean;
+    signal?: AbortSignal;
+  }): Promise<string> {
+    const { config, logger } = this.deps;
+    const extension = extname(args.input).slice(1).toLowerCase();
+    if (!TAGGABLE_AUDIO.has(extension)) return args.input;
+
+    const dir = join(args.workspace.scratchDir, `sel-${args.index}`);
+    const tools = {
+      ffmpegPath: config.ffmpegPath,
+      ffprobePath: config.ffprobePath,
+      timeoutMs: config.jobTimeoutSeconds * 1000,
+      ...(args.signal ? { signal: args.signal } : {}),
+    };
+    const { item, resolved } = args;
+    const artist = item.tags?.artist ?? resolved.author;
+    const title = item.tags?.track ?? item.title ?? resolved.title;
+
+    const candidates = args.imported
+      ? []
+      : [...new Set([item.thumbnailUrl, item.thumbnailFallbackUrl, resolved.thumbnailUrl])].filter(
+          (url): url is string => Boolean(url),
+        );
+    let coverPath: string | undefined;
+    for (const [attempt, thumbnail] of candidates.entries()) {
+      try {
+        const source = join(dir, `thumbnail-${attempt}.img`);
+        await downloadDirect({
+          url: thumbnail,
+          destination: source,
+          dispatcher: this.deps.resolver.dispatcher,
+          maxBytes: 10 * 1024 * 1024,
+          timeoutMs: 30_000,
+          ...(args.signal ? { signal: args.signal } : {}),
+        });
+        coverPath = join(dir, 'cover.jpg');
+        await squareCover(source, coverPath, tools);
+        break;
+      } catch (error) {
+        coverPath = undefined;
+        logger.info(
+          { jobId: args.workspace.jobId, attempt, err: SeraError.from(error).detail },
+          'a thumbnail could not be used as cover art',
+        );
+      }
+    }
+
+    const output = join(dir, `tagged.${extension}`);
+    try {
+      await tagAudio({
+        ...tools,
+        input: args.input,
+        output,
+        scratchDir: dir,
+        tags: {
+          ...(title ? { title } : {}),
+          ...(artist ? { artist } : {}),
+          ...(item.tags?.album ? { album: item.tags.album } : {}),
+        },
+        ...(coverPath ? { coverPath } : {}),
+      });
+      return output;
+    } catch (error) {
+      logger.warn(
+        { jobId: args.workspace.jobId, err: SeraError.from(error).detail },
+        'audio left untagged: tagging failed',
+      );
+      return args.input;
+    }
+  }
+
+  private async fetchSubtitles(args: {
+    resolved: ResolvedMedia;
+    item: ResolvedItem;
+    workspace: Workspace;
+    index: number;
+    subtitles: JobSubtitles;
+    signal?: AbortSignal;
+  }): Promise<string> {
+    const { config } = this.deps;
+    const workdir = join(args.workspace.scratchDir, `subs-${args.index}`);
+    await mkdir(workdir, { recursive: true });
+    const upstreamProxy = config.proxyFor(args.resolved.provider);
+    const proxy = this.deps.resolver.egressProxy
+      ? await this.deps.resolver.egressProxy(args.resolved.url, upstreamProxy)
+      : upstreamProxy;
+    return downloadSubtitles({
+      binary: config.ytdlpPath,
+      ffmpegPath: config.ffmpegPath,
+      timeoutMs: Math.min(config.jobTimeoutSeconds * 1000, 120_000),
+      url: args.resolved.url,
+      workdir,
+      lang: args.subtitles.lang,
+      auto: args.subtitles.auto,
+      format: args.subtitles.format === 'vtt' ? 'vtt' : 'srt',
+      ...(args.resolved.items.length > 1 ? { playlistItem: args.item.index + 1 } : {}),
+      ...(proxy ? { proxy } : {}),
+      ...(args.signal ? { signal: args.signal } : {}),
+    });
+  }
+
+  private async convertOne(args: {
+    input: string;
+    spec: ConversionSpec;
+    workspace: Workspace;
+    index: number;
+    report: ReportFn;
+    fileProgress: (fraction: number, extra?: Partial<JobProgress>) => JobProgress;
+    durationSeconds?: number;
+    signal?: AbortSignal;
+  }): Promise<string> {
+    const { config } = this.deps;
+    const target = targetExtension(args.spec);
+    const output = join(args.workspace.scratchDir, `sel-${args.index}`, `converted.${target}`);
+    const step = `Converting to ${target.toUpperCase()}`;
+
+    args.report({
+      state: 'converting',
+      step,
+      progress: args.fileProgress(DOWNLOAD_SHARE),
+    });
+
+    await convert({
+      ffmpegPath: config.ffmpegPath,
+      ffprobePath: config.ffprobePath,
+      timeoutMs: config.jobTimeoutSeconds * 1000,
+      input: args.input,
+      output,
+      spec: args.spec,
+      maxOutputBytes: config.maxFilesizeBytes,
+      threads: config.ffmpegThreads,
+      ...(args.durationSeconds !== undefined ? { durationSeconds: args.durationSeconds } : {}),
+      ...(args.signal ? { signal: args.signal } : {}),
+      onProgress: (percent) => {
+        args.report({
+          state: 'converting',
+          step,
+          progress: args.fileProgress(DOWNLOAD_SHARE + (percent / 100) * (1 - DOWNLOAD_SHARE)),
+        });
+      },
+    });
+
+    return output;
+  }
+
+  private nameFor(
+    spec: JobSpec,
+    resolved: ResolvedMedia,
+    item: ResolvedItem,
+    plan: DownloadPlan,
+    producedPath: string,
+    totalFiles: number,
+  ): string {
+    const extension = producedPath.split('.').pop() ?? plan.container;
+    const suffix = spec.trim ? trimSuffix(spec.trim, item.duration) : '';
+    if (spec.filename && totalFiles === 1) {
+      return `${sanitizeStem(spec.filename)}${suffix}.${extension}`;
+    }
+    const name = mediaFilename({
+      author: resolved.author,
+      title: item.title ?? resolved.title,
+      container: extension,
+      ...(totalFiles > 1 || resolved.items.length > 1 ? { index: item.index + 1 } : {}),
+    });
+    if (!suffix) return name;
+    const dot = name.lastIndexOf('.');
+    return `${name.slice(0, dot)}${suffix}${name.slice(dot)}`;
+  }
+
+  private async package(
+    spec: JobSpec,
+    resolved: ResolvedMedia,
+    workspace: Workspace,
+    produced: readonly { path: string; name: string }[],
+    report: ReportFn,
+    signal?: AbortSignal,
+  ): Promise<JobResult> {
+    const { config } = this.deps;
+    const expiresAt = new Date(Date.now() + config.retentionSeconds * 1000).toISOString();
+
+    const shouldZip =
+      spec.packaging === 'zip' || (spec.packaging === 'auto' && produced.length > 1);
+
+    const files = await Promise.all(
+      produced.map(async (file) => ({
+        name: file.name,
+        sizeBytes: (await stat(file.path)).size,
+        mimeType: mimeTypeFor(file.name),
+        downloadPath: `/api/jobs/${spec.jobId}/files/${encodeURIComponent(file.name)}`,
+      })),
+    );
+
+    if (!shouldZip) {
+      const primary = files[0]!;
+      await workspace.writeManifest({
+        jobId: spec.jobId,
+        createdAt: new Date().toISOString(),
+        expiresAt,
+        primary: primary.name,
+        isArchive: false,
+        files: files.map(({ name, sizeBytes, mimeType }) => ({ name, sizeBytes, mimeType })),
+      });
+      return {
+        downloadPath: `/api/jobs/${spec.jobId}/download`,
+        filename: primary.name,
+        sizeBytes: primary.sizeBytes,
+        mimeType: primary.mimeType,
+        isArchive: false,
+        ...(files.length > 1 ? { files } : {}),
+        expiresAt,
+      };
+    }
+
+    report({
+      state: 'packaging',
+      step: `Packaging ${produced.length} files`,
+      progress: { percent: 99, totalFiles: produced.length },
+    });
+
+    const archiveName = `${sanitizeStem(
+      spec.filename ?? [resolved.author, resolved.title].filter(Boolean).join(' - '),
+      'media',
+    )}.zip`;
+    const archivePath = workspace.outputPath(archiveName);
+
+    const { sizeBytes } = await createZip({
+      entries: produced.map((file) => ({ path: file.path, name: file.name })),
+      destination: archivePath,
+      ...(signal ? { signal } : {}),
+      onProgress: (percent, currentFile, totalFiles) => {
+        report({
+          state: 'packaging',
+          step: `Packaging ${currentFile} of ${totalFiles}`,
+          progress: { percent: 99, currentFile, totalFiles },
+        });
+      },
+    });
+
+    await workspace.writeManifest({
+      jobId: spec.jobId,
+      createdAt: new Date().toISOString(),
+      expiresAt,
+      primary: archiveName,
+      isArchive: true,
+      files: [
+        { name: archiveName, sizeBytes, mimeType: 'application/zip' },
+        ...files.map(({ name, sizeBytes: size, mimeType }) => ({
+          name,
+          sizeBytes: size,
+          mimeType,
+        })),
+      ],
+    });
+
+    return {
+      downloadPath: `/api/jobs/${spec.jobId}/download`,
+      filename: archiveName,
+      sizeBytes,
+      mimeType: 'application/zip',
+      isArchive: true,
+      files,
+      expiresAt,
+    };
+  }
+
+  private async validate(
+    produced: readonly { path: string; name: string }[],
+    result: JobResult,
+  ): Promise<void> {
+    const { config } = this.deps;
+    for (const file of produced) {
+      const info = await stat(file.path).catch(() => undefined);
+      if (!info || info.size === 0) {
+        throw seraError('CONVERSION_FAILED', {
+          message: 'The download finished but produced an empty file.',
+          detail: `empty output: ${file.name}`,
+        });
+      }
+      if (info.size >= config.maxFilesizeBytes) {
+        throw seraError('TOO_LARGE', {
+          message: 'The converted file is larger than this server allows.',
+          hint: 'Try a lower quality.',
+          detail: `${info.size} bytes: ${file.name}`,
+        });
+      }
+
+      const extension = file.name.split('.').pop()?.toLowerCase() ?? '';
+      if (extension !== 'srt' && extension !== 'vtt') {
+        const imposter = sniffTextImposter(await headOf(file.path));
+        if (imposter) {
+          throw seraError('MEDIA_UNAVAILABLE', {
+            message: 'The source returned a page instead of the media.',
+            hint: 'The post may have become private, or the site may be asking for a login.',
+            detail: `${file.name} is ${imposter}, not media`,
+          });
+        }
+      }
+      if (
+        ['mp4', 'webm', 'mov', 'mkv', 'mp3', 'm4a', 'opus', 'wav', 'flac', 'ogg'].includes(
+          extension,
+        )
+      ) {
+        const probed = await probe(file.path, {
+          ffmpegPath: config.ffmpegPath,
+          ffprobePath: config.ffprobePath,
+          timeoutMs: 30_000,
+        }).catch(() => undefined);
+        if (probed?.durationSeconds !== undefined && probed.durationSeconds <= 0) {
+          throw seraError('CONVERSION_FAILED', {
+            message: 'The download finished but the file has no playable content.',
+            detail: `zero duration: ${file.name}`,
+          });
+        }
+        if (!probed || (!probed.video && !probed.audio)) {
+          throw seraError('CONVERSION_FAILED', {
+            message: 'The download finished but the file could not be verified.',
+            detail: `unreadable output: ${file.name}`,
+          });
+        }
+      }
+    }
+    if (result.sizeBytes <= 0) {
+      throw seraError('CONVERSION_FAILED', { detail: 'result has no bytes' });
+    }
+  }
+}
+
+interface MatchedSelection {
+  readonly item: ResolvedItem;
+  readonly plan: DownloadPlan;
+}
+
+export function matchSelection(resolved: ResolvedMedia, selection: JobSelection): MatchedSelection {
+  const item =
+    (selection.sourceId
+      ? resolved.items.find((candidate) => candidate.sourceId === selection.sourceId)
+      : undefined) ?? resolved.items[selection.itemIndex];
+
+  if (!item) {
+    throw seraError('EXPIRED', {
+      message: 'That item is no longer part of this post.',
+      detail: `item ${selection.itemIndex} not found among ${resolved.items.length}`,
+    });
+  }
+
+  const plan = item.plans.find((candidate) => planKey(candidate) === selection.planKey);
+  if (!plan) {
+    throw seraError('EXPIRED', {
+      message: 'The quality you chose is no longer available.',
+      hint: 'Analyze the link again to see the current options.',
+      detail: `plan ${selection.planKey} missing`,
+    });
+  }
+  return { item, plan };
+}
+
+function assertImportFresh(imported: ImportedJob, now = Date.now()): void {
+  if (imported.expiresAt !== undefined && imported.expiresAt * 1000 <= now) {
+    throw importExpired('import: the media urls expired before the job reached them');
+  }
+}
+
+function isForbidden(error: unknown): boolean {
+  return error instanceof SeraError && error.code === 'NETWORK_ERROR' && error.detail === 'GET 403';
+}
+
+function assertWithinLimits(matched: readonly MatchedSelection[], config: EngineConfig): void {
+  let total = 0;
+  for (const { item, plan } of matched) {
+    if (item.isLive) {
+      throw seraError('LIVE_IN_PROGRESS');
+    }
+    if (item.duration && item.duration > config.maxDurationSeconds) {
+      throw seraError('TOO_LONG', {
+        message: `This server accepts media up to ${Math.round(config.maxDurationSeconds / 60)} minutes.`,
+        detail: `${Math.round(item.duration)}s exceeds limit`,
+      });
+    }
+    total += plan.filesizeBytes ?? 0;
+  }
+  if (total > config.maxFilesizeBytes) {
+    throw seraError('TOO_LARGE', { detail: `${total} bytes across ${matched.length} items` });
+  }
+}
+
+function targetExtension(spec: ConversionSpec): string {
+  switch (spec.kind) {
+    case 'audio':
+      return spec.container;
+    case 'remux':
+      return spec.container;
+    case 'video':
+      return spec.container;
+    case 'gif':
+      return 'gif';
+  }
+}
+
+function stepForPostprocessor(name: string, plan: DownloadPlan): string {
+  switch (name) {
+    case 'Merger':
+      return 'Merging video and audio';
+    case 'ExtractAudio':
+      return `Converting to ${plan.container.toUpperCase()}`;
+    case 'VideoRemuxer':
+      return `Remuxing to ${plan.container.toUpperCase()}`;
+    case 'MoveFiles':
+      return 'Finishing up';
+    default:
+      return 'Processing';
+  }
+}
+
+function assertSubtitlesOffered(item: ResolvedItem, subtitles: JobSubtitles): void {
+  const offered = item.subtitles?.some(
+    (track) => track.lang === subtitles.lang && track.auto === subtitles.auto,
+  );
+  if (!offered) {
+    throw seraError('MEDIA_UNAVAILABLE', {
+      message: 'Those subtitles are not available any more.',
+      detail: `subtitles ${subtitles.lang}${subtitles.auto ? ' (auto)' : ''} not offered`,
+    });
+  }
+}
+
+function subtitleName(name: string, lang: string): string {
+  const dot = name.lastIndexOf('.');
+  const safe = lang.replace(/-orig$/, '').replace(/[^A-Za-z0-9_-]/g, '');
+  return `${name.slice(0, dot)}.${safe}${name.slice(dot)}`;
+}
+
+export const SECTION_STALL_MS = 20_000;
+
+export function watchGrowth(directory: string, stallMs: number, onStall: () => void): () => void {
+  let size = -1;
+  let since = Date.now();
+  let checking = false;
+  const timer = setInterval(
+    () => {
+      if (checking) return;
+      checking = true;
+      void directorySize(directory)
+        .then((current) => {
+          if (current !== size) {
+            size = current;
+            since = Date.now();
+          } else if (Date.now() - since >= stallMs) {
+            clearInterval(timer);
+            onStall();
+          }
+        })
+        .finally(() => (checking = false));
+    },
+    Math.min(1000, Math.max(10, stallMs / 4)),
+  );
+  timer.unref();
+  return () => clearInterval(timer);
+}
+
+async function directorySize(directory: string): Promise<number> {
+  let total = 0;
+  for (const entry of await readdir(directory, { withFileTypes: true }).catch(() => [])) {
+    if (!entry.isFile()) continue;
+    total += await stat(join(directory, entry.name)).then(
+      (info) => info.size,
+      () => 0,
+    );
+  }
+  return total;
+}
+
+export function sectionIsUsable(
+  probed:
+    | { readonly durationSeconds?: number; readonly video?: unknown; readonly audio?: unknown }
+    | undefined,
+  range: TrimRange,
+  itemDuration?: number,
+): boolean {
+  if (!probed || (!probed.video && !probed.audio)) return false;
+  const end = range.end ?? itemDuration;
+  if (end === undefined) return probed.durationSeconds === undefined || probed.durationSeconds > 0;
+  if (probed.durationSeconds === undefined) return false;
+  const expected = end - range.start;
+  return Math.abs(probed.durationSeconds - expected) <= Math.max(1, expected * 0.1);
+}
+
+async function findSingleFile(directory: string): Promise<string> {
+  const entries = await readdir(directory, { withFileTypes: true });
+  const files = entries
+    .filter((entry) => entry.isFile() && !entry.name.endsWith('.part'))
+    .map((entry) => entry.name);
+
+  if (!files.length) {
+    throw seraError('MEDIA_UNAVAILABLE', {
+      message: 'The download completed without producing a file.',
+      detail: `empty scratch dir ${directory}`,
+    });
+  }
+  if (files.length === 1) return join(directory, files[0]!);
+
+  const sized = await Promise.all(
+    files.map(async (name) => ({
+      name,
+      size: await stat(join(directory, name))
+        .then((s) => s.size)
+        .catch(() => 0),
+    })),
+  );
+  sized.sort((a, b) => b.size - a.size);
+  return join(directory, sized[0]!.name);
+}
+
+export { lowerQualityAlternatives, SeraError };
+
+const FORMAT_FALLBACK_ANSWERS = new Set([
+  'FORMAT_UNAVAILABLE',
+  'STREAM_403',
+  'CDN_DOWNLOAD_FAILURE',
+  'SOURCE_ERROR',
+]);
+
+function lowerQualityAlternatives(
+  item: ResolvedItem,
+  chosen: DownloadPlan,
+): readonly DownloadPlan[] {
+  const ceiling = chosen.height ?? Number.POSITIVE_INFINITY;
+  return item.plans
+    .filter(
+      (plan) =>
+        plan !== chosen &&
+        plan.kind === chosen.kind &&
+        planKey(plan) !== planKey(chosen) &&
+        (plan.height ?? 0) < ceiling,
+    )
+    .sort((a, b) => (b.height ?? 0) - (a.height ?? 0))
+    .slice(0, 2);
+}
+
+async function headOf(path: string): Promise<Buffer> {
+  try {
+    const handle = await open(path, 'r');
+    try {
+      const head = Buffer.alloc(SNIFF_BYTES);
+      await handle.read(head, 0, SNIFF_BYTES, 0);
+      return head;
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return Buffer.alloc(0);
+  }
+}
+
+async function renameToActualFormat(path: string, claimed: string): Promise<string> {
+  const head = await headOf(path);
+  if (!head.length) return path;
+
+  const actual = sniffContainer(head);
+  if (!actual || !contradicts(claimed, actual)) return path;
+
+  const corrected = path.replace(/\.[^.]+$/, `.${actual}`);
+  await rename(path, corrected);
+  return corrected;
+}

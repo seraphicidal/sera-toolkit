@@ -1,0 +1,42 @@
+{
+	import /etc/caddy/globals/*.caddy
+}
+
+{$SERA_DOMAIN} {
+	encode zstd gzip
+
+	@api path /internal/extraction/* /api/* /health /ready
+	handle @api {
+		reverse_proxy api:4000 {
+			transport http {
+				read_timeout 30m
+				write_timeout 30m
+			}
+			flush_interval -1
+		}
+	}
+
+	handle {
+		reverse_proxy web:3000 {
+			transport http {
+				read_timeout 30m
+				write_timeout 30m
+			}
+			flush_interval -1
+		}
+	}
+
+	header {
+		Strict-Transport-Security "max-age=63072000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		X-Frame-Options "DENY"
+		-Server
+	}
+
+	log {
+		output stdout
+		format console
+		level INFO
+	}
+}

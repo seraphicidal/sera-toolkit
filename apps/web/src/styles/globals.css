@@ -1,0 +1,174 @@
+@import 'tailwindcss';
+
+@theme {
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Inter, Roboto, 'Helvetica Neue', Arial,
+    sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', 'Cascadia Mono', 'Roboto Mono', Menlo, Consolas, monospace;
+
+  --color-canvas: oklch(0.985 0.002 106);
+  --color-surface: oklch(1 0 0);
+  --color-sunken: oklch(0.965 0.003 106);
+  --color-line: oklch(0.905 0.004 106);
+  --color-line-strong: oklch(0.83 0.006 106);
+
+  --color-ink: oklch(0.21 0.008 265);
+  --color-ink-muted: oklch(0.47 0.008 265);
+  --color-ink-faint: oklch(0.62 0.008 265);
+
+  --color-accent: oklch(0.52 0.19 268);
+  --color-accent-hover: oklch(0.46 0.19 268);
+  --color-accent-ink: oklch(0.99 0 0);
+  --color-accent-wash: oklch(0.955 0.025 268);
+
+  --color-danger: oklch(0.52 0.19 25);
+  --color-danger-wash: oklch(0.96 0.03 25);
+  --color-success: oklch(0.55 0.14 155);
+  --color-warning: oklch(0.7 0.15 75);
+
+  --radius-input: 0.875rem;
+  --radius-panel: 1.125rem;
+
+  --shadow-lift: 0 1px 2px oklch(0 0 0 / 0.05), 0 8px 24px -12px oklch(0 0 0 / 0.14);
+  --shadow-focus: 0 0 0 3px oklch(0.52 0.19 268 / 0.28);
+
+  --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
+
+:root[data-theme='dark'] {
+  --color-canvas: oklch(0.155 0.004 265);
+  --color-surface: oklch(0.195 0.005 265);
+  --color-sunken: oklch(0.235 0.006 265);
+  --color-line: oklch(0.29 0.007 265);
+  --color-line-strong: oklch(0.4 0.008 265);
+
+  --color-ink: oklch(0.96 0.003 265);
+  --color-ink-muted: oklch(0.73 0.008 265);
+  --color-ink-faint: oklch(0.58 0.008 265);
+
+  --color-accent: oklch(0.7 0.16 268);
+  --color-accent-hover: oklch(0.77 0.16 268);
+  --color-accent-ink: oklch(0.16 0.02 268);
+  --color-accent-wash: oklch(0.26 0.05 268);
+
+  --color-danger: oklch(0.7 0.17 25);
+  --color-danger-wash: oklch(0.27 0.06 25);
+  --color-success: oklch(0.72 0.15 155);
+  --color-warning: oklch(0.8 0.14 80);
+
+  --shadow-lift: 0 1px 2px oklch(0 0 0 / 0.4), 0 12px 32px -16px oklch(0 0 0 / 0.7);
+  --shadow-focus: 0 0 0 3px oklch(0.7 0.16 268 / 0.34);
+}
+
+@layer base {
+  * {
+    border-color: var(--color-line);
+  }
+
+  html {
+    scrollbar-gutter: stable;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'ss01';
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+  :focus:not(:focus-visible) {
+    outline: none;
+  }
+
+  ::selection {
+    background: var(--color-accent-wash);
+    color: var(--color-ink);
+  }
+
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@layer utilities {
+  .sr-only-focusable:not(:focus):not(:focus-within) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
+@keyframes sera-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes sera-shimmer {
+  from {
+    background-position: -120% 0;
+  }
+  to {
+    background-position: 220% 0;
+  }
+}
+
+@keyframes sera-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-fade-up {
+  animation: sera-fade-up 320ms var(--ease-out-quint) both;
+}
+
+.animate-spin-slow {
+  animation: sera-spin 900ms linear infinite;
+}
+
+.shimmer {
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in oklab, var(--color-ink) 6%, transparent) 45%,
+    transparent 90%
+  );
+  background-size: 220% 100%;
+  animation: sera-shimmer 1.4s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .shimmer {
+    animation: none;
+    background-image: none;
+  }
+}

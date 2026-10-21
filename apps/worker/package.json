@@ -1,0 +1,20 @@
+{
+  "name": "@sera/worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc --build",
+    "clean": "tsc --build --clean",
+    "dev": "tsc --build && node --enable-source-maps --watch dist/index.js",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@sera/contracts": "1.0.0",
+    "@sera/engine": "1.0.0"
+  },
+  "devDependencies": {
+    "pino-pretty": "13.1.3"
+  }
+}

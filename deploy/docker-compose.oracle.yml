@@ -1,0 +1,172 @@
+name: sera
+
+services:
+  caddy:
+    image: caddy:2.11-alpine
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp'
+    environment:
+      SERA_DOMAIN: ${SERA_DOMAIN:?set SERA_DOMAIN, e.g. 1-2-3-4.sslip.io}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./deploy/caddy.globals:/etc/caddy/globals:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - web
+    security_opt:
+      - no-new-privileges:true
+
+  web:
+    image: ${SERA_IMAGE_WEB:-ghcr.io/seraphicidal/sera-web:latest}
+    restart: unless-stopped
+    environment:
+      SERA_API_URL: http://api:4000
+    expose:
+      - '3000'
+    depends_on:
+      api:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /app/apps/web/.next/cache
+    security_opt:
+      - no-new-privileges:true
+
+  api:
+    image: ${SERA_IMAGE_API:-ghcr.io/seraphicidal/sera-api:latest}
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      SERA_SECRET: ${SERA_SECRET:?set SERA_SECRET — see .env.example}
+      SERA_QUEUE_DRIVER: redis
+      SERA_REDIS_URL: redis://redis:6379
+      SERA_EMBEDDED_WORKER: 'false'
+      SERA_DATA_DIR: /data
+      SERA_RETENTION_SECONDS: ${SERA_RETENTION_SECONDS:-1800}
+      SERA_MAX_FILESIZE_BYTES: ${SERA_MAX_FILESIZE_BYTES:-2147483648}
+      SERA_MAX_DURATION_SECONDS: ${SERA_MAX_DURATION_SECONDS:-10800}
+      SERA_MAX_ITEMS_PER_JOB: ${SERA_MAX_ITEMS_PER_JOB:-25}
+      SERA_RATE_LIMIT_RESOLVE_PER_MINUTE: ${SERA_RATE_LIMIT_RESOLVE_PER_MINUTE:-20}
+      SERA_RATE_LIMIT_JOBS_PER_MINUTE: ${SERA_RATE_LIMIT_JOBS_PER_MINUTE:-8}
+      SERA_MAX_CONCURRENT_JOBS_PER_CLIENT: ${SERA_MAX_CONCURRENT_JOBS_PER_CLIENT:-2}
+      SERA_TRUST_PROXY: 'true'
+      SERA_REDDIT_CLIENT_ID: ${SERA_REDDIT_CLIENT_ID:-}
+      SERA_REDDIT_CLIENT_SECRET: ${SERA_REDDIT_CLIENT_SECRET:-}
+      SERA_YOUTUBE_POT_PROVIDER_URL: ${SERA_YOUTUBE_POT_PROVIDER_URL:-}
+      SERA_EXTRACTION_NODE_TOKENS: ${SERA_EXTRACTION_NODE_TOKENS:-}
+      SERA_EXTRACTION_NODE_TOKEN: ${SERA_EXTRACTION_NODE_TOKEN:-}
+      SERA_EXTRACTION_WORKER_TOKEN: ${SERA_EXTRACTION_WORKER_TOKEN:-}
+      SERA_CANARY_TOKEN: ${SERA_CANARY_TOKEN:-}
+      SERA_ADMIN_TOKEN: ${SERA_ADMIN_TOKEN:-}
+      SERA_INSTAGRAM_SESSION_ID: ${SERA_INSTAGRAM_SESSION_ID:-}
+      SERA_EXTRA_ALLOWED_HOSTS: ${SERA_EXTRA_ALLOWED_HOSTS:-}
+      SERA_NETWORK_CLASS: ${SERA_NETWORK_CLASS:-datacenter}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    expose:
+      - '4000'
+    volumes:
+      - media:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+
+  worker:
+    image: ${SERA_IMAGE_API:-ghcr.io/seraphicidal/sera-api:latest}
+    restart: unless-stopped
+    stop_grace_period: 10m
+    command: ['node', 'apps/worker/dist/index.js']
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "const{statSync}=require('node:fs');const age=Date.now()-statSync('/data/.worker-alive').mtimeMs;process.exit(age<60000?0:1)",
+        ]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    environment:
+      NODE_ENV: production
+      SERA_SECRET: ${SERA_SECRET:?set SERA_SECRET — see .env.example}
+      SERA_QUEUE_DRIVER: redis
+      SERA_REDIS_URL: redis://redis:6379
+      SERA_DATA_DIR: /data
+      SERA_WORKER_CONCURRENCY: ${SERA_WORKER_CONCURRENCY:-2}
+      SERA_API_URL: http://api:4000
+      SERA_RETENTION_SECONDS: ${SERA_RETENTION_SECONDS:-1800}
+      SERA_MAX_FILESIZE_BYTES: ${SERA_MAX_FILESIZE_BYTES:-2147483648}
+      SERA_MAX_DURATION_SECONDS: ${SERA_MAX_DURATION_SECONDS:-10800}
+      SERA_MAX_ITEMS_PER_JOB: ${SERA_MAX_ITEMS_PER_JOB:-25}
+      SERA_REDDIT_CLIENT_ID: ${SERA_REDDIT_CLIENT_ID:-}
+      SERA_REDDIT_CLIENT_SECRET: ${SERA_REDDIT_CLIENT_SECRET:-}
+      SERA_YOUTUBE_POT_PROVIDER_URL: ${SERA_YOUTUBE_POT_PROVIDER_URL:-}
+      SERA_EXTRACTION_NODE_TOKENS: ${SERA_EXTRACTION_NODE_TOKENS:-}
+      SERA_EXTRACTION_NODE_TOKEN: ${SERA_EXTRACTION_NODE_TOKEN:-}
+      SERA_EXTRACTION_WORKER_TOKEN: ${SERA_EXTRACTION_WORKER_TOKEN:-}
+      SERA_INSTAGRAM_SESSION_ID: ${SERA_INSTAGRAM_SESSION_ID:-}
+      SERA_EXTRA_ALLOWED_HOSTS: ${SERA_EXTRA_ALLOWED_HOSTS:-}
+      SERA_NETWORK_CLASS: ${SERA_NETWORK_CLASS:-datacenter}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - media:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          cpus: '${SERA_WORKER_CPUS:-2}'
+          memory: ${SERA_WORKER_MEMORY:-3g}
+
+  potoken:
+    image: brainicism/bgutil-ytdlp-pot-provider:latest@sha256:d7d34108b76e52c7d3b575fe9e797e4bf41c1b2a08f80c5292eff6f851ce8472
+    profiles: ['potoken']
+    restart: unless-stopped
+    expose:
+      - '4416'
+    security_opt:
+      - no-new-privileges:true
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: >
+      redis-server
+      --save '3600 1'
+      --appendonly no
+      --maxmemory 256mb
+      --maxmemory-policy noeviction
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  media:
+  caddy_data:
+  caddy_config:
+  redis_data:

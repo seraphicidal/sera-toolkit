@@ -1,0 +1,240 @@
+'use client';
+
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type { ImportRequest, JobError, MediaInfo } from '@sera/contracts/types';
+import Link from 'next/link';
+import { ApiError, importMedia } from '@/lib/api';
+import { openImportChannel, readImportFragment } from '@/lib/import-handshake';
+import { BookmarkletLink } from './bookmarklet-link';
+import { Downloader } from './downloader';
+import { ErrorPanel, type ErrorAction } from './error-panel';
+import { SpinnerIcon } from './icons';
+
+type Phase = 'waiting' | 'ready' | 'error' | 'idle';
+
+function sourceLabel(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return parsed.hostname.replace(/^www\./, '') + parsed.pathname.replace(/\/+$/, '');
+  } catch {
+    return url;
+  }
+}
+
+export function ImportClient() {
+  const [phase, setPhase] = useState<Phase>('waiting');
+  const [info, setInfo] = useState<MediaInfo>();
+  const [error, setError] = useState<JobError>();
+  const [savedRequest, setSavedRequest] = useState<ImportRequest>();
+  const abortRef = useRef<AbortController | undefined>(undefined);
+  const fragment = useRef<{ read: boolean; value: ReturnType<typeof readImportFragment> }>({
+    read: false,
+    value: undefined,
+  });
+
+  const runImport = useCallback((request: ImportRequest) => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    setSavedRequest(request);
+    setError(undefined);
+    setPhase('waiting');
+
+    importMedia(request, controller.signal)
+      .then((resolved) => {
+        if (controller.signal.aborted) return;
+        setInfo(resolved);
+        setPhase('ready');
+      })
+      .catch((caught: unknown) => {
+        if (controller.signal.aborted) return;
+        setError(
+          caught instanceof ApiError
+            ? {
+                code: caught.code,
+                message: caught.message,
+                ...(caught.hint ? { hint: caught.hint } : {}),
+                retryable: caught.retryable,
+              }
+            : { code: 'INTERNAL', message: 'Something went wrong.', retryable: true },
+        );
+        setPhase('error');
+      });
+  }, []);
+
+  useEffect(() => {
+    if (!fragment.current.read) {
+      fragment.current = { read: true, value: readImportFragment(window) };
+    }
+
+    const fragmentResult = fragment.current.value;
+    if (fragmentResult) {
+      if (fragmentResult.ok) {
+        runImport(fragmentResult.request);
+      } else {
+        setError(
+          fragmentResult.reason === 'too-large'
+            ? {
+                code: 'TOO_LARGE',
+                message: 'That import link is too large to open.',
+                hint: 'Open the post on Instagram and send it again.',
+                retryable: false,
+              }
+            : {
+                code: 'BLOCKED_ADDRESS',
+                message: 'That link points at media somewhere other than Instagram.',
+                hint: 'Open the post on Instagram and send it from there.',
+                retryable: false,
+              },
+        );
+        setPhase('error');
+      }
+      return () => abortRef.current?.abort();
+    }
+
+    if (!window.opener) {
+      setPhase('idle');
+      return () => abortRef.current?.abort();
+    }
+
+    const channel = openImportChannel(window);
+    channel.received
+      .then((request) => {
+        runImport(request);
+      })
+      .catch(() => {
+        setPhase('idle');
+      });
+
+    return () => {
+      channel.close();
+      abortRef.current?.abort();
+    };
+  }, [runImport]);
+
+  if (phase === 'ready' && info) {
+    return (
+      <div className="flex flex-1 flex-col justify-center gap-3 py-8">
+        <p className="text-[0.8125rem] text-[var(--color-ink-faint)]">
+          From <span className="text-[var(--color-ink-muted)]">{sourceLabel(info.url)}</span>
+        </p>
+        <Downloader initialInfo={info} />
+      </div>
+    );
+  }
+
+  if (phase === 'error' && error) {
+    const canRetry = error.retryable && savedRequest !== undefined;
+    const actions: ErrorAction[] = [
+      ...(canRetry
+        ? [{ label: 'Try again', primary: true, onClick: () => runImport(savedRequest) }]
+        : []),
+      {
+        label: 'Back to SERA',
+        primary: !canRetry,
+        onClick: () => (window.location.href = '/'),
+      },
+    ];
+    return (
+      <div className="flex flex-1 flex-col justify-center py-8">
+        <ErrorPanel error={error} actions={actions} />
+      </div>
+    );
+  }
+
+  if (phase === 'idle') return <HowItWorks />;
+
+  return (
+    <section className="flex flex-1 flex-col items-center justify-center gap-3 py-16 text-center">
+      <SpinnerIcon size={22} className="text-[var(--color-accent)]" />
+      <p className="text-[0.9375rem] text-[var(--color-ink-muted)]">
+        Reading the post from your browser…
+      </p>
+    </section>
+  );
+}
+
+function HowItWorks() {
+  return (
+    <section className="animate-fade-up mx-auto flex w-full max-w-[34rem] flex-1 flex-col justify-center gap-5 py-10 sm:py-12">
+      <h1 className="text-lg font-medium text-[var(--color-ink)]">
+        Send an Instagram post to SERA
+      </h1>
+      <p className="text-[0.9375rem] leading-relaxed text-[var(--color-ink-muted)]">
+        Instagram serves photos only to a signed-in browser, so SERA cannot fetch them for you from
+        its own server. This page takes the other route: your own browser, already signed in, reads
+        the post and sends just the media here. Your Instagram login never reaches SERA.
+      </p>
+
+      <div className="rounded-[var(--radius-panel)] border border-[var(--color-accent)]/40 bg-[var(--color-accent)]/8 px-4 py-3.5">
+        <p className="text-[0.9375rem] leading-relaxed text-[var(--color-ink)]">
+          <span className="font-semibold">First — sign in to instagram.com in this browser.</span>{' '}
+          <span className="text-[var(--color-ink-muted)]">
+            The Instagram app’s login doesn’t carry over; you have to be logged in on the website
+            itself, in the same browser you run SERA from. From the app, tap Share → Copy link and
+            open that link in your browser (on iPhone, if it opens the app, paste the link into
+            Safari’s address bar).
+          </span>
+        </p>
+      </div>
+
+      <div className="flex flex-col gap-3 rounded-[var(--radius-panel)] border border-[var(--color-line)] bg-[var(--color-surface)] p-4 sm:p-5">
+        <p className="text-[0.8125rem] font-medium tracking-wide text-[var(--color-ink-faint)] uppercase">
+          Then install it, once
+        </p>
+        <BookmarkletLink />
+        <div className="flex flex-col gap-2.5 text-[0.8125rem] leading-relaxed text-[var(--color-ink-muted)]">
+          <p>
+            <span className="font-medium text-[var(--color-ink)]">On a computer:</span> drag the
+            button to your bookmarks bar. Click it while you’re viewing a post.
+          </p>
+          <p>
+            <span className="font-medium text-[var(--color-ink)]">On iPhone (Safari):</span> tap{' '}
+            <span className="font-medium">Copy code</span>, bookmark this page (Share → Add
+            Bookmark) and name it <span className="font-medium">SERA</span>, then edit that bookmark
+            and replace its address with the copied code.
+          </p>
+          <p>
+            <span className="font-medium text-[var(--color-ink)]">On Android (Chrome):</span> tap{' '}
+            <span className="font-medium">Copy code</span>, bookmark any page, then edit it, name it{' '}
+            <span className="font-medium">SERA</span>, and paste the code as the address.
+          </p>
+        </div>
+      </div>
+
+      <ol className="flex flex-col gap-3 text-[0.9375rem] text-[var(--color-ink-muted)]">
+        <Step n={1}>
+          Open the photo post or carousel on instagram.com, signed in <span>(see above)</span>.
+        </Step>
+        <Step n={2}>
+          Run the <span className="font-medium">SERA</span> bookmark:
+          <span className="mt-1 block text-[0.8125rem] text-[var(--color-ink-faint)]">
+            On a computer, click it in the bookmarks bar. On a phone, tap the address bar, type{' '}
+            <span className="font-medium">SERA</span>, and tap the bookmark.
+          </span>
+        </Step>
+        <Step n={3}>The tab turns into SERA with the post ready to download.</Step>
+      </ol>
+
+      <p className="text-[0.8125rem] text-[var(--color-ink-faint)]">
+        Reels and videos need none of this — paste their link on the{' '}
+        <Link href="/" className="text-[var(--color-accent)] hover:opacity-75">
+          home page
+        </Link>
+        .
+      </p>
+    </section>
+  );
+}
+
+function Step({ n, children }: { readonly n: number; readonly children: React.ReactNode }) {
+  return (
+    <li className="flex gap-3">
+      <span className="tabular flex size-6 shrink-0 items-center justify-center rounded-full bg-[var(--color-sunken)] text-[0.75rem] font-medium text-[var(--color-ink)]">
+        {n}
+      </span>
+      <span className="pt-0.5">{children}</span>
+    </li>
+  );
+}
