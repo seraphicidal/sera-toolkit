@@ -10,6 +10,7 @@ export interface TrimMediaRequest extends FfmpegOptions {
   readonly input: string;
   readonly output: string;
   readonly range: TrimRange;
+  readonly threads?: number;
 }
 
 export function copyIsAccurate(start: number, keyframe: number | undefined): boolean {
@@ -123,6 +124,8 @@ export async function trimMedia(request: TrimMediaRequest): Promise<{ reencoded:
     ...(copy ? ['-c', 'copy'] : reencodeArgs(extension)),
     '-avoid_negative_ts',
     'make_zero',
+    '-threads',
+    String(request.threads ?? 2),
     ...(extension === 'mp4' || extension === 'mov' || extension === 'm4a'
       ? ['-movflags', '+faststart']
       : []),

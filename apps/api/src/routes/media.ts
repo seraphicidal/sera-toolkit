@@ -27,6 +27,7 @@ interface CachedThumbnail {
 
 export class ThumbnailCache {
   private readonly entries = new Map<string, CachedThumbnail>();
+  private readonly inFlight = new Map<string, Promise<{ body: Buffer; contentType: string }>>();
   private currentBytes = 0;
 
   constructor(
@@ -90,8 +91,21 @@ export class ThumbnailCache {
     return this.currentBytes;
   }
 
+  getInFlight(url: string): Promise<{ body: Buffer; contentType: string }> | undefined {
+    return this.inFlight.get(url);
+  }
+
+  setInFlight(url: string, promise: Promise<{ body: Buffer; contentType: string }>): void {
+    this.inFlight.set(url, promise);
+  }
+
+  deleteInFlight(url: string): void {
+    this.inFlight.delete(url);
+  }
+
   clear(): void {
     this.entries.clear();
+    this.inFlight.clear();
     this.currentBytes = 0;
   }
 }
@@ -205,29 +219,46 @@ export function registerMediaRoutes(app: FastifyInstance, engine: SeraEngine): v
           .send(cached.body);
       }
 
-      const response = await safeFetch(target, {
-        dispatcher: engine.resolver.dispatcher,
-        timeoutMs: 10_000,
-        maxBytes: MAX_THUMBNAIL_BYTES,
-        signal: clientAbortSignal(request, reply),
-        allowUrl: (url) => !hostMatchesAny(url.hostname, engine.config.blockedHosts),
-      });
+      const active = thumbnailCache.getInFlight(source);
+      const data = active
+        ? await active
+        : await (() => {
+            const promise = (async () => {
+              try {
+                const response = await safeFetch(target, {
+                  dispatcher: engine.resolver.dispatcher,
+                  timeoutMs: 10_000,
+                  maxBytes: MAX_THUMBNAIL_BYTES,
+                  signal: clientAbortSignal(request, reply),
+                  allowUrl: (url) => !hostMatchesAny(url.hostname, engine.config.blockedHosts),
+                });
 
-      if (response.status >= 400) throw seraError('NOT_FOUND');
+                if (response.status >= 400) throw seraError('NOT_FOUND');
 
-      const contentType =
-        (header(response.headers, 'content-type') ?? '').split(';')[0]?.trim().toLowerCase() ?? '';
-      if (!IMAGE_TYPES.has(contentType))
-        throw seraError('NOT_FOUND', { detail: `thumb type ${contentType}` });
+                const contentType =
+                  (header(response.headers, 'content-type') ?? '')
+                    .split(';')[0]
+                    ?.trim()
+                    .toLowerCase() ?? '';
+                if (!IMAGE_TYPES.has(contentType))
+                  throw seraError('NOT_FOUND', { detail: `thumb type ${contentType}` });
 
-      thumbnailCache.set(source, response.body, contentType);
+                thumbnailCache.set(source, response.body, contentType);
+                return { body: response.body, contentType };
+              } finally {
+                thumbnailCache.deleteInFlight(source);
+              }
+            })();
+            thumbnailCache.setInFlight(source, promise);
+            return promise;
+          })();
 
       return reply
-        .header('content-type', contentType)
+        .header('content-type', data.contentType)
         .header('cache-control', 'public, max-age=3600, immutable')
         .header('content-security-policy', "default-src 'none'; sandbox")
         .header('x-content-type-options', 'nosniff')
-        .send(response.body);
+        .send(data.body);
     },
   );
 }

@@ -237,6 +237,43 @@ describe('file serving', () => {
     expect(response.headers['x-content-type-options']).toBe('nosniff');
     expect(response.headers['content-security-policy']).toContain("default-src 'none'");
   });
+
+  it('erases a finished job and removes its workspace files on DELETE', async () => {
+    const info = await resolveClip();
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/jobs',
+      payload: { infoId: info.id, optionIds: [info.items[0]!.options[0]!.id] },
+    });
+    const { id } = created.json<Job>();
+
+    const deadline = Date.now() + 60_000;
+    let job: Job;
+    for (;;) {
+      job = (await app.inject({ method: 'GET', url: `/api/jobs/${id}` })).json<Job>();
+      if (job.state === 'ready' || job.state === 'failed') break;
+      if (Date.now() > deadline) throw new Error('job never finished');
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    expect(job.state).toBe('ready');
+
+    const deleteResponse = await app.inject({ method: 'DELETE', url: `/api/jobs/${id}` });
+    expect(deleteResponse.statusCode).toBe(200);
+    expect(deleteResponse.json()).toEqual(
+      expect.objectContaining({ cancelled: true, deleted: true, id }),
+    );
+
+    const downloadResponse = await app.inject({ method: 'GET', url: job.result!.downloadPath });
+    expect(downloadResponse.statusCode).toBe(404);
+  });
+
+  it('returns 404 when attempting to delete a nonexistent job', async () => {
+    const response = await app.inject({
+      method: 'DELETE',
+      url: `/api/jobs/${'f'.repeat(32)}`,
+    });
+    expect(response.statusCode).toBe(404);
+  });
 });
 
 describe('responses', () => {

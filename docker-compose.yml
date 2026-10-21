@@ -22,6 +22,8 @@ services:
       - /app/apps/web/.next/cache
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
 
   api:
     image: ${SERA_IMAGE_API:-ghcr.io/seraphicidal/sera-api:latest}
@@ -105,6 +107,8 @@ services:
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
 
 volumes:
   media:

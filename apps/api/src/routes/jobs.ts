@@ -47,8 +47,10 @@ export function registerJobRoutes(app: FastifyInstance, engine: SeraEngine): voi
   });
 
   app.delete<{ Params: { id: string } }>('/api/jobs/:id', async (request, reply) => {
-    const cancelled = await engine.jobs.cancel(assertJobId(request.params.id));
-    return reply.status(cancelled ? 200 : 409).send({ cancelled });
+    const id = assertJobId(request.params.id);
+    const deleted = await engine.jobs.delete(id);
+    if (!deleted) throw seraError('NOT_FOUND', { message: 'That download has expired.' });
+    return reply.status(200).send({ cancelled: deleted, deleted: true, id });
   });
 
   app.get<{ Params: { id: string } }>('/api/jobs/:id/events', async (request, reply) => {

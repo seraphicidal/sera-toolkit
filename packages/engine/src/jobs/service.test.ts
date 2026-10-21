@@ -206,4 +206,55 @@ describe('JobService timeout and cancellation', () => {
       await rm(dir, { recursive: true, force: true }).catch(() => undefined);
     }
   });
+
+  it('deletes an existing job and destroys its workspace', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'sera-srv-test-'));
+    try {
+      const config = loadConfig({
+        NODE_ENV: 'test',
+        LOG_LEVEL: 'silent',
+        SERA_SECRET: 'srv-test-secret',
+        SERA_DATA_DIR: dir,
+      });
+      const backend = new MemoryJobBackend(silentLogger());
+      const workspaces = new WorkspaceManager(dir, 3600, silentLogger());
+      const service = new JobService({
+        config,
+        logger: silentLogger(),
+        resolver: {} as unknown as MediaResolver,
+        workspaces,
+        backend,
+      });
+
+      const now = new Date().toISOString();
+      const id = '3'.repeat(32);
+      const record: JobRecord = {
+        id,
+        state: 'ready',
+        step: 'Complete',
+        progress: { percent: 100 },
+        provider: 'youtube',
+        createdAt: now,
+        updatedAt: now,
+        spec: {
+          jobId: id,
+          provider: 'youtube',
+          url: 'https://youtube.com/watch?v=abc',
+          selections: [{ itemIndex: 0, planKey: '1080p' }],
+          packaging: 'auto',
+        },
+        clientKey: 'client-test',
+      };
+
+      await backend.submit(record);
+      await workspaces.create(id);
+      const deleted = await service.delete(id);
+      expect(deleted).toBe(true);
+
+      const missingDeleted = await service.delete('4'.repeat(32));
+      expect(missingDeleted).toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+    }
+  });
 });

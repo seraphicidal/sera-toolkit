@@ -19,6 +19,13 @@ services:
       - web
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    read_only: true
+    tmpfs:
+      - /tmp
 
   web:
     image: ${SERA_IMAGE_WEB:-ghcr.io/seraphicidal/sera-web:latest}
@@ -36,6 +43,8 @@ services:
       - /app/apps/web/.next/cache
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
 
   api:
     image: ${SERA_IMAGE_API:-ghcr.io/seraphicidal/sera-api:latest}
@@ -145,6 +154,8 @@ services:
       - '4416'
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
 
   redis:
     image: redis:7.4-alpine
@@ -164,6 +175,8 @@ services:
       retries: 5
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
 
 volumes:
   media:

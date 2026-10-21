@@ -303,6 +303,26 @@ jobs:
           docker rm -f sera-web-ci sera-api-web-ci sera-redis-web-ci >/dev/null
           docker network rm sera-web-ci >/dev/null
 
+      - name: Scan API image with Trivy
+        uses: aquasecurity/trivy-action@18f2510ee396bbf400402947b394f2dd8c87dbb0
+        with:
+          image-ref: ${{ env.IMAGE_API }}:verify
+          format: table
+          exit-code: '0'
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+
+      - name: Scan Web image with Trivy
+        uses: aquasecurity/trivy-action@18f2510ee396bbf400402947b394f2dd8c87dbb0
+        with:
+          image-ref: ${{ env.IMAGE_WEB }}:verify
+          format: table
+          exit-code: '0'
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+
       - name: Publish API image
         if: env.PUSH == 'true'
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8

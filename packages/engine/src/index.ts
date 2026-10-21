@@ -1,7 +1,7 @@
 export { loadConfig, locateTool, ConfigError, VERSION, type EngineConfig } from './config.js';
 export { SeraEngine, type EngineOptions } from './engine.js';
 export { SeraError, seraError, MESSAGES, HINTS } from './errors.js';
-export { createLogger, silentLogger, logSafeUrl, type Logger } from './logging.js';
+export { createLogger, silentLogger, logSafeUrl, maskSecrets, type Logger } from './logging.js';
 
 export { MediaResolver, type ResolverDependencies } from './resolver.js';
 

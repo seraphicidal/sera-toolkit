@@ -3,7 +3,13 @@ import { pino } from 'pino';
 import { describe, expect, it } from 'vitest';
 import { loadConfig } from './config.js';
 import type { YtdlpInfo } from './extract/ytdlp-types.js';
-import { logSafeUrl, REDACTED_PATHS, REDACTION_CENSOR, type Logger } from './logging.js';
+import {
+  logSafeUrl,
+  maskSecrets,
+  REDACTED_PATHS,
+  REDACTION_CENSOR,
+  type Logger,
+} from './logging.js';
 import { MediaResolver } from './resolver.js';
 
 function capture(): { logger: Logger; lines: () => Record<string, unknown>[] } {
@@ -210,5 +216,16 @@ describe('logSafeUrl', () => {
   it('keeps the site and the shape, and nothing that identifies the post', () => {
     expect(logSafeUrl('https://www.youtube.com/watch?v=dQw4w9WgXcQ')).toBe('www.youtube.com/watch');
     expect(logSafeUrl('https://www.instagram.com/p/ABC123/')).not.toContain('ABC123');
+  });
+});
+
+describe('maskSecrets', () => {
+  it('redacts sensitive API and provider tokens from text strings', () => {
+    const raw =
+      'error with key AKIAIOSFODNN7EXAMPLE and ghp_123456789012345678901234567890123456 in trace';
+    const masked = maskSecrets(raw);
+    expect(masked).not.toContain('AKIAIOSFODNN7EXAMPLE');
+    expect(masked).not.toContain('ghp_123456789012345678901234567890123456');
+    expect(masked).toContain('[redacted]');
   });
 });

@@ -78,3 +78,13 @@ export function logSafeUrl(url: URL | string): string {
     return '(unparseable)';
   }
 }
+
+const SECRET_PATTERNS = [/AKIA[0-9A-Z]{16}/g, /ghp_[0-9a-zA-Z]{36}/g, /[0-9a-f]{64}/gi];
+
+export function maskSecrets(text: string): string {
+  let masked = text;
+  for (const pattern of SECRET_PATTERNS) {
+    masked = masked.replace(pattern, REDACTION_CENSOR);
+  }
+  return masked;
+}

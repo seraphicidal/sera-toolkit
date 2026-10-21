@@ -194,6 +194,22 @@ export class JobService {
     return true;
   }
 
+  async delete(id: string): Promise<boolean> {
+    const record = await this.deps.backend.get(id);
+    if (!record) return false;
+
+    if (!isTerminalJobState(record.state)) {
+      this.inFlight.get(id)?.abort();
+      await this.deps.backend.patch(id, {
+        state: 'cancelled',
+        step: 'Cancelled',
+        error: seraError('CANCELLED').toJobError(),
+      });
+    }
+    await this.deps.workspaces.destroy(id);
+    return true;
+  }
+
   async *events(id: string, signal?: AbortSignal): AsyncGenerator<JobEvent> {
     const queue: JobEvent[] = [];
     let notify: (() => void) | undefined;

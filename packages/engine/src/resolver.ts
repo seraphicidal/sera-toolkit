@@ -111,6 +111,7 @@ export class MediaResolver {
 
   private readonly probeImpl: NonNullable<ResolverDependencies['probe']>;
   private readonly cache = new TtlCache<ExtractionOutcome>(200, 5 * 60_000);
+  private readonly inFlightResolves = new Map<string, Promise<ExtractionOutcome>>();
 
   constructor(deps: ResolverDependencies) {
     this.config = deps.config;
@@ -201,6 +202,20 @@ export class MediaResolver {
     const { url } = parseUserUrl(input, {
       allowPrivateAddresses: this.config.allowPrivateAddresses,
     });
+
+    if (!this.config.allowPrivateAddresses) {
+      try {
+        await this.egress.assertPublicDestination(url);
+      } catch (error) {
+        if (error instanceof SeraError && error.code === 'BLOCKED_ADDRESS') {
+          this.logger.warn(
+            { url: logSafeUrl(url), detail: error.detail },
+            'Blocked attempt to access private destination',
+          );
+        }
+        throw error;
+      }
+    }
 
     if (hostMatchesAny(url.hostname, this.config.blockedHosts)) {
       throw seraError('UNSUPPORTED_SOURCE', { detail: 'host is on the deny list' });
@@ -459,19 +474,31 @@ export class MediaResolver {
     const cached = this.cache.get(cacheKey);
     if (cached) return cached;
 
-    const outcome = await this.router.resolve(canonical, providerId, signal);
-    const media: ResolvedMedia = {
-      ...outcome.media,
-      ...(outcome.remote ? { remoteBackend: outcome.backend } : { remoteBackend: undefined }),
-    };
+    const inFlight = this.inFlightResolves.get(cacheKey);
+    if (inFlight) return inFlight;
 
-    if (!media.items.length) throw seraError('MEDIA_UNAVAILABLE');
-    const withMedia = { ...outcome, media };
-    this.cache.set(cacheKey, withMedia);
-    if (media.url !== canonical.toString()) {
-      this.cache.set(`${providerId}|${media.url}`, withMedia);
-    }
-    return withMedia;
+    const promise = (async () => {
+      try {
+        const outcome = await this.router.resolve(canonical, providerId, signal);
+        const media: ResolvedMedia = {
+          ...outcome.media,
+          ...(outcome.remote ? { remoteBackend: outcome.backend } : { remoteBackend: undefined }),
+        };
+
+        if (!media.items.length) throw seraError('MEDIA_UNAVAILABLE');
+        const withMedia = { ...outcome, media };
+        this.cache.set(cacheKey, withMedia);
+        if (media.url !== canonical.toString()) {
+          this.cache.set(`${providerId}|${media.url}`, withMedia);
+        }
+        return withMedia;
+      } finally {
+        this.inFlightResolves.delete(cacheKey);
+      }
+    })();
+
+    this.inFlightResolves.set(cacheKey, promise);
+    return promise;
   }
 
   getCached(providerId: string, url: string): ExtractionOutcome | undefined {

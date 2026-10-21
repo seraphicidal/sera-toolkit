@@ -553,6 +553,7 @@ export class JobRunner {
         ffmpegPath: config.ffmpegPath,
         ffprobePath: config.ffprobePath,
         timeoutMs: config.jobTimeoutSeconds * 1000,
+        threads: config.ffmpegThreads,
         ...(signal ? { signal } : {}),
       });
       await rm(fetched, { force: true });
@@ -713,6 +714,7 @@ export class JobRunner {
       ffmpegPath: config.ffmpegPath,
       ffprobePath: config.ffprobePath,
       timeoutMs: config.jobTimeoutSeconds * 1000,
+      threads: config.ffmpegThreads,
       ...(signal ? { signal } : {}),
     });
     await rm(full, { force: true });
