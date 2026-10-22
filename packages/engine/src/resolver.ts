@@ -1,5 +1,6 @@
 import type { NodeFeature } from './extract/remote.js';
 import { createHash, createHmac } from 'node:crypto';
+import { join } from 'node:path';
 import { MAX_INFO_TOKEN_LENGTH } from '@sera/contracts';
 import type { DownloadOption, ImportRequest, MediaInfo, MediaItem } from '@sera/contracts/types';
 import type { Dispatcher } from 'undici';
@@ -37,6 +38,7 @@ import {
   type ResolvedMedia,
   planKey,
 } from './providers/types.js';
+import { Denylist } from './security/denylist.js';
 import { EgressGuard } from './security/egress.js';
 import { createSafeDispatcher, header, safeFetch, safeOpen } from './security/http.js';
 import { hostMatchesAny, normalizeUrl, parseUserUrl } from './security/url.js';
@@ -99,6 +101,7 @@ export interface ResolverDependencies {
     },
   ) => Promise<YtdlpInfo>;
   readonly egress?: EgressGuard;
+  readonly denylist?: Denylist;
 }
 
 export class MediaResolver {
@@ -108,6 +111,7 @@ export class MediaResolver {
   readonly dispatcher: Dispatcher;
   readonly importHosts: MediaHostPolicy;
   readonly egress: EgressGuard;
+  readonly denylist: Denylist;
 
   private readonly probeImpl: NonNullable<ResolverDependencies['probe']>;
   private readonly cache = new TtlCache<ExtractionOutcome>(200, 5 * 60_000);
@@ -122,6 +126,12 @@ export class MediaResolver {
     this.registry = deps.registry ?? new ProviderRegistry(undefined, deps.config);
     this.egress =
       deps.egress ?? new EgressGuard({ allowPrivateAddresses: deps.config.allowPrivateAddresses });
+    this.denylist =
+      deps.denylist ??
+      new Denylist({
+        staticHosts: deps.config.blockedHosts,
+        filePath: deps.config.dataDir ? join(deps.config.dataDir, 'denylist.json') : undefined,
+      });
 
     this.router = new ExtractionRouter({
       primary: {
@@ -203,6 +213,11 @@ export class MediaResolver {
       allowPrivateAddresses: this.config.allowPrivateAddresses,
     });
 
+    const block = this.denylist.isBlocked(url);
+    if (block.blocked || hostMatchesAny(url.hostname, this.config.blockedHosts)) {
+      throw seraError('UNSUPPORTED_SOURCE', { detail: block.reason ?? 'host is on the deny list' });
+    }
+
     if (!this.config.allowPrivateAddresses) {
       try {
         await this.egress.assertPublicDestination(url);
@@ -215,10 +230,6 @@ export class MediaResolver {
         }
         throw error;
       }
-    }
-
-    if (hostMatchesAny(url.hostname, this.config.blockedHosts)) {
-      throw seraError('UNSUPPORTED_SOURCE', { detail: 'host is on the deny list' });
     }
 
     const provider = this.registry.detect(url);

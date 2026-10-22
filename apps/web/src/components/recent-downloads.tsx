@@ -1,8 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { ClearHistoryButton } from './clear-history-button';
 import {
-  clearHistory,
   HISTORY_EVENT,
   HISTORY_KEY,
   isExpired,
@@ -47,13 +47,10 @@ export function RecentDownloads({ onAgain }: { readonly onAgain: (url: string) =
         >
           Recent downloads
         </h2>
-        <button
-          type="button"
-          onClick={() => clearHistory()}
-          className="cursor-pointer rounded-md text-xs text-[var(--color-ink-faint)] transition-colors hover:text-[var(--color-ink)]"
-        >
-          Clear history
-        </button>
+        <ClearHistoryButton
+          label="Clear history"
+          className="cursor-pointer rounded-md text-xs text-[var(--color-ink-faint)] transition-colors hover:text-[var(--color-ink)] focus-visible:shadow-[var(--shadow-focus)]"
+        />
       </div>
       <ul className="divide-y divide-[var(--color-line)] overflow-hidden rounded-[var(--radius-input)] border border-[var(--color-line)] bg-[var(--color-surface)]">
         {entries.map((entry) => {

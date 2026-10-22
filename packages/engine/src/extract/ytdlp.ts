@@ -387,8 +387,34 @@ export function classifyYtdlpFailure(stderr: string, exitCode: number): SeraErro
   ) {
     return seraError('AGE_RESTRICTED', { detail });
   }
-  if (has('drm', 'protected by widevine', 'encrypted')) {
+  if (
+    has(
+      'drm',
+      'protected by widevine',
+      'widevine',
+      'fairplay',
+      'playready',
+      'clearkey',
+      'drm protected',
+      'encrypted',
+      'this video is drm protected',
+    )
+  ) {
     return seraError('DRM_PROTECTED', { detail });
+  }
+  if (
+    has(
+      'paywall',
+      'subscription required',
+      'subscribers only',
+      'premium only',
+      'requires a subscription',
+      'paid content',
+      'members-only',
+      'members only',
+    )
+  ) {
+    return seraError('PROVIDER_AUTH_REQUIRED', { detail });
   }
   if (
     has(

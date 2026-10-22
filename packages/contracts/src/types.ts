@@ -389,3 +389,22 @@ export interface HealthReport {
 export interface ApiErrorBody {
   readonly error: JobError;
 }
+
+export type LegalReportCategory = 'copyright' | 'malware' | 'illegal_content' | 'other';
+
+export interface LegalReportRequest {
+  readonly targetUrl: string;
+  readonly category: LegalReportCategory;
+  readonly explanation: string;
+  readonly notifierName: string;
+  readonly notifierOrganization?: string;
+  readonly notifierEmail: string;
+  readonly goodFaithConfirmed: boolean;
+}
+
+export interface LegalReportResponse {
+  readonly reportId: string;
+  readonly receivedAt: string;
+  readonly status: 'received' | 'action_taken';
+  readonly mitigated?: boolean;
+}

@@ -87,3 +87,11 @@ export function isAllowed(rules: RobotsRules, path: string): boolean {
   if (bestDisallow < 0) return true;
   return bestAllow >= bestDisallow;
 }
+
+export function isPathAllowed(
+  robotsText: string,
+  path: string,
+  userAgent = 'sera-toolkit',
+): boolean {
+  return isAllowed(parseRobots(robotsText, userAgent), path);
+}

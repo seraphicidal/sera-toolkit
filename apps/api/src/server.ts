@@ -7,6 +7,7 @@ import { errorHandlerPlugin } from './plugins/errors.js';
 import { registerAdminRoutes } from './routes/admin.js';
 import { registerExtractionNodeRoutes } from './routes/extraction-node.js';
 import { registerJobRoutes } from './routes/jobs.js';
+import { registerLegalRoutes } from './routes/legal.js';
 import { registerMediaRoutes } from './routes/media.js';
 import { registerMetaRoutes } from './routes/meta.js';
 
@@ -68,6 +69,7 @@ export async function buildServer(engine: SeraEngine): Promise<FastifyInstance> 
   registerJobRoutes(app, engine);
   registerExtractionNodeRoutes(app, engine);
   registerAdminRoutes(app, engine);
+  registerLegalRoutes(app, engine);
 
   return app;
 }

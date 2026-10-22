@@ -108,7 +108,7 @@ export function FormatPicker({
               id="sera-quality"
               value={label ?? labels[0]}
               onChange={(event) => onLabelChange(event.target.value)}
-              className="w-full cursor-pointer appearance-none rounded-xl border border-[var(--color-line)] bg-[var(--color-surface)] py-3 pr-10 pl-3.5 text-[0.9375rem] text-[var(--color-ink)] transition-colors hover:border-[var(--color-line-strong)] focus:border-[var(--color-accent)] focus:outline-none"
+              className="w-full cursor-pointer appearance-none rounded-xl border border-[var(--color-line)] bg-[var(--color-surface)] py-3 pr-10 pl-3.5 text-[0.9375rem] text-[var(--color-ink)] transition-colors hover:border-[var(--color-line-strong)] focus:border-[var(--color-accent)] focus:outline-none focus-visible:shadow-[var(--shadow-focus)]"
             >
               {labels.map((candidate) => (
                 <option key={candidate} value={candidate}>

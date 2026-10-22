@@ -199,6 +199,30 @@ export const createJobRequestSchema = z.object({
   subtitles: subtitleRequestSchema.optional(),
 });
 
+export const legalReportCategorySchema = z.enum([
+  'copyright',
+  'malware',
+  'illegal_content',
+  'other',
+]);
+
+export const legalReportRequestSchema = z.object({
+  targetUrl: z.string().url().max(2048),
+  category: legalReportCategorySchema,
+  explanation: z.string().min(10).max(10000),
+  notifierName: z.string().min(2).max(256),
+  notifierOrganization: z.string().max(256).optional(),
+  notifierEmail: z.string().email().max(320),
+  goodFaithConfirmed: z.literal(true),
+});
+
+export const legalReportResponseSchema = z.object({
+  reportId: z.string(),
+  receivedAt: z.string(),
+  status: z.enum(['received', 'action_taken']),
+  mitigated: z.boolean().optional(),
+});
+
 type Exact<A, B> =
   (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 

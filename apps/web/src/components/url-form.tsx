@@ -119,6 +119,7 @@ export function UrlForm({
           'mt-3 flex h-12 w-full cursor-pointer items-center justify-center gap-2 rounded-[var(--radius-input)] text-[0.9375rem] font-medium transition-all duration-200',
           'bg-[var(--color-accent)] text-[var(--color-accent-ink)] hover:bg-[var(--color-accent-hover)]',
           'disabled:cursor-not-allowed disabled:bg-[var(--color-sunken)] disabled:text-[var(--color-ink-faint)]',
+          'focus-visible:shadow-[var(--shadow-focus)]',
         )}
       >
         {busy ? (

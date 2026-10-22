@@ -522,6 +522,7 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
                   'flex h-12 w-full cursor-pointer items-center justify-center gap-2 rounded-[var(--radius-input)] text-[0.9375rem] font-medium transition-colors duration-200',
                   'bg-[var(--color-accent)] text-[var(--color-accent-ink)] hover:bg-[var(--color-accent-hover)]',
                   'disabled:cursor-not-allowed disabled:bg-[var(--color-sunken)] disabled:text-[var(--color-ink-faint)]',
+                  'focus-visible:shadow-[var(--shadow-focus)]',
                 )}
               >
                 <DownloadIcon size={17} />
@@ -694,7 +695,7 @@ function AdvancedOptions({
 const FIELD_LABEL =
   'mb-1.5 block text-xs font-medium tracking-wide text-[var(--color-ink-faint)] uppercase';
 const FIELD_INPUT =
-  'tabular w-full rounded-xl border border-[var(--color-line)] bg-[var(--color-canvas)] px-3.5 py-2.5 text-[0.875rem] text-[var(--color-ink)] transition-colors outline-none placeholder:text-[var(--color-ink-faint)] focus:border-[var(--color-accent)] aria-[invalid=true]:border-[var(--color-danger)]';
+  'tabular w-full rounded-xl border border-[var(--color-line)] bg-[var(--color-canvas)] px-3.5 py-2.5 text-[0.875rem] text-[var(--color-ink)] transition-colors outline-none placeholder:text-[var(--color-ink-faint)] focus:border-[var(--color-accent)] focus-visible:shadow-[var(--shadow-focus)] aria-[invalid=true]:border-[var(--color-danger)]';
 
 function SubtitleFields({
   choices,
@@ -884,7 +885,11 @@ function TrimFields({
 
 function QueuedNotice() {
   return (
-    <section className="animate-fade-up flex items-center gap-2.5 rounded-[var(--radius-panel)] border border-[var(--color-line)] bg-[var(--color-surface)] p-5">
+    <section
+      role="status"
+      aria-live="polite"
+      className="animate-fade-up flex items-center gap-2.5 rounded-[var(--radius-panel)] border border-[var(--color-line)] bg-[var(--color-surface)] p-5"
+    >
       <SpinnerIcon size={17} className="text-[var(--color-accent)]" />
       <p className="text-[0.9375rem] text-[var(--color-ink-muted)]">Starting…</p>
     </section>
@@ -894,10 +899,13 @@ function QueuedNotice() {
 function AnalyzingSkeleton() {
   return (
     <section
-      aria-hidden="true"
+      aria-label="Analyzing link"
       className="animate-fade-up rounded-[var(--radius-panel)] border border-[var(--color-line)] bg-[var(--color-surface)] p-4"
     >
-      <div className="flex gap-4">
+      <span role="status" aria-live="polite" className="sr-only">
+        Analyzing link…
+      </span>
+      <div className="flex gap-4" aria-hidden="true">
         <div className="shimmer size-20 shrink-0 rounded-xl bg-[var(--color-sunken)] sm:size-24" />
         <div className="flex flex-1 flex-col justify-center gap-2.5">
           <div className="shimmer h-3.5 w-3/4 rounded bg-[var(--color-sunken)]" />

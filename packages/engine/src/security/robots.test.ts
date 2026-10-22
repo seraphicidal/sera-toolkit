@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isAllowed, parseRobots } from './robots.js';
+import { isAllowed, isPathAllowed, parseRobots } from './robots.js';
 
 const allow = (text: string, path: string, agent = 'sera-toolkit'): boolean =>
   isAllowed(parseRobots(text, agent), path);
@@ -68,5 +68,11 @@ describe('robots.txt', () => {
     const started = Date.now();
     expect(allow(robots, `/${'a'.repeat(120)}c`)).toBe(true);
     expect(Date.now() - started).toBeLessThan(100);
+  });
+
+  it('checks robots allowance via isPathAllowed helper', () => {
+    const robots = 'User-agent: sera-toolkit\nDisallow: /admin\nAllow: /public';
+    expect(isPathAllowed(robots, '/admin/panel')).toBe(false);
+    expect(isPathAllowed(robots, '/public/video.mp4')).toBe(true);
   });
 });

@@ -210,6 +210,10 @@ export function ResultPanel({ job, onReset }: { readonly job: Job; readonly onRe
           New link
         </button>
       </div>
+
+      <p role="status" aria-live="polite" className="sr-only">
+        Download is ready: {result.filename}
+      </p>
     </section>
   );
 }

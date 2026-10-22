@@ -90,6 +90,8 @@ const envSchema = z.object({
 
   SERA_EXTRA_ALLOWED_HOSTS: csv,
   SERA_BLOCKED_HOSTS: csv,
+  SERA_ENABLED_PROVIDERS: csv,
+  SERA_DISABLED_PROVIDERS: csv,
   SERA_ALLOW_PRIVATE_ADDRESSES: booleanish.default(false),
 });
 
@@ -175,6 +177,8 @@ export interface EngineConfig {
 
   readonly extraAllowedHosts: readonly string[];
   readonly blockedHosts: readonly string[];
+  readonly enabledProviders: readonly string[];
+  readonly disabledProviders: readonly string[];
   readonly allowPrivateAddresses: boolean;
 }
 
@@ -361,6 +365,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): EngineConfig {
 
     extraAllowedHosts: e.SERA_EXTRA_ALLOWED_HOSTS,
     blockedHosts: e.SERA_BLOCKED_HOSTS,
+    enabledProviders: e.SERA_ENABLED_PROVIDERS,
+    disabledProviders: e.SERA_DISABLED_PROVIDERS,
     allowPrivateAddresses: e.SERA_ALLOW_PRIVATE_ADDRESSES,
   };
 }

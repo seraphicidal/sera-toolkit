@@ -14,6 +14,9 @@ describe('classifyYtdlpFailure', () => {
       'AGE_RESTRICTED',
     ],
     ['ERROR: This video is DRM protected', 'DRM_PROTECTED'],
+    ['ERROR: Protected by FairPlay DRM', 'DRM_PROTECTED'],
+    ['ERROR: Widevine key required', 'DRM_PROTECTED'],
+    ['ERROR: This content is behind a paywall; subscription required', 'PROVIDER_AUTH_REQUIRED'],
     [
       'ERROR: [generic] Sign in to confirm you are not a bot. Use --cookies-from-browser',
       'SOURCE_BLOCKED',

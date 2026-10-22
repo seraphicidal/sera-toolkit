@@ -71,14 +71,45 @@ export default function RootLayout({ children }: { readonly children: React.Reac
             {children}
           </main>
 
-          <footer className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-t border-[var(--color-line)] py-5 text-xs text-[var(--color-ink-faint)]">
-            <p>You are responsible for having the rights to the media you download.</p>
-            <div className="flex items-center gap-3">
+          <footer className="flex flex-col gap-3 border-t border-[var(--color-line)] py-5 text-xs text-[var(--color-ink-faint)]">
+            <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
+              <p>You are responsible for having the rights to the media you download.</p>
+              <span className="tabular text-[var(--color-ink-faint)]/70">v{SERA_VERSION}</span>
+            </div>
+            <nav
+              aria-label="Legal and general navigation"
+              className="flex flex-wrap items-center gap-x-4 gap-y-1.5"
+            >
+              <Link
+                href="/legal/terms"
+                className="rounded-md transition-colors hover:text-[var(--color-ink-muted)]"
+              >
+                Terms
+              </Link>
+              <Link
+                href="/legal/privacy"
+                className="rounded-md transition-colors hover:text-[var(--color-ink-muted)]"
+              >
+                Privacy
+              </Link>
+              <Link
+                href="/legal/notice"
+                className="rounded-md transition-colors hover:text-[var(--color-ink-muted)]"
+              >
+                Legal Notice
+              </Link>
+              <Link
+                href="/legal/report"
+                className="rounded-md transition-colors hover:text-[var(--color-ink-muted)]"
+              >
+                Report Abuse
+              </Link>
+              <span className="text-[var(--color-line-strong)]">·</span>
               <Link
                 href="/about"
                 className="rounded-md transition-colors hover:text-[var(--color-ink-muted)]"
               >
-                How this works
+                About
               </Link>
               <Link
                 href="/patch-notes"
@@ -86,8 +117,7 @@ export default function RootLayout({ children }: { readonly children: React.Reac
               >
                 Patch notes
               </Link>
-              <span className="tabular text-[var(--color-ink-faint)]/70">v{SERA_VERSION}</span>
-            </div>
+            </nav>
           </footer>
         </div>
       </body>

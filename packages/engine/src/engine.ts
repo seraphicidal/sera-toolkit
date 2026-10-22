@@ -1,4 +1,5 @@
 import { mkdir } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { HealthCheck, HealthReport, ServiceInfo } from '@sera/contracts/types';
 import type { Dispatcher } from 'undici';
 import { loadConfig, VERSION, type EngineConfig } from './config.js';
@@ -19,6 +20,7 @@ import { MemoryJobBackend } from './queue/memory.js';
 import type { JobBackend, WorkerHandle } from './queue/types.js';
 import { MediaResolver, type ResolverDependencies } from './resolver.js';
 import { AbuseGuard } from './security/abuse.js';
+import { Denylist } from './security/denylist.js';
 import { MemoryUsageCounter, type UsageCounter } from './usage/counts.js';
 import { WorkspaceManager } from './storage/workspace.js';
 
@@ -31,6 +33,7 @@ export interface EngineOptions {
   readonly probe?: ResolverDependencies['probe'];
   readonly importHosts?: MediaHostPolicy;
   readonly usage?: UsageCounter;
+  readonly denylist?: Denylist;
 }
 
 export class SeraEngine {
@@ -43,6 +46,7 @@ export class SeraEngine {
   readonly backend: JobBackend;
   readonly jobs: JobService;
   readonly usage: UsageCounter;
+  readonly denylist: Denylist;
   readonly abuse = new AbuseGuard();
 
   private readonly startedAt = Date.now();
@@ -59,6 +63,7 @@ export class SeraEngine {
     backend: JobBackend;
     jobs: JobService;
     usage: UsageCounter;
+    denylist: Denylist;
   }) {
     this.config = parts.config;
     this.logger = parts.logger;
@@ -69,6 +74,7 @@ export class SeraEngine {
     this.backend = parts.backend;
     this.jobs = parts.jobs;
     this.usage = parts.usage;
+    this.denylist = parts.denylist;
   }
 
   static async create(options: EngineOptions = {}): Promise<SeraEngine> {
@@ -89,6 +95,13 @@ export class SeraEngine {
 
     await mkdir(config.dataDir, { recursive: true });
 
+    const denylist =
+      options.denylist ??
+      new Denylist({
+        staticHosts: config.blockedHosts,
+        filePath: config.dataDir ? join(config.dataDir, 'denylist.json') : undefined,
+      });
+
     const registry = new ProviderRegistry(undefined, config);
     const extractionNodes = new ExtractionNodeRegistry(logger);
 
@@ -100,6 +113,7 @@ export class SeraEngine {
       config,
       logger,
       registry,
+      denylist,
       remoteBackends: () => (config.extractionNodes.enabled ? remoteBackends(remote) : []),
       sessionBackend: (feature) =>
         config.extractionNodes.enabled && remote.hasFeature(feature)
@@ -132,6 +146,7 @@ export class SeraEngine {
       backend,
       jobs,
       usage,
+      denylist,
     });
     engine.stopReaper = workspaces.startReaper(config.reapIntervalSeconds);
     void workspaces.reap().catch(() => undefined);

@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import { ClearHistoryButton } from '@/components/clear-history-button';
 import { Wordmark } from '@/components/wordmark';
 import { loadServiceInfo } from '@/lib/service-info';
 
@@ -168,6 +169,42 @@ export default async function AboutPage() {
           your browser or anything else about you — and each day&apos;s totals are deleted after 90
           days.
         </p>
+      </Section>
+
+      <Section title="Local storage & ePrivacy">
+        <p>
+          We use no tracking cookies or advertising pixels. Under Article 5(3) of Directive
+          2002/58/EC (ePrivacy Directive), only strictly functional keys are kept in your
+          browser&apos;s local storage:
+        </p>
+        <ul className="list-disc space-y-1.5 pl-5 text-[0.875rem]">
+          <li>
+            <code className="rounded bg-[var(--color-sunken)] px-1 py-0.5 font-mono text-xs">
+              sera-theme
+            </code>
+            : Remembers your theme preference (light, dark, or system). Exempt as strictly
+            necessary.
+          </li>
+          <li>
+            <code className="rounded bg-[var(--color-sunken)] px-1 py-0.5 font-mono text-xs">
+              sera-preferred-kind
+            </code>
+            : Remembers your chosen output format category. Exempt as strictly necessary.
+          </li>
+          <li>
+            <code className="rounded bg-[var(--color-sunken)] px-1 py-0.5 font-mono text-xs">
+              sera-history
+            </code>
+            : Stores recent download links locally on your device for re-downloading. Never uploaded
+            to the server.
+          </li>
+        </ul>
+        <div className="mt-2 flex items-center justify-between rounded-xl border border-[var(--color-line)] bg-[var(--color-sunken)] p-3.5">
+          <span className="text-[0.875rem] text-[var(--color-ink)]">
+            Clear locally stored download history:
+          </span>
+          <ClearHistoryButton />
+        </div>
       </Section>
 
       <Section title="Responsible use">
