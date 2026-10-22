@@ -304,7 +304,7 @@ jobs:
           docker network rm sera-web-ci >/dev/null
 
       - name: Scan API image with Trivy
-        uses: aquasecurity/trivy-action@18f2510ee396bbf400402947b394f2dd8c87dbb0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
         with:
           image-ref: ${{ env.IMAGE_API }}:verify
           format: table
@@ -314,7 +314,7 @@ jobs:
           severity: CRITICAL,HIGH
 
       - name: Scan Web image with Trivy
-        uses: aquasecurity/trivy-action@18f2510ee396bbf400402947b394f2dd8c87dbb0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
         with:
           image-ref: ${{ env.IMAGE_WEB }}:verify
           format: table
