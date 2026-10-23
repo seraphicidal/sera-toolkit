@@ -326,10 +326,7 @@ export default function LegalReportPage() {
               {legalEmail && (
                 <>
                   Legal inquiries:{' '}
-                  <a
-                    href={`mailto:${legalEmail}`}
-                    className="text-[var(--color-accent)] underline"
-                  >
+                  <a href={`mailto:${legalEmail}`} className="text-[var(--color-accent)] underline">
                     {legalEmail}
                   </a>
                   .{' '}
