@@ -5,6 +5,11 @@ import Link from 'next/link';
 import type { LegalReportCategory, LegalReportResponse } from '@sera/contracts/types';
 import { AlertIcon, CheckIcon, SpinnerIcon } from '@/components/icons';
 
+function clean(value?: string): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : undefined;
+}
+
 export default function LegalReportPage() {
   const [targetUrl, setTargetUrl] = useState('');
   const [category, setCategory] = useState<LegalReportCategory>('copyright');
@@ -19,8 +24,11 @@ export default function LegalReportPage() {
   const [receipt, setReceipt] = useState<LegalReportResponse | undefined>(undefined);
 
   const authoritiesEmail =
-    process.env.NEXT_PUBLIC_CONTACT_EMAIL_AUTHORITIES ?? 'authorities@sera-toolkit.internal';
-  const legalEmail = process.env.NEXT_PUBLIC_CONTACT_EMAIL_LEGAL ?? 'legal@sera-toolkit.internal';
+    clean(process.env.NEXT_PUBLIC_CONTACT_EMAIL_AUTHORITIES) ??
+    clean(process.env.NEXT_PUBLIC_OPERATOR_EMAIL);
+  const legalEmail =
+    clean(process.env.NEXT_PUBLIC_CONTACT_EMAIL_LEGAL) ??
+    clean(process.env.NEXT_PUBLIC_OPERATOR_EMAIL);
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -301,15 +309,40 @@ export default function LegalReportPage() {
           Designated Points of Contact (DSA Arts. 11 & 12):
         </p>
         <p>
-          Law enforcement and judicial authorities may contact{' '}
-          <a href={`mailto:${authoritiesEmail}`} className="text-[var(--color-accent)] underline">
-            {authoritiesEmail}
-          </a>
-          . Recipients of the service may reach{' '}
-          <a href={`mailto:${legalEmail}`} className="text-[var(--color-accent)] underline">
-            {legalEmail}
-          </a>
-          . Supported languages: English, German.
+          {authoritiesEmail || legalEmail ? (
+            <>
+              {authoritiesEmail && (
+                <>
+                  Authorities point of contact:{' '}
+                  <a
+                    href={`mailto:${authoritiesEmail}`}
+                    className="text-[var(--color-accent)] underline"
+                  >
+                    {authoritiesEmail}
+                  </a>
+                  .{' '}
+                </>
+              )}
+              {legalEmail && (
+                <>
+                  Legal inquiries:{' '}
+                  <a
+                    href={`mailto:${legalEmail}`}
+                    className="text-[var(--color-accent)] underline"
+                  >
+                    {legalEmail}
+                  </a>
+                  .{' '}
+                </>
+              )}
+            </>
+          ) : (
+            <>
+              Notice and takedown submissions are processed directly through the electronic intake
+              form above.{' '}
+            </>
+          )}
+          Supported languages: English, German.
         </p>
       </section>
 

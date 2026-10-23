@@ -7,29 +7,31 @@ export const metadata: Metadata = {
     'Provider identification and regulatory points of contact under EU E-Commerce Directive Art. 5, DDG § 5, and DSA Arts. 11 & 12.',
 };
 
+function clean(value?: string): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : undefined;
+}
+
 export default function LegalNoticePage() {
   const operatorName =
-    process.env.NEXT_PUBLIC_OPERATOR_NAME ?? process.env.OPERATOR_NAME ?? 'SERA.toolkit Operator';
+    clean(process.env.NEXT_PUBLIC_OPERATOR_NAME) ??
+    clean(process.env.OPERATOR_NAME) ??
+    'SERA.toolkit Operator';
   const operatorAddress =
-    process.env.NEXT_PUBLIC_OPERATOR_ADDRESS ??
-    process.env.OPERATOR_ADDRESS ??
-    'Musterstraße 123, 10115 Berlin, Germany';
+    clean(process.env.NEXT_PUBLIC_OPERATOR_ADDRESS) ?? clean(process.env.OPERATOR_ADDRESS);
   const operatorEmail =
-    process.env.NEXT_PUBLIC_OPERATOR_EMAIL ??
-    process.env.OPERATOR_EMAIL ??
-    'contact@sera-toolkit.internal';
+    clean(process.env.NEXT_PUBLIC_OPERATOR_EMAIL) ?? clean(process.env.OPERATOR_EMAIL);
   const registrationId =
-    process.env.NEXT_PUBLIC_OPERATOR_REGISTRATION_ID ??
-    process.env.OPERATOR_REGISTRATION_ID ??
-    'Amtsgericht Berlin-Charlottenburg, HRB 123456 B';
+    clean(process.env.NEXT_PUBLIC_OPERATOR_REGISTRATION_ID) ??
+    clean(process.env.OPERATOR_REGISTRATION_ID);
   const authoritiesEmail =
-    process.env.NEXT_PUBLIC_CONTACT_EMAIL_AUTHORITIES ??
-    process.env.CONTACT_EMAIL_AUTHORITIES ??
-    'authorities@sera-toolkit.internal';
+    clean(process.env.NEXT_PUBLIC_CONTACT_EMAIL_AUTHORITIES) ??
+    clean(process.env.CONTACT_EMAIL_AUTHORITIES) ??
+    operatorEmail;
   const legalEmail =
-    process.env.NEXT_PUBLIC_CONTACT_EMAIL_LEGAL ??
-    process.env.CONTACT_EMAIL_LEGAL ??
-    'legal@sera-toolkit.internal';
+    clean(process.env.NEXT_PUBLIC_CONTACT_EMAIL_LEGAL) ??
+    clean(process.env.CONTACT_EMAIL_LEGAL) ??
+    operatorEmail;
 
   return (
     <article className="flex flex-col gap-10 pt-4 pb-16">
@@ -53,21 +55,38 @@ export default function LegalNoticePage() {
             <dt className="text-[var(--color-ink-muted)]">Operator / Entity</dt>
             <dd className="font-medium text-[var(--color-ink)]">{operatorName}</dd>
 
-            <dt className="text-[var(--color-ink-muted)]">Registered Office / Address</dt>
-            <dd className="whitespace-pre-line text-[var(--color-ink)]">{operatorAddress}</dd>
+            {operatorAddress ? (
+              <>
+                <dt className="text-[var(--color-ink-muted)]">Registered Office / Address</dt>
+                <dd className="whitespace-pre-line text-[var(--color-ink)]">{operatorAddress}</dd>
+              </>
+            ) : null}
 
             <dt className="text-[var(--color-ink-muted)]">Electronic Contact</dt>
             <dd className="text-[var(--color-ink)]">
-              <a
-                href={`mailto:${operatorEmail}`}
-                className="text-[var(--color-accent)] transition-opacity hover:opacity-75 focus-visible:outline-2 focus-visible:outline-[var(--color-accent)]"
-              >
-                {operatorEmail}
-              </a>
+              {operatorEmail ? (
+                <a
+                  href={`mailto:${operatorEmail}`}
+                  className="text-[var(--color-accent)] transition-opacity hover:opacity-75 focus-visible:outline-2 focus-visible:outline-[var(--color-accent)]"
+                >
+                  {operatorEmail}
+                </a>
+              ) : (
+                <Link
+                  href="/legal/report"
+                  className="text-[var(--color-accent)] transition-opacity hover:opacity-75 focus-visible:outline-2 focus-visible:outline-[var(--color-accent)]"
+                >
+                  Notice &amp; Contact Form
+                </Link>
+              )}
             </dd>
 
-            <dt className="text-[var(--color-ink-muted)]">Commercial Register / ID</dt>
-            <dd className="text-[var(--color-ink)]">{registrationId}</dd>
+            {registrationId ? (
+              <>
+                <dt className="text-[var(--color-ink-muted)]">Commercial Register / ID</dt>
+                <dd className="text-[var(--color-ink)]">{registrationId}</dd>
+              </>
+            ) : null}
           </dl>
         </div>
       </section>
@@ -87,23 +106,35 @@ export default function LegalNoticePage() {
               <span className="font-medium text-[var(--color-ink-muted)]">
                 Member State Authorities & EU Commission (Art. 11):{' '}
               </span>
-              <a
-                href={`mailto:${authoritiesEmail}`}
-                className="text-[var(--color-accent)] hover:underline"
-              >
-                {authoritiesEmail}
-              </a>
+              {authoritiesEmail ? (
+                <a
+                  href={`mailto:${authoritiesEmail}`}
+                  className="text-[var(--color-accent)] hover:underline"
+                >
+                  {authoritiesEmail}
+                </a>
+              ) : (
+                <Link href="/legal/report" className="text-[var(--color-accent)] hover:underline">
+                  Designated Electronic Reporting Channel
+                </Link>
+              )}
             </li>
             <li>
               <span className="font-medium text-[var(--color-ink-muted)]">
                 Recipients of the Service / Legal Matters (Art. 12):{' '}
               </span>
-              <a
-                href={`mailto:${legalEmail}`}
-                className="text-[var(--color-accent)] hover:underline"
-              >
-                {legalEmail}
-              </a>
+              {legalEmail ? (
+                <a
+                  href={`mailto:${legalEmail}`}
+                  className="text-[var(--color-accent)] hover:underline"
+                >
+                  {legalEmail}
+                </a>
+              ) : (
+                <Link href="/legal/report" className="text-[var(--color-accent)] hover:underline">
+                  Designated Electronic Reporting Channel
+                </Link>
+              )}
             </li>
             <li>
               <span className="font-medium text-[var(--color-ink-muted)]">

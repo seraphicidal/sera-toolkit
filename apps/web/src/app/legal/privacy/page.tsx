@@ -8,17 +8,22 @@ export const metadata: Metadata = {
     'Data processing practices under Regulation (EU) 2016/679 (GDPR) and the ePrivacy Directive.',
 };
 
+function clean(value?: string): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : undefined;
+}
+
 export default function PrivacyPage() {
   const operatorName =
-    process.env.NEXT_PUBLIC_OPERATOR_NAME ?? process.env.OPERATOR_NAME ?? 'SERA.toolkit Operator';
+    clean(process.env.NEXT_PUBLIC_OPERATOR_NAME) ??
+    clean(process.env.OPERATOR_NAME) ??
+    'SERA.toolkit Operator';
   const operatorEmail =
-    process.env.NEXT_PUBLIC_OPERATOR_EMAIL ??
-    process.env.OPERATOR_EMAIL ??
-    'contact@sera-toolkit.internal';
+    clean(process.env.NEXT_PUBLIC_OPERATOR_EMAIL) ?? clean(process.env.OPERATOR_EMAIL);
   const dpoEmail =
-    process.env.NEXT_PUBLIC_CONTACT_EMAIL_LEGAL ??
-    process.env.CONTACT_EMAIL_LEGAL ??
-    'privacy@sera-toolkit.internal';
+    clean(process.env.NEXT_PUBLIC_CONTACT_EMAIL_LEGAL) ??
+    clean(process.env.CONTACT_EMAIL_LEGAL) ??
+    operatorEmail;
 
   return (
     <article className="flex flex-col gap-10 pt-4 pb-16">
@@ -42,23 +47,34 @@ export default function PrivacyPage() {
         </p>
         <div className="rounded-[var(--radius-panel)] border border-[var(--color-line)] bg-[var(--color-surface)] p-4 text-[0.875rem] text-[var(--color-ink)]">
           <p className="font-medium">{operatorName}</p>
-          <p className="mt-1">
-            General Contact:{' '}
-            <a
-              href={`mailto:${operatorEmail}`}
-              className="text-[var(--color-accent)] hover:underline"
-            >
-              {operatorEmail}
-            </a>
-          </p>
-          <p className="mt-1">
-            Data Protection / Privacy Contact:{' '}
-            <a href={`mailto:${dpoEmail}`} className="text-[var(--color-accent)] hover:underline">
-              {dpoEmail}
-            </a>
-          </p>
+          {operatorEmail ? (
+            <p className="mt-1">
+              General Contact:{' '}
+              <a
+                href={`mailto:${operatorEmail}`}
+                className="text-[var(--color-accent)] hover:underline"
+              >
+                {operatorEmail}
+              </a>
+            </p>
+          ) : (
+            <p className="mt-1">
+              General Contact:{' '}
+              <Link href="/legal/report" className="text-[var(--color-accent)] hover:underline">
+                Contact &amp; Report Form
+              </Link>
+            </p>
+          )}
+          {dpoEmail ? (
+            <p className="mt-1">
+              Data Protection / Privacy Contact:{' '}
+              <a href={`mailto:${dpoEmail}`} className="text-[var(--color-accent)] hover:underline">
+                {dpoEmail}
+              </a>
+            </p>
+          ) : null}
           <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
-            Full address details are available in the{' '}
+            Provider identification details are available in the{' '}
             <Link href="/legal/notice" className="text-[var(--color-accent)] underline">
               Legal Notice (Impressum)
             </Link>
