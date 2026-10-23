@@ -124,6 +124,7 @@ log "Installing the sera command"
 cat > /usr/local/bin/sera <<WRAPPER
 #!/usr/bin/env bash
 if [ "\${1:-}" = stats ]; then shift; exec bash "$INSTALL_DIR/deploy/stats.sh" "\$@"; fi
+if [ "\${1:-}" = reports ]; then shift; exec bash "$INSTALL_DIR/deploy/reports.sh" "\$@"; fi
 exec docker compose --project-directory "$INSTALL_DIR" --env-file "$INSTALL_DIR/.env" -f "$INSTALL_DIR/$COMPOSE_FILE" "\$@"
 WRAPPER
 chmod 755 /usr/local/bin/sera

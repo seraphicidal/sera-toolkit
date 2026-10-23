@@ -84,6 +84,43 @@ export function registerLegalRoutes(app: FastifyInstance, engine: SeraEngine): v
         'legal takedown notice received',
       );
 
+      const topic =
+        (engine.config.alertNtfyTopic.length > 0
+          ? engine.config.alertNtfyTopic
+          : process.env.SERA_ALERT_NTFY_TOPIC) ?? '';
+      if (topic.length > 0) {
+        const domain =
+          (engine.config.domain.length > 0 ? engine.config.domain : process.env.SERA_DOMAIN) ?? '';
+        const orgInfo = report.notifierOrganization ? ` (${report.notifierOrganization})` : '';
+        const body = [
+          `Category: ${report.category}`,
+          `Target: ${report.targetUrl}`,
+          `Report ID: ${reportId}`,
+          `Notifier: ${report.notifierName} <${report.notifierEmail}>${orgInfo}`,
+          `Action: ${mitigated ? 'Mitigated (denylisted)' : 'Pending Review'}`,
+          '',
+          'Explanation:',
+          report.explanation,
+        ].join('\n');
+
+        const headers: Record<string, string> = {
+          Title: `SERA: Legal Report (${report.category})`,
+          Priority: 'high',
+          Tags: 'warning,scales',
+        };
+        if (domain) {
+          headers.Click = `https://${domain}/legal/report`;
+        }
+
+        void fetch(`https://ntfy.sh/${encodeURIComponent(topic)}`, {
+          method: 'POST',
+          headers,
+          body,
+        }).catch((err: unknown) => {
+          engine.logger.warn({ err, reportId }, 'failed to send ntfy legal report notification');
+        });
+      }
+
       const response: LegalReportResponse = {
         reportId,
         receivedAt,

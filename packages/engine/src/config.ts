@@ -63,6 +63,8 @@ const envSchema = z.object({
   SERA_EXTRACTION_WORKER_TOKEN: z.string().default(''),
   SERA_CANARY_TOKEN: z.string().default(''),
   SERA_ADMIN_TOKEN: z.string().default(''),
+  SERA_ALERT_NTFY_TOPIC: z.string().default(''),
+  SERA_DOMAIN: z.string().default(''),
   SERA_EXTRACTION_CLAIM_HOLD_SECONDS: seconds.default(25),
   SERA_NETWORK_CLASS: z.enum(['datacenter', 'residential', 'unknown']).default('unknown'),
   SERA_API_URL: z.string().default(''),
@@ -131,6 +133,9 @@ export interface EngineConfig {
   readonly canaryToken: string;
 
   readonly adminToken: string;
+
+  readonly alertNtfyTopic: string;
+  readonly domain: string;
 
   readonly extractionNodes: {
     readonly token: string;
@@ -311,6 +316,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): EngineConfig {
 
     canaryToken: e.SERA_CANARY_TOKEN,
     adminToken: e.SERA_ADMIN_TOKEN,
+    alertNtfyTopic: e.SERA_ALERT_NTFY_TOPIC.trim(),
+    domain: e.SERA_DOMAIN.trim(),
 
     extractionNodes: {
       token: legacyTokenUsed ? legacyToken : (nodeTokens.values().next().value ?? ''),
