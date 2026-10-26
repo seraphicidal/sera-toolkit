@@ -28,7 +28,7 @@ RUN npm prune --omit=dev --workspaces --include-workspace-root
 
 FROM node:24.18.1-bookworm-slim AS runtime
 
-ARG YTDLP_VERSION=2026.08.19
+ARG YTDLP_VERSION=2026.10.21
 
 ARG TARGETARCH
 
