@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-FROM node:24.18.1-bookworm-slim AS build
+FROM node:26.12.0-bookworm-slim AS build
 WORKDIR /app
 
 COPY package.json package-lock.json ./
@@ -26,7 +26,7 @@ RUN npm run build --workspace @sera/contracts \
 
 RUN npm prune --omit=dev --workspaces --include-workspace-root
 
-FROM node:24.18.1-bookworm-slim AS runtime
+FROM node:26.12.0-bookworm-slim AS runtime
 
 ARG YTDLP_VERSION=2026.08.19
 
