@@ -51,18 +51,6 @@ export default function RootLayout({ children }: { readonly children: React.Reac
             <HeaderHomeLink />
             <div className="ml-auto flex items-center gap-2 sm:gap-3">
               <HealthIndicator />
-              <Link
-                href="/about"
-                className="rounded-md text-sm text-[var(--color-ink-muted)] transition-colors hover:text-[var(--color-ink)]"
-              >
-                About
-              </Link>
-              <Link
-                href="/patch-notes"
-                className="rounded-md text-sm text-[var(--color-ink-muted)] transition-colors hover:text-[var(--color-ink)]"
-              >
-                Patch notes
-              </Link>
               <ThemeToggle />
             </div>
           </header>
@@ -78,7 +66,7 @@ export default function RootLayout({ children }: { readonly children: React.Reac
             </div>
             <nav
               aria-label="Legal and general navigation"
-              className="flex flex-wrap items-center gap-x-4 gap-y-1.5"
+              className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5"
             >
               <Link
                 href="/legal/terms"
@@ -110,12 +98,6 @@ export default function RootLayout({ children }: { readonly children: React.Reac
                 className="rounded-md transition-colors hover:text-[var(--color-ink-muted)]"
               >
                 About
-              </Link>
-              <Link
-                href="/patch-notes"
-                className="rounded-md transition-colors hover:text-[var(--color-ink-muted)]"
-              >
-                Patch notes
               </Link>
             </nav>
           </footer>

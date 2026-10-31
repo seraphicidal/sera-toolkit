@@ -112,8 +112,8 @@ export function UrlForm({
 
       <div
         className={cx(
-          'group relative flex items-start gap-2 rounded-[var(--radius-input)] border bg-[var(--color-surface)] pr-2 pl-3.5 transition-[box-shadow,border-color] duration-200',
-          'border-[var(--color-line)] focus-within:border-[var(--color-accent)] focus-within:shadow-[var(--shadow-focus)]',
+          'group relative flex items-start gap-2 rounded-[var(--radius-input)] border bg-[var(--color-surface)] pr-2 pl-3.5 transition-colors duration-200',
+          'border-[var(--color-line)] focus-within:border-[var(--color-accent)]',
           disabled && 'opacity-60',
         )}
       >
@@ -138,7 +138,7 @@ export function UrlForm({
           value={value}
           onChange={(event) => onChange(event.target.value)}
           onKeyDown={handleKeyDown}
-          className="max-h-42 min-h-14 min-w-0 flex-1 resize-none bg-transparent py-4 text-base leading-normal text-[var(--color-ink)] outline-none placeholder:text-[var(--color-ink-faint)]"
+          className="max-h-42 min-h-14 min-w-0 flex-1 resize-none border-none bg-transparent py-4 text-base leading-normal text-[var(--color-ink)] ring-0 outline-none placeholder:text-[var(--color-ink-faint)] focus:border-none focus:ring-0 focus:outline-none"
         />
 
         <div className="mt-3 flex shrink-0 items-center gap-1">

@@ -1,6 +1,6 @@
 {
   "name": "sera-toolkit",
-  "version": "1.0.0",
+  "version": "1.8.0",
   "private": true,
   "description": "SERA.toolkit — a universal media toolkit for downloading and converting publicly accessible media.",
   "license": "MIT",

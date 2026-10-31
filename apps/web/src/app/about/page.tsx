@@ -260,14 +260,6 @@ export default async function AboutPage() {
             transcoding, and native in-browser media previews.
           </li>
         </ul>
-        <p className="mt-1">
-          <Link
-            href="/patch-notes"
-            className="font-medium text-[var(--color-accent)] transition-opacity hover:opacity-75"
-          >
-            View full patch notes & audit log →
-          </Link>
-        </p>
       </Section>
 
       <p className="border-t border-[var(--color-line)] pt-6">

@@ -40,7 +40,7 @@ import { endPlaceholder, summarizeTrim, type TrimSummary } from '@/lib/trim';
 import { useJob } from '@/lib/use-job';
 
 type AppState = 'IDLE' | 'RESOLVING' | 'RESOLVED' | 'SUBMITTING' | 'RUNNING' | 'DONE' | 'ERROR';
-type ActiveModal = null | 'ABOUT' | 'PATCH_NOTES' | 'LEGAL';
+type ActiveModal = null | 'ABOUT' | 'LEGAL';
 
 interface WorkstationCardSpec {
   readonly id: string;
@@ -274,13 +274,6 @@ function CornerHUD({
             className="cursor-pointer rounded-none px-1.5 py-0.5 text-[#666666] transition-none hover:bg-[#FAFAFA] hover:text-[#050505]"
           >
             [ ABOUT ]
-          </button>
-          <button
-            type="button"
-            onClick={() => onOpenModal('PATCH_NOTES')}
-            className="cursor-pointer rounded-none px-1.5 py-0.5 text-[#666666] transition-none hover:bg-[#FAFAFA] hover:text-[#050505]"
-          >
-            [ PATCH_NOTES ]
           </button>
           <button
             type="button"
@@ -688,32 +681,6 @@ function ModalDialog({
                   className="inline-flex items-center gap-1 text-[11px] text-[#FAFAFA] underline underline-offset-4 hover:text-[#FFFFFF]"
                 >
                   [ OPEN FULL DOCUMENTATION & ARCHITECTURE PAGE ]
-                  <ArrowUpRight className="h-3 w-3 stroke-[1.25]" />
-                </Link>
-              </div>
-            </>
-          )}
-
-          {modal === 'PATCH_NOTES' && (
-            <>
-              <div className="border-b border-[#222222] pb-3">
-                <span className="block text-[#FAFAFA]">REV.04.2 — PRESENT BUILD</span>
-                <span className="text-[11px] text-[#666666]">
-                  OCTOBER 2026 // HARMONIZED PROTOCOLS
-                </span>
-                <p className="mt-1 text-[#888888]">
-                  + UNIFIED 1PX BENTO ARCHITECTURE WITH HIGH-TENSION INDUSTRIAL SPRING MECHANICS.
-                  <br />
-                  + INTEGRATED ZERO-LOSS AUDIO EXTRACTION ENGINE (OPUS / FLAC / MP3).
-                  <br />+ FULL GLOBAL PASTE INGESTION VIA ACCELERATED CLIPBOARD DESCRIPTOR.
-                </p>
-              </div>
-              <div className="pt-2">
-                <Link
-                  href="/patch-notes"
-                  className="inline-flex items-center gap-1 text-[11px] text-[#FAFAFA] underline underline-offset-4 hover:text-[#FFFFFF]"
-                >
-                  [ VIEW ALL HISTORICAL PATCH LOGS ]
                   <ArrowUpRight className="h-3 w-3 stroke-[1.25]" />
                 </Link>
               </div>
