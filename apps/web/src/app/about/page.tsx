@@ -235,30 +235,29 @@ export default async function AboutPage() {
         <ul className="flex flex-col gap-1.5 text-[0.875rem]">
           <Limit
             label="Latest update"
-            value="Download acceleration, connection pipelining & quick actions"
+            value="Per-Node Isolation, Short-Link Resolution, Redis Memory Safety & Upload Concurrency"
           />
           <Limit
             label="Total changes"
-            value="4 releases · 112 file touches · 2,803 lines changed"
+            value="6 releases · 177 file touches · 7,071 lines changed"
           />
         </ul>
         <ul className="mt-1 list-disc space-y-1.5 pl-5 text-[0.875rem]">
           <li>
-            Accelerated media downloads with 4 concurrent yt-dlp fragments, 64KB extraction buffers,
-            and 512KB direct disk write buffers.
+            Enforced strict per-node token isolation and bounded upload concurrency across remote
+            extraction workers.
           </li>
           <li>
-            Enabled auto-threaded FFmpeg transcoding across all CPU cores and persistent HTTP
-            keep-alive connection reuse and pipelining.
+            Introduced loopback EgressGuard proxy ensuring yt-dlp and FFmpeg network requests
+            resolve strictly to public IPs with SSRF protection.
           </li>
           <li>
-            Added mobile one-tap Paste & Analyze, Cmd/Ctrl + Enter download shortcuts, persistent
-            format kind preferences, copy download link with toast feedback, and native in-browser
-            media previews.
+            Streamlined queue memory footprint by pruning resolved media metadata and converted
+            Redis updates to atomic Lua scripts.
           </li>
           <li>
-            Full regression testing across SSRF, ReDoS, token security, and lifecycle bounds with
-            zero runtime third-party dependencies.
+            Accelerated media downloads with concurrent yt-dlp fragments, auto-threaded FFmpeg
+            transcoding, and native in-browser media previews.
           </li>
         </ul>
         <p className="mt-1">

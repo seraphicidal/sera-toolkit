@@ -2,11 +2,15 @@ import { describe, expect, it } from 'vitest';
 import {
   cx,
   formatBytes,
+  formatCodecBadge,
   formatDuration,
   formatEta,
   formatSpeed,
   isRunning,
+  optionBadges,
+  PIPELINE_STEPS,
   pluralize,
+  resolvePipelineStepIndex,
 } from './format';
 
 describe('formatBytes', () => {
@@ -88,5 +92,42 @@ describe('isRunning', () => {
 describe('cx', () => {
   it('joins truthy class names with single spaces', () => {
     expect(cx('a', false, undefined, null, '', 'b')).toBe('a b');
+  });
+});
+
+describe('formatCodecBadge and optionBadges', () => {
+  it('normalizes video and audio codec identifiers into readable badges', () => {
+    expect(formatCodecBadge('av01.0.08M.08')).toBe('AV1');
+    expect(formatCodecBadge('avc1.640028')).toBe('H.264');
+    expect(formatCodecBadge('hev1.1.6.L120')).toBe('HEVC');
+    expect(formatCodecBadge('vp09.00.41.08')).toBe('VP9');
+    expect(formatCodecBadge('opus')).toBe('Opus');
+    expect(formatCodecBadge('mp4a.40.2')).toBe('AAC');
+    expect(formatCodecBadge('mp3')).toBe('MP3');
+  });
+
+  it('derives deduplicated codec and bitrate badges from option fields and detail', () => {
+    expect(
+      optionBadges({
+        container: 'mp4',
+        videoCodec: 'avc1.640028',
+        audioCodec: 'mp4a.40.2',
+        audioBitrateKbps: 320,
+        fps: 60,
+        detail: 'MP4 · H.264 · AAC 320kbps',
+      }),
+    ).toEqual(['H.264', 'AAC', '320kbps', '60fps']);
+  });
+});
+
+describe('resolvePipelineStepIndex', () => {
+  it('maps job state and step text to the 5-step pipeline', () => {
+    expect(PIPELINE_STEPS).toEqual(['Resolving', 'Downloading', 'Transcoding', 'Tagging', 'Done']);
+    expect(resolvePipelineStepIndex('queued', 'Queued')).toBe(0);
+    expect(resolvePipelineStepIndex('resolving', 'Resolving media')).toBe(0);
+    expect(resolvePipelineStepIndex('downloading', 'Downloading video')).toBe(1);
+    expect(resolvePipelineStepIndex('converting', 'Transcoding with FFmpeg')).toBe(2);
+    expect(resolvePipelineStepIndex('packaging', 'Tagging metadata')).toBe(3);
+    expect(resolvePipelineStepIndex('ready', 'Done')).toBe(4);
   });
 });

@@ -1,5 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeClientAddress } from './client.js';
+import { computeClientKey, normalizeClientAddress } from './client.js';
+
+describe('computeClientKey', () => {
+  it('generates consistent keys for the same address within the same rotation epoch', () => {
+    const key1 = computeClientKey('192.0.2.1', 'secret', 1000);
+    const key2 = computeClientKey('192.0.2.1', 'secret', 2000);
+    expect(key1).toBe(key2);
+  });
+
+  it('rotates keys across different rotation epochs', () => {
+    const interval = 24 * 60 * 60_000;
+    const keyDay1 = computeClientKey('192.0.2.1', 'secret', 1000, interval);
+    const keyDay2 = computeClientKey('192.0.2.1', 'secret', 1000 + interval, interval);
+    expect(keyDay1).not.toBe(keyDay2);
+  });
+});
 
 describe('normalizeClientAddress', () => {
   it('preserves native IPv4 addresses', () => {

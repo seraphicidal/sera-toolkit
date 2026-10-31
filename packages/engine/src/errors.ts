@@ -96,7 +96,8 @@ export const MESSAGES: Record<ErrorCode, string> = {
   PROVIDER_AUTH_REQUIRED: 'This source needs an account, and this server does not have one.',
   PROVIDER_CONFIGURATION_ERROR: 'This source is configured incorrectly on this server.',
   ROBOTS_DISALLOWED: 'This site asks not to be read automatically.',
-  DRM_PROTECTED: 'This media is protected and cannot be downloaded.',
+  DRM_PROTECTED:
+    'This media is protected by Digital Rights Management (DRM) and cannot be downloaded.',
   LIVE_IN_PROGRESS: 'This stream is still live. Try again once it has finished.',
   RATE_LIMITED: 'The source is temporarily limiting requests. Try again later.',
   PROVIDER_UNAVAILABLE: 'Support for this source is temporarily unavailable.',
@@ -126,6 +127,8 @@ export const HINTS: Partial<Record<ErrorCode, string>> = {
   PROVIDER_AUTH_REQUIRED:
     'Nothing is wrong with the link. The operator of this server can enable it by adding credentials for that source.',
   ROBOTS_DISALLOWED: 'Try a direct link to the media file itself.',
+  DRM_PROTECTED:
+    'Circumventing technical protection measures (Widevine, PlayReady, FairPlay) is prohibited under DMCA § 1201 and § 95a UrhG.',
 };
 
 export function seraError(

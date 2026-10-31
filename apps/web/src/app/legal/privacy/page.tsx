@@ -94,14 +94,17 @@ export default function PrivacyPage() {
         <ul className="list-disc space-y-1.5 pl-5 text-[0.875rem]">
           <li>
             <strong className="text-[var(--color-ink)]">Truncation and In-Memory Hashing:</strong>{' '}
-            IP addresses are salted and hashed or truncated in volatile memory. Keys are refreshed
-            regularly to prevent linkability.
+            IP addresses are salted and hashed or truncated in volatile memory. Hashing keys rotate
+            regularly across scheduled intervals to prevent linkability.
           </li>
           <li>
             <strong className="text-[var(--color-ink)]">5-Minute Ephemeral Retention:</strong>{' '}
             In-memory rate limit counters and abuse protection tokens expire automatically after 5
-            minutes. Raw IP addresses are never written to permanent disk storage, operational logs,
-            or relational databases.
+            minutes. For media processing and navigation, raw IP addresses are never written to
+            permanent disk storage, operational logs, or relational databases. (Formal legal
+            takedown notices submitted through the Report Abuse form retain the notifier&apos;s IP
+            address and contact details on disk strictly as necessary to document statutory
+            notice-and-action proceedings under DSA Art. 16 and DMCA § 512).
           </li>
           <li>
             <strong className="text-[var(--color-ink)]">Legal Basis:</strong> Art. 6(1)(f) GDPR
@@ -153,7 +156,7 @@ export default function PrivacyPage() {
         <p>
           All previews are fetched server-side through a dedicated proxy endpoint (
           <code className="rounded bg-[var(--color-sunken)] px-1 py-0.5 text-xs">
-            /api/media/thumbnail
+            /api/thumb/:token
           </code>
           ). This ensures your client IP address and browser headers are never exposed to external
           third-party hosts or tracker CDNs.

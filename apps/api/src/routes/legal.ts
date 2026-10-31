@@ -5,6 +5,7 @@ import type { FastifyInstance } from 'fastify';
 import { legalReportRequestSchema } from '@sera/contracts';
 import type { LegalReportResponse } from '@sera/contracts/types';
 import type { SeraEngine } from '@sera/engine';
+import { computeClientKey } from '../plugins/client.js';
 
 export function registerLegalRoutes(app: FastifyInstance, engine: SeraEngine): void {
   app.post(
@@ -62,7 +63,7 @@ export function registerLegalRoutes(app: FastifyInstance, engine: SeraEngine): v
                 receivedAt,
                 ...report,
                 mitigated,
-                clientIp: request.ip,
+                clientIp: computeClientKey(request.ip, engine.config.secret),
               },
               null,
               2,

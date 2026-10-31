@@ -102,3 +102,48 @@ export function resolveSelection(
     fileCount: optionIds.length,
   };
 }
+
+export function filterMediaItems(items: readonly MediaItem[], query: string): MediaItem[] {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) return [...items];
+  return items.filter((item) => {
+    const indexStr = String(item.index);
+    const kindStr = KIND_LABELS[item.kind === 'unknown' ? 'video' : item.kind].toLowerCase();
+    const titleStr = (item.title ?? '').toLowerCase();
+    return (
+      indexStr.includes(normalized) || titleStr.includes(normalized) || kindStr.includes(normalized)
+    );
+  });
+}
+
+export function selectItemsUpToMax(
+  itemsToSelect: readonly MediaItem[],
+  maxItems?: number,
+  baseSelected?: ReadonlySet<string>,
+): Set<string> {
+  const limit =
+    maxItems !== undefined && Number.isFinite(maxItems) && maxItems > 0
+      ? Math.floor(maxItems)
+      : Number.POSITIVE_INFINITY;
+  const next = new Set<string>(baseSelected);
+  for (const item of itemsToSelect) {
+    if (next.size >= limit) break;
+    next.add(item.id);
+  }
+  return next;
+}
+
+export function selectItemRange(
+  items: readonly MediaItem[],
+  fromIndex: number,
+  toIndex: number,
+  maxItems?: number,
+): Set<string> {
+  if (!Number.isFinite(fromIndex) || !Number.isFinite(toIndex)) {
+    return new Set();
+  }
+  const start = Math.min(Math.floor(fromIndex), Math.floor(toIndex));
+  const end = Math.max(Math.floor(fromIndex), Math.floor(toIndex));
+  const inRange = items.filter((item) => item.index >= start && item.index <= end);
+  return selectItemsUpToMax(inRange, maxItems);
+}

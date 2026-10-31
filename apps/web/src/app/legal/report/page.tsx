@@ -25,10 +25,14 @@ export default function LegalReportPage() {
 
   const authoritiesEmail =
     clean(process.env.NEXT_PUBLIC_CONTACT_EMAIL_AUTHORITIES) ??
-    clean(process.env.NEXT_PUBLIC_OPERATOR_EMAIL);
+    clean(process.env.CONTACT_EMAIL_AUTHORITIES) ??
+    clean(process.env.NEXT_PUBLIC_OPERATOR_EMAIL) ??
+    clean(process.env.OPERATOR_EMAIL);
   const legalEmail =
     clean(process.env.NEXT_PUBLIC_CONTACT_EMAIL_LEGAL) ??
-    clean(process.env.NEXT_PUBLIC_OPERATOR_EMAIL);
+    clean(process.env.CONTACT_EMAIL_LEGAL) ??
+    clean(process.env.NEXT_PUBLIC_OPERATOR_EMAIL) ??
+    clean(process.env.OPERATOR_EMAIL);
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();

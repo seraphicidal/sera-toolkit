@@ -72,6 +72,8 @@ function seedFrom(info: MediaInfo): {
 export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo } = {}) {
   const importMode = initialInfo !== undefined;
   const [url, setUrl] = useState('');
+  const [batchQueue, setBatchQueue] = useState<readonly string[]>([]);
+  const [batchIndex, setBatchIndex] = useState(0);
   const [phase, setPhase] = useState<Phase>(initialInfo ? 'ready' : 'idle');
   const [info, setInfo] = useState<MediaInfo | undefined>(initialInfo);
   const [error, setError] = useState<JobError | undefined>();
@@ -405,10 +407,103 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
               reset();
             }
           }}
-          onSubmit={(next) => void analyze(next)}
+          onSubmit={(next) => {
+            setBatchQueue([]);
+            setBatchIndex(0);
+            void analyze(next);
+          }}
+          onSubmitBatch={(urls) => {
+            setBatchQueue(urls);
+            setBatchIndex(0);
+            const first = urls[0] ?? '';
+            setUrl(first);
+            if (first) void analyze(first);
+          }}
           busy={busy}
           disabled={working}
         />
+      )}
+
+      {!importMode && batchQueue.length > 1 && (
+        <section
+          aria-label="Batch URL queue"
+          className="flex flex-col gap-2.5 rounded-[var(--radius-panel)] border border-[var(--color-line)] bg-[var(--color-surface)] p-3.5"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-xs font-medium tracking-wide text-[var(--color-ink-faint)] uppercase">
+              Batch Queue · {batchIndex + 1} of {batchQueue.length}
+            </span>
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                disabled={busy || working || batchIndex <= 0}
+                onClick={() => {
+                  const prevIdx = Math.max(0, batchIndex - 1);
+                  const target = batchQueue[prevIdx];
+                  if (!target) return;
+                  setBatchIndex(prevIdx);
+                  setUrl(target);
+                  void analyze(target);
+                }}
+                className="cursor-pointer rounded-md border border-[var(--color-line)] px-2 py-1 text-xs font-medium text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] disabled:cursor-not-allowed disabled:opacity-45"
+              >
+                Prev
+              </button>
+              <button
+                type="button"
+                disabled={busy || working || batchIndex >= batchQueue.length - 1}
+                onClick={() => {
+                  const nextIdx = Math.min(batchQueue.length - 1, batchIndex + 1);
+                  const target = batchQueue[nextIdx];
+                  if (!target) return;
+                  setBatchIndex(nextIdx);
+                  setUrl(target);
+                  void analyze(target);
+                }}
+                className="cursor-pointer rounded-md border border-[var(--color-line)] px-2 py-1 text-xs font-medium text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] disabled:cursor-not-allowed disabled:opacity-45"
+              >
+                Next
+              </button>
+              <button
+                type="button"
+                disabled={busy || working}
+                onClick={() => {
+                  setBatchQueue([]);
+                  setBatchIndex(0);
+                }}
+                className="cursor-pointer rounded-md px-2 py-1 text-xs font-medium text-[var(--color-ink-faint)] hover:text-[var(--color-danger)]"
+              >
+                Clear batch
+              </button>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-1.5">
+            {batchQueue.map((queuedUrl, idx) => {
+              const active = idx === batchIndex;
+              return (
+                <button
+                  key={`${idx}-${queuedUrl}`}
+                  type="button"
+                  disabled={busy || working}
+                  onClick={() => {
+                    setBatchIndex(idx);
+                    setUrl(queuedUrl);
+                    void analyze(queuedUrl);
+                  }}
+                  className={cx(
+                    'max-w-full truncate rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors',
+                    active
+                      ? 'border-[var(--color-accent)] bg-[var(--color-accent-wash)] text-[var(--color-accent)]'
+                      : 'border-[var(--color-line)] bg-[var(--color-canvas)] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]',
+                  )}
+                >
+                  {idx + 1}. {queuedUrl}
+                </button>
+              );
+            })}
+          </div>
+        </section>
       )}
 
       {busy && <AnalyzingSkeleton />}
@@ -442,6 +537,7 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
                   onSelectAll={(all) =>
                     setSelectedIds(all ? new Set(info.items.map((item) => item.id)) : new Set())
                   }
+                  onSelectIds={setSelectedIds}
                 />
               )}
 

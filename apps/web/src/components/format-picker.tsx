@@ -1,8 +1,8 @@
 'use client';
 
-import type { MediaInfo } from '@sera/contracts/types';
+import type { DownloadOption, MediaInfo } from '@sera/contracts/types';
 import { AudioIcon, ChevronIcon, GifIcon, ImageIcon, VideoIcon } from './icons';
-import { cx, formatBytes } from '@/lib/format';
+import { cx, formatBytes, optionBadges } from '@/lib/format';
 import {
   availableKinds,
   kindLabel,
@@ -35,11 +35,14 @@ export function FormatPicker({
 }) {
   const kinds = availableKinds(info, selectedIds);
   const labels = qualityLabels(info, kind, selectedIds);
+  const activeLabel = label ?? labels[0];
 
-  const describing = info.items
+  const matchingOptions: DownloadOption[] = info.items
     .filter((item) => selectedIds.has(item.id))
-    .flatMap((item) => optionsOfKind(item, kind))
-    .find((option) => option.label === label);
+    .flatMap((item) => optionsOfKind(item, kind));
+
+  const describing = matchingOptions.find((option) => option.label === activeLabel);
+  const describingBadges = describing ? optionBadges(describing) : [];
 
   return (
     <div className="flex flex-col gap-4">
@@ -106,7 +109,7 @@ export function FormatPicker({
           <div className="relative">
             <select
               id="sera-quality"
-              value={label ?? labels[0]}
+              value={activeLabel}
               onChange={(event) => onLabelChange(event.target.value)}
               className="w-full cursor-pointer appearance-none rounded-xl border border-[var(--color-line)] bg-[var(--color-surface)] py-3 pr-10 pl-3.5 text-[0.9375rem] text-[var(--color-ink)] transition-colors hover:border-[var(--color-line-strong)] focus:border-[var(--color-accent)] focus:outline-none focus-visible:shadow-[var(--shadow-focus)]"
             >
@@ -121,16 +124,89 @@ export function FormatPicker({
               className="pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 text-[var(--color-ink-faint)]"
             />
           </div>
+
+          <div
+            role="radiogroup"
+            aria-label="Quality options"
+            className="mt-2.5 grid grid-cols-1 gap-2 sm:grid-cols-2"
+          >
+            {labels.map((candidate) => {
+              const option = matchingOptions.find((item) => item.label === candidate);
+              const selected = candidate === activeLabel;
+              const badges = option ? optionBadges(option) : [];
+              return (
+                <button
+                  key={candidate}
+                  type="button"
+                  role="radio"
+                  aria-checked={selected}
+                  onClick={() => onLabelChange(candidate)}
+                  className={cx(
+                    'flex cursor-pointer flex-col gap-1.5 rounded-xl border px-3 py-2.5 text-left transition-all duration-150',
+                    selected
+                      ? 'border-[var(--color-accent)] bg-[var(--color-accent-wash)]'
+                      : 'border-[var(--color-line)] bg-[var(--color-surface)] hover:border-[var(--color-line-strong)]',
+                  )}
+                >
+                  <div className="flex w-full items-center justify-between gap-2">
+                    <span className="text-[0.875rem] font-medium text-[var(--color-ink)]">
+                      {candidate}
+                    </span>
+                    {option?.filesizeBytes !== undefined && (
+                      <span className="tabular text-xs text-[var(--color-ink-muted)]">
+                        {option.filesizeIsApproximate ? '~' : ''}
+                        {formatBytes(option.filesizeBytes)}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-1">
+                    {option?.container && (
+                      <span className="rounded-md border border-[var(--color-line)] bg-[var(--color-sunken)] px-1.5 py-0.5 text-[0.6875rem] font-medium tracking-wide text-[var(--color-ink-muted)] uppercase">
+                        {option.container}
+                      </span>
+                    )}
+                    {badges.map((badge) => (
+                      <span
+                        key={badge}
+                        data-codec-badge={badge}
+                        className="rounded-md border border-[var(--color-accent)]/30 bg-[var(--color-surface)] px-1.5 py-0.5 text-[0.6875rem] font-medium text-[var(--color-accent)]"
+                      >
+                        {badge}
+                      </span>
+                    ))}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
         </div>
       )}
 
-      {describing?.detail && (
-        <p className="-mt-1 text-[0.8125rem] text-[var(--color-ink-muted)]">
-          {describing.detail}
-          {describing.requiresConversion && (
-            <span className="text-[var(--color-ink-faint)]"> · converted after download</span>
+      {(Boolean(describing?.detail) || describingBadges.length > 0) && (
+        <div className="-mt-1 flex flex-wrap items-center gap-2 text-[0.8125rem] text-[var(--color-ink-muted)]">
+          {describing?.detail && (
+            <span>
+              {describing.detail}
+              {describing.requiresConversion && (
+                <span className="text-[var(--color-ink-faint)]"> · converted after download</span>
+              )}
+            </span>
           )}
-        </p>
+          {describingBadges.length > 0 && (
+            <span className="flex flex-wrap items-center gap-1">
+              {describingBadges.map((badge) => (
+                <span
+                  key={badge}
+                  data-codec-badge={badge}
+                  className="rounded-md border border-[var(--color-line)] bg-[var(--color-sunken)] px-1.5 py-0.5 text-[0.6875rem] font-medium text-[var(--color-ink)]"
+                >
+                  {badge}
+                </span>
+              ))}
+            </span>
+          )}
+        </div>
       )}
 
       {selectedIds.size === 1 && labels.length === 1 && describing?.filesizeBytes !== undefined && (

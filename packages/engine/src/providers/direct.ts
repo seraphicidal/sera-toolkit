@@ -54,7 +54,14 @@ export class DirectFileProvider implements MediaProvider {
       });
     }
 
-    const container = normalizeContainer(contentType, extension);
+    const isManifest =
+      extension === 'm3u8' ||
+      extension === 'mpd' ||
+      contentType.includes('mpegurl') ||
+      contentType.includes('dash+xml');
+    const container: ContainerFormat = isManifest
+      ? 'mp4'
+      : normalizeContainer(contentType, extension);
     const rawSegment = url.pathname.split('/').filter(Boolean).pop() ?? 'file';
     let filename = rawSegment;
     try {
@@ -76,15 +83,23 @@ export class DirectFileProvider implements MediaProvider {
         ...(head.contentLength ? { filesizeBytes: head.contentLength } : {}),
         requiresConversion: false,
         recommended: true,
-        fetch: { via: 'direct', url: head.url },
+        fetch: isManifest
+          ? {
+              via: 'ytdlp',
+              selector: 'bestvideo+bestaudio/best',
+              merge: 'mp4',
+              target: head.url,
+              useExtractors: 'default',
+            }
+          : { via: 'direct', url: head.url },
       },
     ];
 
     if (kind === 'video') {
       plans.push(
-        audioPlan('mp3', 'MP3', 320, head.url),
-        audioPlan('m4a', 'M4A', 256, head.url),
-        audioPlan('wav', 'WAV', undefined, head.url),
+        audioPlan('mp3', 'MP3', 320, head.url, isManifest),
+        audioPlan('m4a', 'M4A', 256, head.url, isManifest),
+        audioPlan('wav', 'WAV', undefined, head.url, isManifest),
       );
     }
     if (kind === 'gif') {
@@ -122,6 +137,7 @@ function audioPlan(
   label: string,
   bitrate: number | undefined,
   url: string,
+  isManifest = false,
 ): DownloadPlan {
   return {
     kind: 'audio',
@@ -131,8 +147,21 @@ function audioPlan(
     ...(bitrate ? { audioBitrateKbps: bitrate } : {}),
     requiresConversion: true,
     recommended: container === 'mp3',
-    fetch: { via: 'direct', url },
-    convert: { kind: 'audio', container, ...(bitrate ? { bitrateKbps: bitrate } : {}) },
+    fetch: isManifest
+      ? {
+          via: 'ytdlp',
+          selector: 'bestaudio/best',
+          audio: {
+            format: container,
+            ...(bitrate ? { quality: `${bitrate}K` } : { quality: '0' }),
+          },
+          target: url,
+          useExtractors: 'default',
+        }
+      : { via: 'direct', url },
+    ...(isManifest
+      ? {}
+      : { convert: { kind: 'audio', container, ...(bitrate ? { bitrateKbps: bitrate } : {}) } }),
   };
 }
 
@@ -156,6 +185,37 @@ function convertedVideoPlan(
 const IMAGE_EXTS = new Set(['jpg', 'jpeg', 'png', 'webp', 'avif', 'bmp', 'tif', 'tiff', 'heic']);
 const AUDIO_EXTS = new Set(['mp3', 'm4a', 'aac', 'opus', 'ogg', 'oga', 'wav', 'flac', 'wma']);
 const VIDEO_EXTS = new Set(['mp4', 'm4v', 'mov', 'webm', 'mkv', 'avi', 'flv', 'ts', 'm3u8', 'mpd']);
+export const ARCHIVE_DOC_EXTS = new Set([
+  'pdf',
+  'iso',
+  'zip',
+  'tar',
+  '7z',
+  'apk',
+  'dmg',
+  'exe',
+  'epub',
+]);
+
+const ARCHIVE_DOC_MIMES: Readonly<Record<string, ContainerFormat>> = {
+  'application/pdf': 'pdf',
+  'application/x-pdf': 'pdf',
+  'application/zip': 'zip',
+  'application/x-zip-compressed': 'zip',
+  'application/x-tar': 'tar',
+  'application/tar': 'tar',
+  'application/x-gtar': 'tar',
+  'application/x-7z-compressed': '7z',
+  'application/vnd.android.package-archive': 'apk',
+  'application/x-apple-diskimage': 'dmg',
+  'application/x-iso9660-image': 'iso',
+  'application/x-cd-image': 'iso',
+  'application/x-msdownload': 'exe',
+  'application/x-msdos-program': 'exe',
+  'application/x-executable': 'exe',
+  'application/vnd.microsoft.portable-executable': 'exe',
+  'application/epub+zip': 'epub',
+};
 
 export function classify(contentType: string, extension: string): MediaKind {
   if (contentType === 'image/gif' || (!contentType && extension === 'gif')) return 'gif';
@@ -165,11 +225,17 @@ export function classify(contentType: string, extension: string): MediaKind {
     return 'video';
   if (contentType.startsWith('audio/') || (!contentType && AUDIO_EXTS.has(extension)))
     return 'audio';
+  if (
+    Object.hasOwn(ARCHIVE_DOC_MIMES, contentType) ||
+    (!contentType && ARCHIVE_DOC_EXTS.has(extension))
+  )
+    return 'image';
 
   if (contentType === 'application/octet-stream' || contentType === 'binary/octet-stream') {
     if (VIDEO_EXTS.has(extension)) return 'video';
     if (AUDIO_EXTS.has(extension)) return 'audio';
     if (IMAGE_EXTS.has(extension)) return 'image';
+    if (ARCHIVE_DOC_EXTS.has(extension)) return 'image';
   }
   if (contentType.includes('mpegurl') || contentType.includes('dash+xml')) return 'video';
   return 'unknown';
@@ -194,6 +260,7 @@ export function normalizeContainer(contentType: string, extension: string): Cont
     'image/webp': 'webp',
     'image/avif': 'avif',
     'image/gif': 'gif',
+    ...ARCHIVE_DOC_MIMES,
   };
   const mapped = fromType[contentType];
   if (mapped) return mapped;
@@ -216,6 +283,15 @@ export function normalizeContainer(contentType: string, extension: string): Cont
     'png',
     'webp',
     'avif',
+    'pdf',
+    'iso',
+    'zip',
+    'tar',
+    '7z',
+    'apk',
+    'dmg',
+    'exe',
+    'epub',
   ];
   return (known.includes(normalized) ? normalized : 'bin') as ContainerFormat;
 }

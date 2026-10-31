@@ -150,17 +150,43 @@ export async function dumpInfo(
 
   if (result.code !== 0) throw classifyYtdlpFailure(result.stderrTail, result.code);
 
+  let parsed: YtdlpInfo;
   try {
-    const parsed = JSON.parse(result.stdout) as YtdlpInfo;
-    if (result.stdout.length <= 4 * 1024 * 1024) {
-      return { ...parsed, _rawJson: result.stdout };
-    }
-    return parsed;
+    parsed = JSON.parse(result.stdout) as YtdlpInfo;
   } catch (cause) {
     throw seraError('PROVIDER_UNAVAILABLE', {
       detail: 'yt-dlp produced unparseable JSON',
       cause,
     });
+  }
+  assertNotDrmProtected(parsed);
+  if (result.stdout.length <= 4 * 1024 * 1024) {
+    return { ...parsed, _rawJson: result.stdout };
+  }
+  return parsed;
+}
+
+function isTruthyDrmValue(value: unknown): boolean {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const lower = value.trim().toLowerCase();
+    return Boolean(lower) && !['none', 'false', 'no', 'na', 'null', '0'].includes(lower);
+  }
+  return Boolean(value);
+}
+
+export function assertNotDrmProtected(info: YtdlpInfo): void {
+  const raw = info as Record<string, unknown>;
+  if (isTruthyDrmValue(raw.drm)) {
+    throw seraError('DRM_PROTECTED', { detail: `drm: ${String(raw.drm)}` });
+  }
+  const formats = info.formats ?? [];
+  const mediaFormats = formats.filter((f) => f.ext !== 'mhtml' && f.protocol !== 'mhtml');
+  if (
+    mediaFormats.length > 0 &&
+    mediaFormats.every((f) => isTruthyDrmValue((f as Record<string, unknown>).drm))
+  ) {
+    throw seraError('DRM_PROTECTED', { detail: 'all formats are DRM protected' });
   }
 }
 
@@ -396,7 +422,11 @@ export function classifyYtdlpFailure(stderr: string, exitCode: number): SeraErro
       'playready',
       'clearkey',
       'drm protected',
+      'drm_protected',
       'encrypted',
+      'encrypted_media',
+      'cenc',
+      'sample-aes',
       'this video is drm protected',
     )
   ) {

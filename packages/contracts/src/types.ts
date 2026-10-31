@@ -21,6 +21,14 @@ export type ContainerFormat =
   | 'png'
   | 'webp'
   | 'avif'
+  | 'pdf'
+  | 'iso'
+  | 'tar'
+  | '7z'
+  | 'apk'
+  | 'dmg'
+  | 'exe'
+  | 'epub'
   | 'zip'
   | 'bin';
 

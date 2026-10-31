@@ -91,6 +91,19 @@ export function normalizeClientAddress(raw: string): string {
   return `${first4.join(':')}::/64`;
 }
 
+export function computeClientKey(
+  address: string,
+  secret: string | Buffer,
+  now = Date.now(),
+  rotationIntervalMs = 24 * 60 * 60_000,
+): string {
+  const epoch = Math.floor(now / rotationIntervalMs);
+  return createHmac('sha256', secret)
+    .update(`${address}:${epoch}`)
+    .digest('base64url')
+    .slice(0, 22);
+}
+
 function addressOf(request: FastifyRequest, trustProxy: boolean): string {
   if (trustProxy) {
     const forwarded = request.headers['x-forwarded-for'];
@@ -117,10 +130,7 @@ export const clientKeyPlugin = fp(function clientKeyPlugin(
   app.addHook('onRequest', (request, _reply, next) => {
     request.canary = isCanaryToken(request.headers['x-sera-canary'], config.canaryToken);
     const address = normalizeClientAddress(addressOf(request, config.trustProxy));
-    request.clientKey = createHmac('sha256', config.secret)
-      .update(address)
-      .digest('base64url')
-      .slice(0, 22);
+    request.clientKey = computeClientKey(address, config.secret);
     next();
   });
 

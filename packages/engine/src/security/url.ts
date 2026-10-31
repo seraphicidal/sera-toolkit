@@ -183,6 +183,15 @@ export const MEDIA_EXTENSIONS = new Set([
   'tif',
   'tiff',
   'heic',
+  'pdf',
+  'iso',
+  'zip',
+  'tar',
+  '7z',
+  'apk',
+  'dmg',
+  'exe',
+  'epub',
 ]);
 
 export function urlExtension(url: URL): string | undefined {

@@ -60,7 +60,15 @@ export default function LegalNoticePage() {
                 <dt className="text-[var(--color-ink-muted)]">Registered Office / Address</dt>
                 <dd className="whitespace-pre-line text-[var(--color-ink)]">{operatorAddress}</dd>
               </>
-            ) : null}
+            ) : (
+              <>
+                <dt className="text-[var(--color-ink-muted)]">Registered Office / Address</dt>
+                <dd className="text-[var(--color-ink-faint)] italic">
+                  Not configured. Deployers must specify OPERATOR_ADDRESS in environment variables
+                  to satisfy statutory service provider identification requirements (DDG § 5).
+                </dd>
+              </>
+            )}
 
             <dt className="text-[var(--color-ink-muted)]">Electronic Contact</dt>
             <dd className="text-[var(--color-ink)]">
@@ -88,6 +96,13 @@ export default function LegalNoticePage() {
               </>
             ) : null}
           </dl>
+          {!operatorAddress && (
+            <p className="mt-4 rounded-xl border border-[var(--color-line)] bg-[var(--color-sunken)] p-3.5 text-xs leading-relaxed text-[var(--color-ink-muted)]">
+              Statutory notice: To satisfy provider identification requirements under Section 5 DDG
+              and Art. 5 EU E-Commerce Directive, production instance deployers must configure
+              OPERATOR_NAME, OPERATOR_ADDRESS, and OPERATOR_EMAIL.
+            </p>
+          )}
         </div>
       </section>
 

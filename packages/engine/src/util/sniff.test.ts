@@ -40,6 +40,13 @@ describe('sniffContainer', () => {
     expect(sniffContainer(header([0xff, 0xfb, 0x90, 0x00]))).toBe('mp3');
   });
 
+  it('reads document, archive, and executable magic bytes', () => {
+    expect(sniffContainer(header('%PDF-1.7'))).toBe('pdf');
+    expect(sniffContainer(header([0x50, 0x4b, 0x03, 0x04]))).toBe('zip');
+    expect(sniffContainer(header([0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c]))).toBe('7z');
+    expect(sniffContainer(header('MZ', [0x90, 0x00]))).toBe('exe');
+  });
+
   it('says nothing rather than guessing', () => {
     expect(sniffContainer(header('<!DOCTYPE html>'))).toBeUndefined();
     expect(sniffContainer(header('{"error":"nope"}'))).toBeUndefined();
@@ -64,5 +71,7 @@ describe('contradicts', () => {
     expect(contradicts('m4a', 'mp4')).toBe(false);
     expect(contradicts('opus', 'ogg')).toBe(false);
     expect(contradicts('mkv', 'webm')).toBe(false);
+    expect(contradicts('apk', 'zip')).toBe(false);
+    expect(contradicts('epub', 'zip')).toBe(false);
   });
 });

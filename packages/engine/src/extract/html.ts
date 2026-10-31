@@ -18,6 +18,7 @@ export interface PageMedia {
   readonly siteName?: string;
   readonly author?: string;
   readonly thumbnail?: string;
+  readonly drmProtected?: boolean;
   readonly media: readonly DiscoveredMedia[];
 }
 
@@ -197,6 +198,12 @@ export function discoverMedia(html: string, pageUrl: URL): PageMedia {
     siteName ??
     pageUrl.hostname;
   const thumbnail = absolute(meta('og:image:secure_url') ?? meta('og:image'), pageUrl);
+  const lowerHtml = html.toLowerCase();
+  const drmProtected =
+    !found.length &&
+    (lowerHtml.includes('com.widevine.alpha') ||
+      lowerHtml.includes('com.microsoft.playready') ||
+      lowerHtml.includes('com.apple.fps'));
 
   return {
     ...((title ?? ldTitle) ? { title: (title ?? ldTitle)!.trim() } : {}),
@@ -204,6 +211,7 @@ export function discoverMedia(html: string, pageUrl: URL): PageMedia {
     ...(siteName ? { siteName } : {}),
     ...(author ? { author } : {}),
     ...(thumbnail ? { thumbnail } : {}),
+    ...(drmProtected ? { drmProtected: true } : {}),
     media: found.sort((a, b) => SOURCE_RANK[a.source] - SOURCE_RANK[b.source]),
   };
 }

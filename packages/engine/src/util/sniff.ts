@@ -27,6 +27,10 @@ export function sniffContainer(head: Uint8Array): ContainerFormat | undefined {
   if (head[0] === 0xff && ((head[1] ?? 0) & 0xe0) === 0xe0 && ((head[1] ?? 0) & 0x06) !== 0x00) {
     return 'mp3';
   }
+  if (ascii(0, '%PDF-')) return 'pdf';
+  if (at(0, 0x50, 0x4b, 0x03, 0x04)) return 'zip';
+  if (at(0, 0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c)) return '7z';
+  if (at(0, 0x4d, 0x5a)) return 'exe';
 
   return undefined;
 }
@@ -51,6 +55,7 @@ const EQUIVALENT: readonly ReadonlySet<string>[] = [
   new Set(['mp4', 'm4v', 'm4a']),
   new Set(['ogg', 'oga', 'opus']),
   new Set(['mkv', 'webm']),
+  new Set(['zip', 'apk', 'epub']),
 ];
 
 export function contradicts(claimed: string, sniffed: string): boolean {

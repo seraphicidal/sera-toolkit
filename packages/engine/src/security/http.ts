@@ -2,7 +2,9 @@ import { lookup as dnsLookup, type LookupAddress } from 'node:dns';
 import type { Readable } from 'node:stream';
 import { Agent, buildConnector, request, type Dispatcher } from 'undici';
 import { seraError } from '../errors.js';
-import { isPublicAddress } from './ip.js';
+import { isIpLiteral, isPublicAddress } from './ip.js';
+
+const permissiveDispatchers = new WeakSet<Dispatcher>();
 
 export class BlockedAddressError extends Error {
   constructor(hostname: string) {
@@ -54,7 +56,7 @@ export function createSafeDispatcher(options: SafeHttpOptions = {}): Dispatcher 
     ...(options.allowPrivateAddresses ? {} : { lookup: guardedLookup }),
   } as Parameters<typeof buildConnector>[0];
 
-  return new Agent({
+  const agent = new Agent({
     connect: buildConnector(connectOptions),
     headersTimeout: options.headersTimeoutMs ?? 15_000,
     bodyTimeout: options.bodyTimeoutMs ?? 60_000,
@@ -62,6 +64,10 @@ export function createSafeDispatcher(options: SafeHttpOptions = {}): Dispatcher 
     keepAliveTimeout: 30_000,
     keepAliveMaxTimeout: 60_000,
   });
+  if (options.allowPrivateAddresses) {
+    permissiveDispatchers.add(agent);
+  }
+  return agent;
 }
 
 export const DEFAULT_HEADERS: Readonly<Record<string, string>> = {
@@ -87,6 +93,7 @@ export interface SafeFetchOptions {
   readonly maxRedirects?: number;
   readonly followRedirects?: boolean;
   readonly allowUrl?: (url: URL) => boolean;
+  readonly allowPrivateAddresses?: boolean;
   readonly headers?: Readonly<Record<string, string>>;
   readonly keepCookies?: boolean;
   readonly signal?: AbortSignal;
@@ -120,6 +127,8 @@ export async function safeOpen(url: URL, options: SafeFetchOptions): Promise<Ope
   const signal = options.signal ? AbortSignal.any([timeout, options.signal]) : timeout;
 
   let current = url;
+  const allowPrivate =
+    options.allowPrivateAddresses ?? permissiveDispatchers.has(options.dispatcher);
   const jar = cookieJar(options.headers?.cookie);
   for (let hop = 0; hop <= maxRedirects; hop += 1) {
     if (current.protocol !== 'http:' && current.protocol !== 'https:') {
@@ -127,6 +136,15 @@ export async function safeOpen(url: URL, options: SafeFetchOptions): Promise<Ope
     }
     if (current.username || current.password) {
       throw seraError('BLOCKED_ADDRESS', { detail: 'credentials in url' });
+    }
+    if (!allowPrivate && isIpLiteral(current.hostname)) {
+      const bare =
+        current.hostname.startsWith('[') && current.hostname.endsWith(']')
+          ? current.hostname.slice(1, -1)
+          : current.hostname;
+      if (!isPublicAddress(bare)) {
+        throw seraError('BLOCKED_ADDRESS', { detail: `non-public address ${bare}` });
+      }
     }
     if (
       hop > 0 &&

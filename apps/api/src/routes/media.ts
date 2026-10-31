@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { importRequestSchema, resolveRequestSchema } from '@sera/contracts';
 import type { SeraEngine } from '@sera/engine';
 import { header, hostMatchesAny, safeFetch, seraError, SeraError } from '@sera/engine';
@@ -190,75 +190,79 @@ export function registerMediaRoutes(app: FastifyInstance, engine: SeraEngine): v
     },
   );
 
-  app.get<{ Params: { token: string } }>(
-    '/api/thumb/:token',
-    {
-      config: {
-        rateLimit: {
-          max: engine.config.rateLimitThumbnailsPerMinute,
-          timeWindow: '1 minute',
-        },
-      },
-    },
-    async (request, reply) => {
-      const source = engine.resolver.verifyThumbnailToken(request.params.token);
-      let target: URL;
-      try {
-        target = new URL(source);
-      } catch {
-        throw seraError('NOT_FOUND');
-      }
+  const thumbHandler = async (
+    request: FastifyRequest<{ Params: { token: string } }>,
+    reply: FastifyReply,
+  ) => {
+    const source = engine.resolver.verifyThumbnailToken(request.params.token);
+    let target: URL;
+    try {
+      target = new URL(source);
+    } catch {
+      throw seraError('NOT_FOUND');
+    }
 
-      const cached = thumbnailCache.get(source);
-      if (cached) {
-        return reply
-          .header('content-type', cached.contentType)
-          .header('cache-control', 'public, max-age=3600, immutable')
-          .header('content-security-policy', "default-src 'none'; sandbox")
-          .header('x-content-type-options', 'nosniff')
-          .send(cached.body);
-      }
-
-      const active = thumbnailCache.getInFlight(source);
-      const data = active
-        ? await active
-        : await (() => {
-            const promise = (async () => {
-              try {
-                const response = await safeFetch(target, {
-                  dispatcher: engine.resolver.dispatcher,
-                  timeoutMs: 10_000,
-                  maxBytes: MAX_THUMBNAIL_BYTES,
-                  signal: clientAbortSignal(request, reply),
-                  allowUrl: (url) => !hostMatchesAny(url.hostname, engine.config.blockedHosts),
-                });
-
-                if (response.status >= 400) throw seraError('NOT_FOUND');
-
-                const contentType =
-                  (header(response.headers, 'content-type') ?? '')
-                    .split(';')[0]
-                    ?.trim()
-                    .toLowerCase() ?? '';
-                if (!IMAGE_TYPES.has(contentType))
-                  throw seraError('NOT_FOUND', { detail: `thumb type ${contentType}` });
-
-                thumbnailCache.set(source, response.body, contentType);
-                return { body: response.body, contentType };
-              } finally {
-                thumbnailCache.deleteInFlight(source);
-              }
-            })();
-            thumbnailCache.setInFlight(source, promise);
-            return promise;
-          })();
-
+    const cached = thumbnailCache.get(source);
+    if (cached) {
       return reply
-        .header('content-type', data.contentType)
+        .header('content-type', cached.contentType)
         .header('cache-control', 'public, max-age=3600, immutable')
         .header('content-security-policy', "default-src 'none'; sandbox")
         .header('x-content-type-options', 'nosniff')
-        .send(data.body);
+        .send(cached.body);
+    }
+
+    const active = thumbnailCache.getInFlight(source);
+    const data = active
+      ? await active
+      : await (() => {
+          const promise = (async () => {
+            try {
+              const response = await safeFetch(target, {
+                dispatcher: engine.resolver.dispatcher,
+                timeoutMs: 10_000,
+                maxBytes: MAX_THUMBNAIL_BYTES,
+                signal: clientAbortSignal(request, reply),
+                allowUrl: (url) => !hostMatchesAny(url.hostname, engine.config.blockedHosts),
+              });
+
+              if (response.status >= 400) throw seraError('NOT_FOUND');
+
+              const contentType =
+                (header(response.headers, 'content-type') ?? '')
+                  .split(';')[0]
+                  ?.trim()
+                  .toLowerCase() ?? '';
+              if (!IMAGE_TYPES.has(contentType))
+                throw seraError('NOT_FOUND', { detail: `thumb type ${contentType}` });
+
+              thumbnailCache.set(source, response.body, contentType);
+              return { body: response.body, contentType };
+            } finally {
+              thumbnailCache.deleteInFlight(source);
+            }
+          })();
+          thumbnailCache.setInFlight(source, promise);
+          return promise;
+        })();
+
+    return reply
+      .header('content-type', data.contentType)
+      .header('cache-control', 'public, max-age=3600, immutable')
+      .header('content-security-policy', "default-src 'none'; sandbox")
+      .header('x-content-type-options', 'nosniff')
+      .send(data.body);
+  };
+
+  const thumbOptions = {
+    config: {
+      rateLimit: {
+        max: engine.config.rateLimitThumbnailsPerMinute,
+        timeWindow: '1 minute',
+      },
     },
-  );
+  };
+
+  app.get<{ Params: { token: string } }>('/api/thumb/:token', thumbOptions, thumbHandler);
+  app.get<{ Params: { token: string } }>('/api/media/thumbnail/:token', thumbOptions, thumbHandler);
 }

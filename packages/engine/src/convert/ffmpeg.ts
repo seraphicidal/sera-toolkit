@@ -188,7 +188,7 @@ function audioArgs(
   return args;
 }
 
-function buildArgs(request: ConvertRequest, source: ProbeResult): string[] {
+export function buildArgs(request: ConvertRequest, source: ProbeResult): string[] {
   const args = [
     '-hide_banner',
     '-nostdin',
@@ -230,31 +230,55 @@ function buildArgs(request: ConvertRequest, source: ProbeResult): string[] {
       break;
     }
 
-    case 'video':
+    case 'video': {
+      const vCodec = (source.video?.codec ?? '').toLowerCase();
+      const aCodec = (source.audio?.codec ?? '').toLowerCase();
       if (request.spec.container === 'mp4') {
-        args.push(
-          '-c:v',
-          'libx264',
-          '-preset',
-          'veryfast',
-          '-crf',
-          '23',
-          '-pix_fmt',
-          'yuv420p',
-          '-vf',
-          'scale=trunc(iw/2)*2:trunc(ih/2)*2',
-          '-movflags',
-          '+faststart',
-        );
-        args.push(source.audio ? '-c:a' : '-an', ...(source.audio ? ['aac', '-b:a', '160k'] : []));
+        const videoCompatible = vCodec === 'h264' || vCodec.startsWith('avc1');
+        const audioCompatible =
+          !source.audio || aCodec === 'aac' || aCodec.startsWith('mp4a') || aCodec === 'mp3';
+        if (videoCompatible && audioCompatible) {
+          args.push('-c', 'copy', '-movflags', '+faststart');
+        } else {
+          args.push(
+            '-c:v',
+            'libx264',
+            '-preset',
+            'veryfast',
+            '-crf',
+            '23',
+            '-pix_fmt',
+            'yuv420p',
+            '-vf',
+            'scale=trunc(iw/2)*2:trunc(ih/2)*2',
+            '-movflags',
+            '+faststart',
+          );
+          args.push(
+            source.audio ? '-c:a' : '-an',
+            ...(source.audio ? ['aac', '-b:a', '160k'] : []),
+          );
+        }
       } else {
-        args.push('-c:v', 'libvpx-vp9', '-crf', '32', '-b:v', '0', '-row-mt', '1');
-        args.push(
-          source.audio ? '-c:a' : '-an',
-          ...(source.audio ? ['libopus', '-b:a', '128k'] : []),
-        );
+        const videoCompatible =
+          vCodec === 'vp9' ||
+          vCodec.startsWith('vp09') ||
+          vCodec === 'vp8' ||
+          vCodec === 'av1' ||
+          vCodec.startsWith('av01');
+        const audioCompatible = !source.audio || aCodec === 'opus' || aCodec === 'vorbis';
+        if (videoCompatible && audioCompatible) {
+          args.push('-c', 'copy');
+        } else {
+          args.push('-c:v', 'libvpx-vp9', '-crf', '32', '-b:v', '0', '-row-mt', '1');
+          args.push(
+            source.audio ? '-c:a' : '-an',
+            ...(source.audio ? ['libopus', '-b:a', '128k'] : []),
+          );
+        }
       }
       break;
+    }
   }
 
   if (request.maxOutputBytes) args.push('-fs', String(request.maxOutputBytes));

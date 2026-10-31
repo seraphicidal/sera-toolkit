@@ -7,7 +7,7 @@ import type { DownloadPlan, ProviderContext, ResolvedMedia } from './types.js';
 import { InstagramProvider } from './instagram.js';
 import { RedditProvider } from './reddit.js';
 import { SoundCloudProvider } from './soundcloud.js';
-import { GenericProvider } from './generic.js';
+import { assertRobotsAllows, GenericProvider } from './generic.js';
 import { TwitterProvider } from './twitter.js';
 import { YouTubeProvider } from './youtube.js';
 
@@ -759,5 +759,42 @@ describe('extractor tuning reaches the download', () => {
         expect(plan.fetch.useExtractors).toBe('default');
       }
     }
+  });
+
+  it('falls back to yt-dlp default extractors on generic public pages without HTML media', async () => {
+    let probed = false;
+    const genericContext: ProviderContext = {
+      ...contextFor(youtubeInfo),
+      fetchText: (target) =>
+        Promise.resolve({
+          body: '<html><head><title>Embedded</title></head><body></body></html>',
+          url: target.toString(),
+        }),
+      probe: (_url, opts) => {
+        probed = true;
+        expect(opts?.useExtractors).toBe('default');
+        return Promise.resolve(youtubeInfo);
+      },
+    };
+    const media = await new GenericProvider().resolve(
+      new URL('https://public-video-site.example/watch/42'),
+      genericContext,
+    );
+    expect(probed).toBe(true);
+    expect(media.items.length).toBeGreaterThan(0);
+  });
+
+  it('blocks SSRF redirects to private IP addresses in assertRobotsAllows', async () => {
+    const ssrfContext: ProviderContext = {
+      ...contextFor(youtubeInfo),
+      fetchText: () =>
+        Promise.resolve({
+          body: 'User-agent: *\nAllow: /\n',
+          url: 'http://169.254.169.254/latest/meta-data/',
+        }),
+    };
+    await expect(
+      assertRobotsAllows(new URL('https://public-site.example/video'), ssrfContext),
+    ).rejects.toMatchObject({ code: 'BLOCKED_ADDRESS' });
   });
 });

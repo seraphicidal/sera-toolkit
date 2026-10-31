@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { classifyYtdlpFailure } from './ytdlp.js';
+import { HINTS, MESSAGES } from '../errors.js';
+import { assertNotDrmProtected, classifyYtdlpFailure } from './ytdlp.js';
 import { num, str } from './ytdlp-types.js';
 
 describe('classifyYtdlpFailure', () => {
@@ -16,6 +17,8 @@ describe('classifyYtdlpFailure', () => {
     ['ERROR: This video is DRM protected', 'DRM_PROTECTED'],
     ['ERROR: Protected by FairPlay DRM', 'DRM_PROTECTED'],
     ['ERROR: Widevine key required', 'DRM_PROTECTED'],
+    ['ERROR: PlayReady cenc stream cannot be decrypted', 'DRM_PROTECTED'],
+    ['ERROR: SAMPLE-AES encrypted_media detected', 'DRM_PROTECTED'],
     ['ERROR: This content is behind a paywall; subscription required', 'PROVIDER_AUTH_REQUIRED'],
     [
       'ERROR: [generic] Sign in to confirm you are not a bot. Use --cookies-from-browser',
@@ -85,6 +88,35 @@ describe('classifyYtdlpFailure', () => {
 
   it('is case-insensitive about the extractor’s capitalisation', () => {
     expect(classifyYtdlpFailure('ERROR: PRIVATE VIDEO', 1).code).toBe('PRIVATE_CONTENT');
+  });
+
+  it('provides compliant anti-circumvention explanation for DRM_PROTECTED', () => {
+    const drmErr = classifyYtdlpFailure('ERROR: Widevine DRM protected', 1);
+    expect(drmErr.code).toBe('DRM_PROTECTED');
+    expect(drmErr.message).toBe(MESSAGES.DRM_PROTECTED);
+    expect(drmErr.message).toContain('Digital Rights Management (DRM)');
+    expect(drmErr.hint).toBe(HINTS.DRM_PROTECTED);
+    expect(drmErr.hint).toContain('DMCA § 1201');
+    expect(drmErr.hint).toContain('§ 95a UrhG');
+  });
+
+  it('rejects info objects marked with DRM protection', () => {
+    expect(() => assertNotDrmProtected({ id: '1', drm: 'Widevine' } as never)).toThrowError(
+      /Digital Rights Management/,
+    );
+    expect(() =>
+      assertNotDrmProtected({
+        id: '2',
+        formats: [{ format_id: '1', ext: 'mp4', drm: true } as never],
+      }),
+    ).toThrowError(/Digital Rights Management/);
+    expect(() =>
+      assertNotDrmProtected({
+        id: '3',
+        drm: 'none',
+        formats: [{ format_id: '1', ext: 'mp4' }],
+      } as never),
+    ).not.toThrow();
   });
 });
 

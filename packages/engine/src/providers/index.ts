@@ -2,6 +2,7 @@ import type { ProviderSummary } from '@sera/contracts/types';
 import type { EngineConfig } from '../config.js';
 import { BandcampProvider } from './bandcamp.js';
 import { BlueskyProvider } from './bluesky.js';
+import { DropboxProvider, GoogleDriveProvider, MediaFireProvider, MegaProvider } from './cloud.js';
 import { DailymotionProvider } from './dailymotion.js';
 import { DirectFileProvider } from './direct.js';
 import { FacebookProvider } from './facebook.js';
@@ -24,6 +25,15 @@ import type { MediaProvider } from './types.js';
 
 export * from './types.js';
 export { YtdlpProvider } from './ytdlp-base.js';
+export {
+  DropboxProvider,
+  GoogleDriveProvider,
+  MediaFireProvider,
+  MegaProvider,
+  extractGoogleDriveId,
+  extractGoogleDriveConfirmUrl,
+  extractMediaFireDirectUrl,
+} from './cloud.js';
 
 function filterProviders(
   providers: readonly MediaProvider[],
@@ -63,6 +73,10 @@ export function createProviders(config?: EngineConfig): MediaProvider[] {
     new BlueskyProvider(),
     new MastodonProvider(),
     new SnapchatProvider(),
+    new GoogleDriveProvider(),
+    new DropboxProvider(),
+    new MediaFireProvider(),
+    new MegaProvider(),
     new DirectFileProvider(),
     new GenericProvider(),
   ];

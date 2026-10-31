@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -94,6 +94,12 @@ describe('EU Compliance: Digital Services Act (DSA Arts. 11, 12, 14, 16)', () =>
     expect(engine.denylist.isBlocked('https://malicious-infringing.eu/virus.mp4').blocked).toBe(
       true,
     );
+
+    const persistedRaw = await readFile(join(dataDir, 'reports', `${body.reportId}.json`), 'utf-8');
+    const persisted = JSON.parse(persistedRaw) as { clientIp: string };
+    expect(persisted.clientIp).toBeDefined();
+    expect(persisted.clientIp).not.toBe('127.0.0.1');
+    expect(persisted.clientIp.length).toBe(22);
   });
 
   it('strictly rejects takedown reports without mandatory good-faith confirmation', async () => {

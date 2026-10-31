@@ -1,8 +1,15 @@
 'use client';
 
 import type { Job } from '@sera/contracts/types';
-import { SpinnerIcon } from './icons';
-import { cx, formatBytes, formatEta, formatSpeed } from '@/lib/format';
+import { CheckIcon, SpinnerIcon } from './icons';
+import {
+  cx,
+  formatBytes,
+  formatEta,
+  formatSpeed,
+  PIPELINE_STEPS,
+  resolvePipelineStepIndex,
+} from '@/lib/format';
 
 export function ProgressPanel({
   job,
@@ -16,6 +23,8 @@ export function ProgressPanel({
   const speed = formatSpeed(progress.speedBytesPerSecond);
   const eta = formatEta(progress.etaSeconds);
   const indeterminate = percent < 0.5 && job.state === 'queued';
+  const activeStepIndex = resolvePipelineStepIndex(job.state, job.step);
+  const activeStepLabel = PIPELINE_STEPS[activeStepIndex] ?? 'Resolving';
 
   return (
     <section
@@ -39,6 +48,46 @@ export function ProgressPanel({
 
         <span className="tabular shrink-0 text-lg font-medium text-[var(--color-ink)]">
           {percent.toFixed(0)}%
+        </span>
+      </div>
+
+      <div
+        role="status"
+        aria-live="polite"
+        aria-label={`Pipeline step: ${activeStepLabel}`}
+        className="mt-4"
+      >
+        <ol className="grid grid-cols-5 gap-1.5" aria-label="Download pipeline steps">
+          {PIPELINE_STEPS.map((stepName, index) => {
+            const isCompleted = index < activeStepIndex;
+            const isActive = index === activeStepIndex;
+            const stepState = isCompleted ? 'completed' : isActive ? 'active' : 'upcoming';
+            return (
+              <li
+                key={stepName}
+                data-step-state={stepState}
+                aria-current={isActive ? 'step' : undefined}
+                className={cx(
+                  'flex flex-col items-center gap-1 rounded-lg border px-1.5 py-1.5 text-center text-[0.6875rem] font-medium transition-colors',
+                  isCompleted &&
+                    'border-[var(--color-accent)]/40 bg-[var(--color-accent-wash)] text-[var(--color-accent)]',
+                  isActive &&
+                    'border-[var(--color-accent)] bg-[var(--color-surface)] text-[var(--color-ink)] shadow-[0_1px_2px_oklch(0_0_0/0.06)]',
+                  !isCompleted &&
+                    !isActive &&
+                    'border-[var(--color-line)] bg-[var(--color-sunken)] text-[var(--color-ink-faint)]',
+                )}
+              >
+                <span className="flex size-4 items-center justify-center rounded-full text-[0.625rem]">
+                  {isCompleted ? <CheckIcon size={12} /> : index + 1}
+                </span>
+                <span className="w-full truncate">{stepName}</span>
+              </li>
+            );
+          })}
+        </ol>
+        <span className="sr-only">
+          Step {activeStepIndex + 1} of {PIPELINE_STEPS.length}: {activeStepLabel} — {job.step}
         </span>
       </div>
 
@@ -79,10 +128,6 @@ export function ProgressPanel({
           Cancel
         </button>
       </div>
-
-      <p className="sr-only" role="status" aria-live="polite">
-        {job.step}
-      </p>
     </section>
   );
 }

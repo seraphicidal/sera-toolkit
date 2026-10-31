@@ -3,11 +3,14 @@ import type { DownloadOption, MediaInfo, MediaItem } from '@sera/contracts/types
 import {
   availableKinds,
   defaultOption,
+  filterMediaItems,
   initialKind,
   kindLabel,
   optionForItem,
   qualityLabels,
   resolveSelection,
+  selectItemRange,
+  selectItemsUpToMax,
 } from './selection';
 
 function option(
@@ -226,5 +229,31 @@ describe('resolveSelection', () => {
     const result = resolveSelection(info([videoItem, imageItem]), new Set(), 'video', '1080p');
     expect(result.optionIds).toEqual([]);
     expect(result.fileCount).toBe(0);
+  });
+});
+
+describe('playlist filtering and bulk selection helpers', () => {
+  const playlistItems: MediaItem[] = [
+    { id: 'p1', index: 1, kind: 'video', title: 'Intro & Opening', options: [] },
+    { id: 'p2', index: 2, kind: 'video', title: 'Main Lecture Part 1', options: [] },
+    { id: 'p3', index: 3, kind: 'audio', title: 'Bonus Q&A Audio', options: [] },
+    { id: 'p4', index: 4, kind: 'video', title: 'Closing Remarks', options: [] },
+  ];
+
+  it('filters playlist items by title, index, or kind', () => {
+    expect(filterMediaItems(playlistItems, '').map((i) => i.id)).toEqual(['p1', 'p2', 'p3', 'p4']);
+    expect(filterMediaItems(playlistItems, 'lecture').map((i) => i.id)).toEqual(['p2']);
+    expect(filterMediaItems(playlistItems, '3').map((i) => i.id)).toEqual(['p3']);
+    expect(filterMediaItems(playlistItems, 'audio').map((i) => i.id)).toEqual(['p3']);
+  });
+
+  it('selects items up to maxItems cap', () => {
+    expect([...selectItemsUpToMax(playlistItems, 2)]).toEqual(['p1', 'p2']);
+    expect([...selectItemsUpToMax(playlistItems)]).toEqual(['p1', 'p2', 'p3', 'p4']);
+  });
+
+  it('selects an inclusive index range in either direction', () => {
+    expect([...selectItemRange(playlistItems, 2, 4)]).toEqual(['p2', 'p3', 'p4']);
+    expect([...selectItemRange(playlistItems, 4, 2, 2)]).toEqual(['p2', 'p3']);
   });
 });

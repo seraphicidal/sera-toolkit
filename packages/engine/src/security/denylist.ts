@@ -53,39 +53,63 @@ export class Denylist {
     return { blocked: false };
   }
 
-  blockHost(host: string, reason = 'Report mitigation'): void {
+  blockHost(host: string, reason = 'Report mitigation'): BlockedEntry | undefined {
     const cleanHost = stripWww(host.toLowerCase());
-    if (!cleanHost || this.dynamicHosts.has(cleanHost)) return;
+    if (!cleanHost) return undefined;
+    if (this.dynamicHosts.has(cleanHost)) {
+      return this.entries.find((e) => e.type === 'host' && e.target === cleanHost);
+    }
 
     this.dynamicHosts.add(cleanHost);
-    this.entries.push({
+    const entry: BlockedEntry = {
       id: `blk_host_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
       type: 'host',
       target: cleanHost,
       reason,
       createdAt: new Date().toISOString(),
-    });
+    };
+    this.entries.push(entry);
     this.save();
+    return entry;
   }
 
-  blockUrl(rawUrl: string, reason = 'Report mitigation'): void {
+  blockUrl(rawUrl: string, reason = 'Report mitigation'): BlockedEntry | undefined {
     let normalized: string;
     try {
       normalized = normalizeUrl(new URL(rawUrl)).toString();
     } catch {
-      return;
+      return undefined;
     }
-    if (this.dynamicUrls.has(normalized)) return;
+    if (this.dynamicUrls.has(normalized)) {
+      return this.entries.find((e) => e.type === 'url' && e.target === normalized);
+    }
 
     this.dynamicUrls.add(normalized);
-    this.entries.push({
+    const entry: BlockedEntry = {
       id: `blk_url_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
       type: 'url',
       target: normalized,
       reason,
       createdAt: new Date().toISOString(),
-    });
+    };
+    this.entries.push(entry);
     this.save();
+    return entry;
+  }
+
+  unblock(id: string): boolean {
+    const index = this.entries.findIndex((e) => e.id === id);
+    if (index < 0) return false;
+    const [removed] = this.entries.splice(index, 1);
+    if (removed) {
+      if (removed.type === 'host') {
+        this.dynamicHosts.delete(stripWww(removed.target.toLowerCase()));
+      } else if (removed.type === 'url') {
+        this.dynamicUrls.delete(removed.target);
+      }
+    }
+    this.save();
+    return true;
   }
 
   listBlocked(): readonly BlockedEntry[] {

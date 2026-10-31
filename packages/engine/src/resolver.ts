@@ -520,6 +520,14 @@ export class MediaResolver {
     this.cache.set(`${providerId}|${url}`, outcome);
   }
 
+  clearCache(): void {
+    this.cache.clear();
+  }
+
+  cacheSize(): number {
+    return this.cache.size;
+  }
+
   private async runProvider(
     canonical: URL,
     providerId: string,
@@ -563,6 +571,7 @@ export class MediaResolver {
           timeoutMs: this.config.resolveTimeoutSeconds * 1000,
           maxBytes: maxBytes ?? 2 * 1024 * 1024,
           allowUrl,
+          allowPrivateAddresses: this.config.allowPrivateAddresses,
           ...(options?.headers ? { headers: options.headers } : {}),
           ...(options?.keepCookies ? { keepCookies: true } : {}),
           ...(signal ? { signal } : {}),
@@ -581,6 +590,7 @@ export class MediaResolver {
           timeoutMs: this.config.resolveTimeoutSeconds * 1000,
           maxBytes: 1,
           allowUrl,
+          allowPrivateAddresses: this.config.allowPrivateAddresses,
           ...(signal ? { signal } : {}),
         });
         const contentType = header(response.headers, 'content-type');
@@ -599,6 +609,7 @@ export class MediaResolver {
           followRedirects: options?.followRedirects ?? true,
           timeoutMs: options?.timeoutMs ?? this.config.resolveTimeoutSeconds * 1000,
           allowUrl,
+          allowPrivateAddresses: this.config.allowPrivateAddresses,
           ...(options?.headers ? { headers: options.headers } : {}),
           ...(options?.signal ? { signal: options.signal } : signal ? { signal } : {}),
         });

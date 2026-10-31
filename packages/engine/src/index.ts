@@ -10,6 +10,13 @@ export {
   createProviders,
   normalizeForProvider,
   YtdlpProvider,
+  GoogleDriveProvider,
+  DropboxProvider,
+  MediaFireProvider,
+  MegaProvider,
+  extractGoogleDriveId,
+  extractGoogleDriveConfirmUrl,
+  extractMediaFireDirectUrl,
   planKey,
   type MediaProvider,
   type ProviderContext,
@@ -94,16 +101,25 @@ export {
 export {
   convert,
   probe,
+  buildArgs,
   ffmpegVersion,
   type ConversionSpec,
+  type ConvertRequest,
   type ProbeResult,
 } from './convert/ffmpeg.js';
 export {
   dumpInfo,
   download,
   classifyYtdlpFailure,
+  assertNotDrmProtected,
   version as ytdlpVersion,
 } from './extract/ytdlp.js';
+export {
+  extractWithGalleryDl,
+  parseGalleryDlJson,
+  type GalleryDlEntry,
+  type GalleryDlOptions,
+} from './extract/gallerydl.js';
 export { downloadDirect } from './extract/direct-download.js';
 export { discoverMedia, type PageMedia, type DiscoveredMedia } from './extract/html.js';
 export type { YtdlpInfo, YtdlpFormat } from './extract/ytdlp-types.js';

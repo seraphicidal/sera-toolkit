@@ -24,6 +24,22 @@ export function firstHttpUrl(text: string | null | undefined): string | undefine
   }
 }
 
+export function parseBatchUrls(text: string | null | undefined): string[] {
+  if (!text) return [];
+  const seen = new Set<string>();
+  const urls: string[] = [];
+  for (const rawLine of text.split(/\r?\n/)) {
+    const trimmed = rawLine.trim();
+    if (!trimmed) continue;
+    const extracted = firstHttpUrl(trimmed);
+    if (extracted && !seen.has(extracted)) {
+      seen.add(extracted);
+      urls.push(extracted);
+    }
+  }
+  return urls;
+}
+
 export function sharedUrl(params: {
   readonly url?: string | null;
   readonly text?: string | null;

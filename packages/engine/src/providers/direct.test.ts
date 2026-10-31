@@ -58,6 +58,20 @@ describe('classify', () => {
     expect(classify('application/vnd.apple.mpegurl', 'm3u8')).toBe('video');
     expect(classify('application/dash+xml', 'mpd')).toBe('video');
   });
+
+  it('recognises document, archive, and binary file types', () => {
+    expect(classify('application/pdf', 'pdf')).toBe('image');
+    expect(classify('application/zip', 'zip')).toBe('image');
+    expect(classify('application/x-tar', 'tar')).toBe('image');
+    expect(classify('application/x-7z-compressed', '7z')).toBe('image');
+    expect(classify('application/vnd.android.package-archive', 'apk')).toBe('image');
+    expect(classify('application/x-apple-diskimage', 'dmg')).toBe('image');
+    expect(classify('application/x-iso9660-image', 'iso')).toBe('image');
+    expect(classify('application/x-msdownload', 'exe')).toBe('image');
+    expect(classify('application/epub+zip', 'epub')).toBe('image');
+    expect(classify('application/octet-stream', 'iso')).toBe('image');
+    expect(classify('text/html', 'pdf')).toBe('unknown');
+  });
 });
 
 describe('DirectFileProvider', () => {
@@ -108,5 +122,42 @@ describe('DirectFileProvider', () => {
       );
 
     expect(error?.code).toBe('TOO_LARGE');
+  });
+
+  it.each([
+    ['pdf', 'application/pdf', 'pdf'],
+    ['iso', 'application/x-iso9660-image', 'iso'],
+    ['zip', 'application/zip', 'zip'],
+    ['tar', 'application/x-tar', 'tar'],
+    ['7z', 'application/x-7z-compressed', '7z'],
+    ['apk', 'application/vnd.android.package-archive', 'apk'],
+    ['dmg', 'application/x-apple-diskimage', 'dmg'],
+    ['exe', 'application/x-msdownload', 'exe'],
+    ['epub', 'application/epub+zip', 'epub'],
+  ])(
+    'claims and resolves direct .%s archive/document files',
+    async (ext, mime, expectedContainer) => {
+      const url = new URL(`https://example.com/release/package.${ext}`);
+      expect(provider.canHandle(url)).toBe(true);
+      const media = await provider.resolve(url, contextWithHead(mime, 4_096));
+      expect(media.items[0]?.container).toBe(expectedContainer);
+      expect(media.items[0]?.plans[0]?.fetch).toEqual({
+        via: 'direct',
+        url: url.toString(),
+      });
+    },
+  );
+
+  it('uses ytdlp fetch plan for .m3u8 and .mpd manifests', async () => {
+    const hlsUrl = new URL('https://cdn.example.com/live/master.m3u8');
+    const media = await provider.resolve(hlsUrl, contextWithHead('application/vnd.apple.mpegurl'));
+    expect(media.items[0]?.container).toBe('mp4');
+    expect(media.items[0]?.plans[0]?.fetch).toEqual({
+      via: 'ytdlp',
+      selector: 'bestvideo+bestaudio/best',
+      merge: 'mp4',
+      target: hlsUrl.toString(),
+      useExtractors: 'default',
+    });
   });
 });

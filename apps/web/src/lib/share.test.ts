@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { firstHttpUrl, homeWithUrl, isInstalledApp, sharedUrl, urlFromFragment } from './share';
+import {
+  firstHttpUrl,
+  homeWithUrl,
+  isInstalledApp,
+  parseBatchUrls,
+  sharedUrl,
+  urlFromFragment,
+} from './share';
 
 describe('sharedUrl', () => {
   it('takes the url field when the sharing app filled it', () => {
@@ -108,5 +115,28 @@ describe('isInstalledApp', () => {
         },
       }),
     ).toBe(false);
+  });
+});
+
+describe('parseBatchUrls', () => {
+  it('extracts and deduplicates valid http/https links across multiple lines', () => {
+    const raw = [
+      'https://example.com/v1',
+      'Watch this: https://youtu.be/abc123.',
+      'https://example.com/v1',
+      'not a link',
+      'https://example.com/v2',
+    ].join('\n');
+    expect(parseBatchUrls(raw)).toEqual([
+      'https://example.com/v1',
+      'https://youtu.be/abc123',
+      'https://example.com/v2',
+    ]);
+  });
+
+  it('returns an empty list for empty or non-url input', () => {
+    expect(parseBatchUrls('')).toEqual([]);
+    expect(parseBatchUrls(null)).toEqual([]);
+    expect(parseBatchUrls('just words\nand more words')).toEqual([]);
   });
 });

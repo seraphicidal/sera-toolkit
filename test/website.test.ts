@@ -40,6 +40,7 @@ describe('Website Legal Pages Content & Compliance', () => {
     expect(content).toContain('1800');
     expect(content).toContain('30 minutes');
     expect(content).toContain('thumbnail');
+    expect(content).toContain('/api/thumb/:token');
     expect(content).toContain('sera-theme');
     expect(content).toContain('sera-preferred-kind');
     expect(content).toContain('sera-history');
@@ -76,6 +77,9 @@ describe('Website Legal Pages Content & Compliance', () => {
     expect(content).toContain('sera-preferred-kind');
     expect(content).toContain('sera-history');
     expect(content).toContain('ClearHistoryButton');
+    expect(content).toContain('Per-Node Isolation');
+    expect(content).toContain('6 releases');
+    expect(content).toContain('7,071 lines changed');
   });
 
   it('verifies Global Navigation footer includes all mandatory legal routes', () => {

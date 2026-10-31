@@ -19,6 +19,16 @@ const reportParamsSchema = z.object({
   id: z.string().regex(/^[a-zA-Z0-9_-]+$/),
 });
 
+const denylistCreateSchema = z.object({
+  type: z.enum(['host', 'url']),
+  target: z.string().trim().min(1).max(2048),
+  reason: z.string().trim().min(1).max(500).default('Administrative block'),
+});
+
+const denylistParamsSchema = z.object({
+  id: z.string().regex(/^[a-zA-Z0-9_-]+$/),
+});
+
 function checkAdminAuth(header: string | undefined, adminToken: string): boolean {
   const presented = header?.startsWith('Bearer ') ? header.slice(7) : '';
   return matchesToken(presented, adminToken);
@@ -122,6 +132,78 @@ export function registerAdminRoutes(app: FastifyInstance, engine: SeraEngine): v
           .status(404)
           .send({ error: { code: 'NOT_FOUND', message: 'Report not found.' } });
       }
+    },
+  );
+
+  app.get(
+    '/api/admin/denylist',
+    { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
+    async (request, reply) => {
+      if (!checkAdminAuth(request.headers.authorization, config.adminToken)) {
+        return reply.status(401).send({ error: { code: 'NOT_FOUND', message: 'Not found.' } });
+      }
+
+      return reply
+        .header('cache-control', 'no-store')
+        .send({ entries: engine.denylist.listBlocked() });
+    },
+  );
+
+  app.post(
+    '/api/admin/denylist',
+    { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
+    async (request, reply) => {
+      if (!checkAdminAuth(request.headers.authorization, config.adminToken)) {
+        return reply.status(401).send({ error: { code: 'NOT_FOUND', message: 'Not found.' } });
+      }
+
+      const parsedBody = denylistCreateSchema.safeParse(request.body);
+      if (!parsedBody.success) {
+        return reply
+          .status(400)
+          .send({ error: { code: 'INVALID_PARAMS', message: 'Invalid denylist payload.' } });
+      }
+
+      const { type, target, reason } = parsedBody.data;
+      const entry =
+        type === 'host'
+          ? engine.denylist.blockHost(target, reason)
+          : engine.denylist.blockUrl(target, reason);
+
+      if (!entry) {
+        return reply
+          .status(400)
+          .send({ error: { code: 'INVALID_TARGET', message: 'Invalid denylist target.' } });
+      }
+
+      return reply.status(201).header('cache-control', 'no-store').send(entry);
+    },
+  );
+
+  app.delete(
+    '/api/admin/denylist/:id',
+    { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
+    async (request, reply) => {
+      if (!checkAdminAuth(request.headers.authorization, config.adminToken)) {
+        return reply.status(401).send({ error: { code: 'NOT_FOUND', message: 'Not found.' } });
+      }
+
+      const parsedParams = denylistParamsSchema.safeParse(request.params);
+      if (!parsedParams.success) {
+        return reply
+          .status(400)
+          .send({ error: { code: 'INVALID_PARAMS', message: 'Invalid denylist entry ID.' } });
+      }
+
+      const { id } = parsedParams.data;
+      const removed = engine.denylist.unblock(id);
+      if (!removed) {
+        return reply
+          .status(404)
+          .send({ error: { code: 'NOT_FOUND', message: 'Denylist entry not found.' } });
+      }
+
+      return reply.status(200).header('cache-control', 'no-store').send({ deleted: true, id });
     },
   );
 }

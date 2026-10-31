@@ -2,6 +2,7 @@ import type { ContainerFormat, MediaInfoType, ProviderCapabilities } from '@sera
 import { subtitleTracks } from './subtitles.js';
 import { declare } from './capabilities.js';
 import { seraError } from '../errors.js';
+import { assertNotDrmProtected } from '../extract/ytdlp.js';
 import type { YtdlpInfo, YtdlpThumbnail } from '../extract/ytdlp-types.js';
 import { num, str } from '../extract/ytdlp-types.js';
 import { entryFormats, toUsableFormats } from '../normalize/formats.js';
@@ -103,6 +104,7 @@ export abstract class YtdlpProvider implements MediaProvider {
   }
 
   protected toResolvedMedia(info: YtdlpInfo, url: URL, context: ProviderContext): ResolvedMedia {
+    assertNotDrmProtected(info);
     const planOptions: PlanBuildOptions = {
       maxFilesizeBytes: context.config.maxFilesizeBytes,
     };
