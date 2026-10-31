@@ -15,7 +15,7 @@
     "@fastify/rate-limit": "11.2.0",
     "@sera/contracts": "^1.8.0",
     "@sera/engine": "^1.8.0",
-    "fastify": "5.12.5",
+    "fastify": "5.12.7",
     "fastify-plugin": "6.0.0",
     "pino": "10.4.0",
     "zod": "4.6.5"
