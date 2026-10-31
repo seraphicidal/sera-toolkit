@@ -1,7 +1,7 @@
 {
   "$comment": "Pinned versions of the external tools SERA drives. Bump these deliberately: `npm run update-providers` checks for newer yt-dlp releases and rewrites this file.",
   "ytdlp": {
-    "version": "2026.08.19",
+    "version": "2026.10.26",
     "repo": "yt-dlp/yt-dlp",
     "checksumAsset": "SHA2-256SUMS",
     "assets": {
