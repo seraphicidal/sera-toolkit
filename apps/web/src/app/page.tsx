@@ -2,6 +2,9 @@ import { Downloader } from '@/components/downloader';
 import { ShareHint } from '@/components/share-hint';
 import { Wordmark } from '@/components/wordmark';
 
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 export default function HomePage() {
   return (
     <div className="flex flex-1 flex-col justify-center pt-6 pb-14 sm:pt-10">
