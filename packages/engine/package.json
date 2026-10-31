@@ -1,6 +1,6 @@
 {
   "name": "@sera/engine",
-  "version": "1.0.0",
+  "version": "1.8.0",
   "private": true,
   "type": "module",
   "exports": {
@@ -17,7 +17,7 @@
     "clean": "tsc --build --clean"
   },
   "dependencies": {
-    "@sera/contracts": "1.0.0",
+    "@sera/contracts": "^1.8.0",
     "bullmq": "6.3.11",
     "cheerio": "1.2.0",
     "ioredis": "6.0.0",
