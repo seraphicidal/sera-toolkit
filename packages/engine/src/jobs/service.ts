@@ -303,6 +303,7 @@ export class JobService {
     };
 
     try {
+      workspaces.markActive(record.id);
       const result = await this.runner.run(
         record.spec,
         (update) => {
@@ -366,6 +367,7 @@ export class JobService {
         'job finished',
       );
     } finally {
+      workspaces.markInactive(record.id);
       clearTimeout(timeout);
       unwatch();
       this.inFlight.delete(record.id);

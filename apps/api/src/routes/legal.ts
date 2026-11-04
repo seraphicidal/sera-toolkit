@@ -5,7 +5,13 @@ import type { FastifyInstance } from 'fastify';
 import { legalReportRequestSchema } from '@sera/contracts';
 import type { LegalReportResponse } from '@sera/contracts/types';
 import type { SeraEngine } from '@sera/engine';
-import { computeClientKey } from '../plugins/client.js';
+import { computeClientKey, matchesToken } from '../plugins/client.js';
+
+function checkAdminAuth(header: string | undefined, adminToken: string): boolean {
+  if (!adminToken) return false;
+  const presented = header?.startsWith('Bearer ') ? header.slice(7) : '';
+  return matchesToken(presented, adminToken);
+}
 
 export function registerLegalRoutes(app: FastifyInstance, engine: SeraEngine): void {
   app.post(
@@ -36,18 +42,24 @@ export function registerLegalRoutes(app: FastifyInstance, engine: SeraEngine): v
       const receivedAt = new Date().toISOString();
 
       let mitigated = false;
-      if (report.category === 'malware') {
-        try {
-          const target = new URL(report.targetUrl);
-          engine.denylist.blockHost(target.hostname, `Malware report ${reportId}`);
-          mitigated = true;
-        } catch {
-          engine.denylist.blockUrl(report.targetUrl, `Malware report ${reportId}`);
-          mitigated = true;
+      const isAdmin = checkAdminAuth(request.headers.authorization, engine.config.adminToken);
+      if (isAdmin) {
+        if (report.category === 'malware') {
+          try {
+            const target = new URL(report.targetUrl);
+            const entry = engine.denylist.blockHost(target.hostname, `Malware report ${reportId}`);
+            mitigated = Boolean(entry);
+          } catch {
+            const entry = engine.denylist.blockUrl(report.targetUrl, `Malware report ${reportId}`);
+            mitigated = Boolean(entry);
+          }
+        } else if (report.category === 'copyright' || report.category === 'illegal_content') {
+          const entry = engine.denylist.blockUrl(
+            report.targetUrl,
+            `${report.category} report ${reportId}`,
+          );
+          mitigated = Boolean(entry);
         }
-      } else if (report.category === 'copyright' || report.category === 'illegal_content') {
-        engine.denylist.blockUrl(report.targetUrl, `${report.category} report ${reportId}`);
-        mitigated = true;
       }
 
       if (engine.config.dataDir) {

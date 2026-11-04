@@ -1,4 +1,4 @@
-import { lstat, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 import type { Logger } from '../logging.js';
 import { seraError } from '../errors.js';
@@ -22,11 +22,27 @@ const OUTPUT_DIR = 'out';
 const SCRATCH_DIR = 'work';
 
 export class WorkspaceManager {
+  private readonly activeJobs = new Set<string>();
+
   constructor(
     private readonly rootDir: string,
     private readonly retentionSeconds: number,
     private readonly logger: Logger,
   ) {}
+
+  markActive(jobId: string): void {
+    this.activeJobs.add(jobId);
+  }
+
+  markInactive(jobId: string): void {
+    this.activeJobs.delete(jobId);
+  }
+
+  async touch(jobId: string): Promise<void> {
+    const dir = this.jobDir(jobId);
+    const now = new Date();
+    await utimes(dir, now, now).catch(() => undefined);
+  }
 
   private jobDir(jobId: string): string {
     if (!/^[a-f0-9]{16,64}$/.test(jobId)) {
@@ -73,6 +89,7 @@ export class WorkspaceManager {
   }
 
   async destroy(jobId: string): Promise<void> {
+    this.activeJobs.delete(jobId);
     await rm(this.jobDir(jobId), { recursive: true, force: true }).catch(() => undefined);
   }
 
@@ -87,6 +104,9 @@ export class WorkspaceManager {
 
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
+      if (!/^[a-f0-9]{16,64}$/i.test(entry.name)) continue;
+      if (this.activeJobs.has(entry.name)) continue;
+
       const path = join(this.rootDir, entry.name);
       try {
         const info = await stat(path);

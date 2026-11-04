@@ -106,9 +106,10 @@ export function FormatPicker({
           >
             Quality
           </label>
-          <div className="relative">
+          <div className="relative sm:hidden" aria-hidden="true">
             <select
               id="sera-quality"
+              tabIndex={-1}
               value={activeLabel}
               onChange={(event) => onLabelChange(event.target.value)}
               className="w-full cursor-pointer appearance-none rounded-xl border border-[var(--color-line)] bg-[var(--color-surface)] py-3 pr-10 pl-3.5 text-[0.9375rem] text-[var(--color-ink)] transition-colors hover:border-[var(--color-line-strong)] focus:border-[var(--color-accent)] focus:outline-none focus-visible:shadow-[var(--shadow-focus)]"
@@ -130,7 +131,7 @@ export function FormatPicker({
             aria-label="Quality options"
             className="mt-2.5 grid grid-cols-1 gap-2 sm:grid-cols-2"
           >
-            {labels.map((candidate) => {
+            {labels.map((candidate, index) => {
               const option = matchingOptions.find((item) => item.label === candidate);
               const selected = candidate === activeLabel;
               const badges = option ? optionBadges(option) : [];
@@ -140,7 +141,22 @@ export function FormatPicker({
                   type="button"
                   role="radio"
                   aria-checked={selected}
+                  tabIndex={selected ? 0 : -1}
                   onClick={() => onLabelChange(candidate)}
+                  onKeyDown={(event) => {
+                    let offset = 0;
+                    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') offset = 1;
+                    else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') offset = -1;
+                    if (!offset) return;
+                    event.preventDefault();
+                    const nextIndex = (index + offset + labels.length) % labels.length;
+                    const nextLabel = labels[nextIndex];
+                    if (!nextLabel) return;
+                    onLabelChange(nextLabel);
+                    event.currentTarget.parentElement
+                      ?.querySelectorAll<HTMLButtonElement>('[role="radio"]')
+                      [nextIndex]?.focus();
+                  }}
                   className={cx(
                     'flex cursor-pointer flex-col gap-1.5 rounded-xl border px-3 py-2.5 text-left transition-all duration-150',
                     selected

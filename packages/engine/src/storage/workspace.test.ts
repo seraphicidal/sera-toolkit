@@ -72,6 +72,24 @@ describe('reaper', () => {
     expect(await readdir(root)).toHaveLength(2);
   });
 
+  it('never deletes non-workspace directories or active jobs', async () => {
+    const reportsDir = join(root, 'reports');
+    await mkdir(reportsDir, { recursive: true });
+    await writeFile(join(reportsDir, 'report-1.json'), '{}');
+    const when = new Date(Date.now() - (RETENTION_SECONDS + 100) * 1000);
+    await utimes(reportsDir, when, when);
+
+    const activeId = jobId(99);
+    await manager.create(activeId);
+    manager.markActive(activeId);
+    await age(activeId, RETENTION_SECONDS + 50);
+
+    const reaped = await manager.reap();
+    expect(reaped).toBe(0);
+    expect(await readdir(root)).toContain('reports');
+    expect(await readdir(root)).toContain(activeId);
+  });
+
   it('survives a missing root directory', async () => {
     await rm(root, { recursive: true, force: true });
     await expect(manager.reap()).resolves.toBe(0);

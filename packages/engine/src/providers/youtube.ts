@@ -72,7 +72,7 @@ export class YouTubeProvider extends YtdlpProvider {
       ladder.push({
         id: `ytdlp:${client}`,
         label: `the extractor, asking as ${client}`,
-        answers: ['FORMAT_UNAVAILABLE', 'PO_TOKEN_REQUIRED'],
+        answers: ['FORMAT_UNAVAILABLE', 'PO_TOKEN_REQUIRED', 'BOT_DETECTION', 'DATACENTER_BLOCKED'],
         run: (target, ctx) =>
           this.runExtractor(target, { ...ctx, config: withPlayerClient(ctx.config, client) }),
       });

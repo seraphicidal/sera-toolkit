@@ -15,6 +15,30 @@ export interface DenylistOptions {
   readonly filePath?: string;
 }
 
+const PROTECTED_HOSTS = new Set([
+  'youtube.com',
+  'youtu.be',
+  'twitter.com',
+  'x.com',
+  'instagram.com',
+  'tiktok.com',
+  'reddit.com',
+  'twitch.tv',
+  'vimeo.com',
+  'soundcloud.com',
+  'facebook.com',
+  'pinterest.com',
+  'bandcamp.com',
+  'dailymotion.com',
+  'tumblr.com',
+  'threads.net',
+  'bsky.app',
+  'drive.google.com',
+  'mediafire.com',
+  'dropbox.com',
+  'mega.nz',
+]);
+
 export class Denylist {
   private readonly staticHosts: readonly string[];
   private readonly filePath?: string;
@@ -56,6 +80,12 @@ export class Denylist {
   blockHost(host: string, reason = 'Report mitigation'): BlockedEntry | undefined {
     const cleanHost = stripWww(host.toLowerCase());
     if (!cleanHost) return undefined;
+    if (
+      PROTECTED_HOSTS.has(cleanHost) ||
+      [...PROTECTED_HOSTS].some((p) => cleanHost.endsWith(`.${p}`))
+    ) {
+      return undefined;
+    }
     if (this.dynamicHosts.has(cleanHost)) {
       return this.entries.find((e) => e.type === 'host' && e.target === cleanHost);
     }

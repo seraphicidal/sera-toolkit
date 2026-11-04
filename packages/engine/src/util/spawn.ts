@@ -66,6 +66,8 @@ function terminate(child: PipedChild): void {
   signalTree(child, 'SIGTERM');
   const timer = setTimeout(() => {
     if (child.exitCode === null && child.signalCode === null) signalTree(child, 'SIGKILL');
+    child.stdout?.destroy();
+    child.stderr?.destroy();
   }, KILL_GRACE_MS);
   timer.unref();
 }
@@ -124,6 +126,15 @@ export async function run(command: string, options: RunOptions): Promise<RunResu
   }
 
   let code: number;
+  let exitDrainTimer: NodeJS.Timeout | undefined;
+  child.once('exit', () => {
+    exitDrainTimer = setTimeout(() => {
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+    }, 500);
+    exitDrainTimer.unref();
+  });
+
   try {
     const [exitCode] = (await once(child, 'close')) as [number | null, NodeJS.Signals | null];
     code = exitCode ?? -1;
@@ -134,6 +145,7 @@ export async function run(command: string, options: RunOptions): Promise<RunResu
     });
   } finally {
     clearTimeout(timer);
+    if (exitDrainTimer) clearTimeout(exitDrainTimer);
     options.signal?.removeEventListener('abort', onAbort);
   }
 

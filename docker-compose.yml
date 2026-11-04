@@ -27,6 +27,8 @@ services:
     depends_on:
       api:
         condition: service_healthy
+    networks:
+      - edge-net
     restart: unless-stopped
     read_only: true
     tmpfs:
@@ -46,7 +48,7 @@ services:
       NODE_ENV: production
       SERA_SECRET: ${SERA_SECRET:?set SERA_SECRET in .env — see .env.example}
       SERA_QUEUE_DRIVER: redis
-      SERA_REDIS_URL: redis://redis:6379
+      SERA_REDIS_URL: ${SERA_REDIS_URL:-redis://:${SERA_REDIS_PASSWORD:-sera_secure_redis}@redis:6379}
       SERA_EMBEDDED_WORKER: 'false'
       SERA_DATA_DIR: /data
       SERA_RETENTION_SECONDS: ${SERA_RETENTION_SECONDS:-1800}
@@ -62,6 +64,9 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+    networks:
+      - edge-net
+      - internal-net
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
@@ -84,7 +89,7 @@ services:
       NODE_ENV: production
       SERA_SECRET: ${SERA_SECRET:?set SERA_SECRET in .env — see .env.example}
       SERA_QUEUE_DRIVER: redis
-      SERA_REDIS_URL: redis://redis:6379
+      SERA_REDIS_URL: ${SERA_REDIS_URL:-redis://:${SERA_REDIS_PASSWORD:-sera_secure_redis}@redis:6379}
       SERA_DATA_DIR: /data
       SERA_WORKER_CONCURRENCY: ${SERA_WORKER_CONCURRENCY:-2}
       SERA_RETENTION_SECONDS: ${SERA_RETENTION_SECONDS:-1800}
@@ -96,6 +101,8 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+    networks:
+      - internal-net
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -114,11 +121,14 @@ services:
       --appendonly no
       --maxmemory 256mb
       --maxmemory-policy noeviction
+      --requirepass ${SERA_REDIS_PASSWORD:-sera_secure_redis}
     healthcheck:
-      test: ['CMD', 'redis-cli', 'ping']
+      test: ['CMD', 'redis-cli', '-a', '${SERA_REDIS_PASSWORD:-sera_secure_redis}', 'ping']
       interval: 10s
       timeout: 3s
       retries: 5
+    networks:
+      - internal-net
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
@@ -127,6 +137,10 @@ services:
     cap_add:
       - SETUID
       - SETGID
+
+networks:
+  edge-net:
+  internal-net:
 
 volumes:
   media:

@@ -35,7 +35,7 @@ afterAll(async () => {
 });
 
 describe('POST /api/legal/report', () => {
-  it('accepts a valid copyright report and mitigates the target URL', async () => {
+  it('accepts a public copyright report, stores it for review, and does not block unverified', async () => {
     const fetchSpy = vi
       .spyOn(globalThis, 'fetch')
       .mockImplementation(() => Promise.resolve(new Response('ok', { status: 200 })));
@@ -60,11 +60,11 @@ describe('POST /api/legal/report', () => {
     const body = response.json() as LegalReportResponse;
     expect(body.reportId).toMatch(/^rep_/);
     createdReportId = body.reportId;
-    expect(body.status).toBe('action_taken');
-    expect(body.mitigated).toBe(true);
+    expect(body.status).toBe('received');
+    expect(body.mitigated).toBe(false);
 
     const check = engine.denylist.isBlocked('https://infringing.example.com/audio.mp3');
-    expect(check.blocked).toBe(true);
+    expect(check.blocked).toBe(false);
 
     const savedContent = await readFile(
       join(dataDir, 'reports', `${createdReportId}.json`),
@@ -91,7 +91,7 @@ describe('POST /api/legal/report', () => {
     fetchSpy.mockRestore();
   });
 
-  it('accepts a malware report and blocks the entire domain host', async () => {
+  it('accepts an admin-authorized report and mitigates the target', async () => {
     const payload = {
       targetUrl: 'https://malware-drop.example.org/payload.exe',
       category: 'malware',
@@ -104,6 +104,7 @@ describe('POST /api/legal/report', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/api/legal/report',
+      headers: { authorization: 'Bearer test-admin-token-12345' },
       payload,
     });
 
@@ -114,6 +115,31 @@ describe('POST /api/legal/report', () => {
 
     const check = engine.denylist.isBlocked('https://malware-drop.example.org/anything');
     expect(check.blocked).toBe(true);
+  });
+
+  it('refuses to block protected provider domains', async () => {
+    const payload = {
+      targetUrl: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+      category: 'malware',
+      explanation: 'False report attempting service denial against YouTube.',
+      notifierName: 'Attacker',
+      notifierEmail: 'attacker@example.org',
+      goodFaithConfirmed: true,
+    };
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/legal/report',
+      headers: { authorization: 'Bearer test-admin-token-12345' },
+      payload,
+    });
+
+    expect(response.statusCode).toBe(201);
+    const body = response.json() as LegalReportResponse;
+    expect(body.mitigated).toBe(false);
+
+    const check = engine.denylist.isBlocked('https://www.youtube.com/watch?v=test');
+    expect(check.blocked).toBe(false);
   });
 
   it('rejects an invalid payload missing goodFaithConfirmed', async () => {
@@ -242,7 +268,7 @@ describe('Admin Denylist Routes (/api/admin/denylist)', () => {
       entries: { id: string; type: string; target: string }[];
     };
     expect(Array.isArray(body.entries)).toBe(true);
-    expect(body.entries.length).toBeGreaterThanOrEqual(2);
+    expect(body.entries.length).toBeGreaterThanOrEqual(1);
   });
 
   it('creates a new host block via POST /api/admin/denylist', async () => {

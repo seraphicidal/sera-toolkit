@@ -75,7 +75,7 @@ const failedSchema = z.object({
 const RESOLVED_BODY_LIMIT = 4 * 1024 * 1024;
 
 const resolvedPlanSchema = z.object({
-  kind: z.enum(['video', 'audio', 'image', 'gif', 'carousel']),
+  kind: z.enum(['video', 'audio', 'image', 'gif']),
   container: z.string().min(1).max(16),
   label: z.string().min(1).max(64),
   detail: z.string().max(500).optional(),
@@ -116,7 +116,7 @@ const resolvedPlanSchema = z.object({
 const resolvedItemSchema = z.object({
   sourceId: z.string().max(200).optional(),
   index: z.number().int().nonnegative(),
-  kind: z.enum(['video', 'audio', 'image', 'gif', 'carousel', 'unknown']),
+  kind: z.enum(['video', 'audio', 'image', 'gif', 'unknown']),
   title: z.string().max(500).optional(),
   thumbnailUrl: z.string().url().max(2048).optional(),
   thumbnailFallbackUrl: z.string().url().max(2048).optional(),
@@ -149,7 +149,7 @@ const resolvedMediaSchema = z.object({
   provider: z.string().min(1).max(32),
   providerLabel: z.string().min(1).max(64),
   url: z.string().url().max(2048),
-  type: z.enum(['single', 'collection', 'playlist', 'multi']),
+  type: z.enum(['single', 'collection', 'playlist']),
   title: z.string().max(500),
   description: z.string().max(5000).optional(),
   author: z.string().max(200).optional(),

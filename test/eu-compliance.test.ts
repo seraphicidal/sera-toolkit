@@ -69,7 +69,7 @@ describe('EU Compliance: GDPR & Ephemeral Data Processing', () => {
 });
 
 describe('EU Compliance: Digital Services Act (DSA Arts. 11, 12, 14, 16)', () => {
-  it('receives structured takedown report and engages automated mitigation', async () => {
+  it('receives structured takedown report and stores notice for review', async () => {
     const reportPayload = {
       targetUrl: 'https://malicious-infringing.eu/virus.mp4',
       category: 'malware',
@@ -88,11 +88,11 @@ describe('EU Compliance: Digital Services Act (DSA Arts. 11, 12, 14, 16)', () =>
     expect(response.statusCode).toBe(201);
     const body = response.json() as LegalReportResponse;
     expect(body.reportId).toMatch(/^rep_/);
-    expect(body.status).toBe('action_taken');
-    expect(body.mitigated).toBe(true);
+    expect(body.status).toBe('received');
+    expect(body.mitigated).toBe(false);
 
     expect(engine.denylist.isBlocked('https://malicious-infringing.eu/virus.mp4').blocked).toBe(
-      true,
+      false,
     );
 
     const persistedRaw = await readFile(join(dataDir, 'reports', `${body.reportId}.json`), 'utf-8');

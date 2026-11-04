@@ -39,7 +39,12 @@ export function ResultPanel({ job, onReset }: { readonly job: Job; readonly onRe
       return;
     }
     startedFor.current = result.downloadPath;
-    window.location.assign(result.downloadPath);
+    const a = document.createElement('a');
+    a.href = result.downloadPath;
+    a.download = result.filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
   }, [result]);
 
   useEffect(() => {
@@ -70,6 +75,7 @@ export function ResultPanel({ job, onReset }: { readonly job: Job; readonly onRe
   const expires = new Date(result.expiresAt);
   const minutesLeft = Math.max(0, Math.round((expires.getTime() - now) / 60_000));
   const previewKind = !result.isArchive ? mediaKindFromFilename(result.filename) : undefined;
+  const safeMainUrl = isSafeDownloadPath(result.downloadPath) ? result.downloadPath : undefined;
 
   return (
     <section
@@ -88,7 +94,7 @@ export function ResultPanel({ job, onReset }: { readonly job: Job; readonly onRe
             </p>
           </div>
         </div>
-        {previewKind && (
+        {previewKind && safeMainUrl && (
           <button
             type="button"
             onClick={() => setShowPreview((prev) => !prev)}
@@ -100,25 +106,20 @@ export function ResultPanel({ job, onReset }: { readonly job: Job; readonly onRe
         )}
       </div>
 
-      {showPreview && previewKind === 'video' && (
+      {showPreview && previewKind === 'video' && safeMainUrl && (
         <div className="mt-3 overflow-hidden rounded-xl border border-[var(--color-line)] bg-black">
-          <video
-            controls
-            preload="metadata"
-            src={result.downloadPath}
-            className="max-h-[360px] w-full"
-          />
+          <video controls preload="metadata" src={safeMainUrl} className="max-h-[360px] w-full" />
         </div>
       )}
-      {showPreview && previewKind === 'audio' && (
+      {showPreview && previewKind === 'audio' && safeMainUrl && (
         <div className="mt-3 rounded-xl border border-[var(--color-line)] bg-[var(--color-sunken)] p-3">
-          <audio controls preload="metadata" src={result.downloadPath} className="w-full" />
+          <audio controls preload="metadata" src={safeMainUrl} className="w-full" />
         </div>
       )}
-      {showPreview && previewKind === 'image' && (
+      {showPreview && previewKind === 'image' && safeMainUrl && (
         <div className="mt-3 flex justify-center overflow-hidden rounded-xl border border-[var(--color-line)] bg-[var(--color-sunken)] p-2">
           <img
-            src={result.downloadPath}
+            src={safeMainUrl}
             alt={result.filename}
             className="max-h-[360px] rounded-lg object-contain"
           />

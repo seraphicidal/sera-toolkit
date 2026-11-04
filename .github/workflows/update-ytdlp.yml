@@ -106,13 +106,3 @@ jobs:
           done
           test -n "$run" || { echo 'CI did not start'; exit 1; }
           gh run watch "$run" --exit-status --interval 30
-
-      - name: Merge
-        if: steps.bump.outputs.changed == 'true'
-        env:
-          BRANCH: ${{ steps.bump.outputs.branch }}
-        run: gh pr merge "$BRANCH" --rebase --delete-branch
-
-      - name: Publish the images
-        if: steps.bump.outputs.changed == 'true'
-        run: gh workflow run ci.yml --ref main

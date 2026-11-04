@@ -85,6 +85,7 @@ export function registerJobRoutes(app: FastifyInstance, engine: SeraEngine): voi
       reply.raw.write(`event: error\ndata: ${JSON.stringify({ type: 'error', message })}\n\n`);
     } finally {
       reply.raw.end();
+      if (!reply.raw.destroyed) reply.raw.destroy();
     }
     return reply;
   });

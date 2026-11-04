@@ -239,6 +239,10 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
     const pending = this.pending.get(taskId);
     if (!pending) return;
     this.renew(pending);
+    if (pending.claimedBy) {
+      const node = this.nodes.get(pending.claimedBy);
+      if (node) node.seen = Date.now();
+    }
     pending.onProgress?.(progress);
   }
 
@@ -253,6 +257,10 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
     const pending = this.pending.get(taskId);
     if (!pending) return false;
     this.renew(pending);
+    if (pending.claimedBy) {
+      const node = this.nodes.get(pending.claimedBy);
+      if (node) node.seen = Date.now();
+    }
     pending.files.push(file);
     return true;
   }

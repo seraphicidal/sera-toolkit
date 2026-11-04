@@ -196,6 +196,20 @@ export class RedisJobBackend implements JobBackend {
 
     this.worker.on('failed', (job, error) => {
       this.logger.error({ err: error, jobId: job?.data.jobId }, 'worker reported failure');
+      if (job?.data.jobId) {
+        void this.patch(job.data.jobId, {
+          state: 'failed',
+          step: 'Failed',
+          progress: { percent: 0 },
+          error: {
+            code: 'INTERNAL',
+            message: error?.message || 'Worker terminated unexpectedly',
+            retryable: true,
+          },
+        }).catch((err: unknown) => {
+          this.logger.warn({ err, jobId: job.data.jobId }, 'failed to transition failed job');
+        });
+      }
     });
 
     return {

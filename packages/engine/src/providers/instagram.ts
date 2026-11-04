@@ -64,11 +64,11 @@ export class InstagramProvider extends YtdlpProvider {
     });
 
     const node = (JSON.parse(body) as { items?: readonly InstagramNode[] }).items?.[0];
-    if (!node) throw seraError('MEDIA_UNAVAILABLE', { detail: 'instagram: no media in response' });
+    if (!node) throw seraError('UNSUPPORTED_SOURCE', { detail: 'instagram: no media in response' });
 
     const items = itemsFrom(node, context.config.maxItemsPerJob);
     if (!items.length) {
-      throw seraError('MEDIA_UNAVAILABLE', { detail: 'instagram: post had no usable media' });
+      throw seraError('UNSUPPORTED_SOURCE', { detail: 'instagram: post had no usable media' });
     }
 
     const { title, author } = titleFor(node);

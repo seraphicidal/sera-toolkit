@@ -99,7 +99,7 @@ export class RedditProvider extends YtdlpProvider {
     const source = post.crosspost_parent_list?.[0] ?? post;
     const items = itemsFrom(source, context.config.maxItemsPerJob);
     if (!items.length) {
-      throw seraError('MEDIA_UNAVAILABLE', {
+      throw seraError('UNSUPPORTED_SOURCE', {
         message: 'That post has no media to download.',
         detail: 'reddit: no recognised media on the post',
       });

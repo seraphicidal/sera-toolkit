@@ -112,11 +112,15 @@ describe('normalization', () => {
   it('rewrites the X mirror front-ends to the real host', () => {
     expect(canonical('https://vxtwitter.com/user/status/1')).toBe('https://x.com/user/status/1');
     expect(canonical('https://fxtwitter.com/user/status/1')).toBe('https://x.com/user/status/1');
+    expect(canonical('https://fixupx.com/user/status/1')).toBe('https://x.com/user/status/1');
+    expect(canonical('https://fixvx.com/user/status/1')).toBe('https://x.com/user/status/1');
+    expect(canonical('https://twittpr.com/user/status/1')).toBe('https://x.com/user/status/1');
     expect(canonical('https://twitter.com/user/status/1')).toBe('https://x.com/user/status/1');
   });
 
   it('drops the photo index from an X status URL', () => {
     expect(canonical('https://x.com/user/status/1/photo/2')).toBe('https://x.com/user/status/1');
+    expect(canonical('https://x.com/user/status/1/photo/2/')).toBe('https://x.com/user/status/1');
   });
 
   it('sends Vimeo to the embed player, which is the form that still answers', () => {

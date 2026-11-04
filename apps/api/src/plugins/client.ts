@@ -104,17 +104,7 @@ export function computeClientKey(
     .slice(0, 22);
 }
 
-function addressOf(request: FastifyRequest, trustProxy: boolean): string {
-  if (trustProxy) {
-    const forwarded = request.headers['x-forwarded-for'];
-    const last = Array.isArray(forwarded) ? forwarded.at(-1) : forwarded;
-    const candidate = last
-      ?.split(',')
-      .map((part) => part.trim())
-      .filter(Boolean)
-      .at(-1);
-    if (candidate && candidate.length <= 128) return candidate;
-  }
+function addressOf(request: FastifyRequest): string {
   return request.ip;
 }
 
@@ -129,7 +119,7 @@ export const clientKeyPlugin = fp(function clientKeyPlugin(
   app.decorateRequest('canary', false);
   app.addHook('onRequest', (request, _reply, next) => {
     request.canary = isCanaryToken(request.headers['x-sera-canary'], config.canaryToken);
-    const address = normalizeClientAddress(addressOf(request, config.trustProxy));
+    const address = normalizeClientAddress(addressOf(request));
     request.clientKey = computeClientKey(address, config.secret);
     next();
   });

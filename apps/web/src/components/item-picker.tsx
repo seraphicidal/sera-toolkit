@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState, type MouseEvent } from 'react';
+import { memo, useMemo, useState, type MouseEvent } from 'react';
 import type { MediaInfo, MediaItem } from '@sera/contracts/types';
 import { AudioIcon, CheckIcon, CloseIcon, GifIcon, ImageIcon, VideoIcon } from './icons';
 import { cx, formatDuration, KIND_LABELS, pluralize } from '@/lib/format';
@@ -208,7 +208,7 @@ export function ItemPicker({
   );
 }
 
-function ItemTile({
+const ItemTile = memo(function ItemTile({
   item,
   selected,
   onToggle,
@@ -298,4 +298,4 @@ function ItemTile({
       </span>
     </label>
   );
-}
+});

@@ -34,6 +34,14 @@ export function extractGoogleDriveConfirmUrl(html: string, base: URL): URL | und
   if (!action) return undefined;
   try {
     const target = new URL(action, base);
+    const host = target.hostname.toLowerCase();
+    if (
+      host !== 'drive.google.com' &&
+      !host.endsWith('.google.com') &&
+      !host.endsWith('.googleusercontent.com')
+    ) {
+      return undefined;
+    }
     form.find('input[name]').each((_, el) => {
       const name = $(el).attr('name');
       const value = $(el).attr('value');
@@ -57,7 +65,13 @@ export function extractMediaFireDirectUrl(html: string): string | undefined {
   if (scrambled) {
     try {
       const decoded = Buffer.from(scrambled, 'base64').toString('utf8').trim();
-      if (/^https?:\/\//i.test(decoded)) return decoded;
+      if (/^https?:\/\//i.test(decoded)) {
+        const parsed = new URL(decoded);
+        const host = parsed.hostname.toLowerCase();
+        if (host === 'mediafire.com' || host.endsWith('.mediafire.com')) {
+          return decoded;
+        }
+      }
     } catch {}
   }
   const href = button.attr('href');

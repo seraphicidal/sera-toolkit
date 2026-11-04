@@ -44,8 +44,18 @@ observe() {
   local name=$1 seen=$2 detail=$3 recovered=${4:-}
   local file="$STATE_DIR/$name"
   local notified=up pending='' count=0
-  # shellcheck disable=SC1090
-  [ -f "$file" ] && . "$file"
+  if [ -f "$file" ]; then
+    while IFS='=' read -r key val; do
+      case "$key" in
+        notified) notified="$val" ;;
+        pending) pending="$val" ;;
+        count) count="$val" ;;
+      esac
+    done < "$file"
+    case "$count" in ''|*[!0-9]*) count=0 ;; esac
+    case "$notified" in up|down) ;; *) notified=up ;; esac
+    case "$pending" in up|down|'') ;; *) pending='' ;; esac
+  fi
   if [ "$seen" = "$notified" ]; then
     pending='' count=0
   elif [ "$seen" = "$pending" ]; then

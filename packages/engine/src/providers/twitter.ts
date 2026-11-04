@@ -8,6 +8,7 @@ import type { DownloadPlan, ProviderContext, ResolvedItem, ResolvedMedia } from 
 import { YtdlpProvider } from './ytdlp-base.js';
 import { declare } from './capabilities.js';
 import type { ExtractionStrategy } from '../extract/strategy.js';
+import { extractWithGalleryDl } from '../extract/gallerydl.js';
 
 export class TwitterProvider extends YtdlpProvider {
   readonly id = 'twitter';
@@ -19,6 +20,9 @@ export class TwitterProvider extends YtdlpProvider {
     't.co',
     'vxtwitter.com',
     'fxtwitter.com',
+    'fixupx.com',
+    'fixvx.com',
+    'twittpr.com',
   ];
   override readonly priority = 20;
 
@@ -33,7 +37,7 @@ export class TwitterProvider extends YtdlpProvider {
     const out = new URL(url.toString());
     out.hostname = 'x.com';
     out.protocol = 'https:';
-    out.pathname = out.pathname.replace(/\/(photo|video)\/\d+$/, '');
+    out.pathname = out.pathname.replace(/\/(photo|video)\/\d+\/?$/i, '');
     return out;
   }
 
@@ -108,6 +112,9 @@ export class TwitterProvider extends YtdlpProvider {
       'mobile.twitter.com',
       'vxtwitter.com',
       'fxtwitter.com',
+      'fixupx.com',
+      'fixvx.com',
+      'twittpr.com',
     ].some((h) => host === h || host.endsWith(`.${h}`));
     const isStatus = /^\/[^/]+\/status\/\d+/i.test(target.pathname);
     if (!isTwitterHost || !isStatus) {
@@ -134,6 +141,16 @@ export class TwitterProvider extends YtdlpProvider {
         run: (target, ctx) => this.viaSyndication(target, ctx),
       },
       {
+        id: 'fxtwitter',
+        label: 'the FixTweet API',
+        run: (target, ctx) => this.viaFxTwitter(target, ctx),
+      },
+      {
+        id: 'gallerydl',
+        label: 'the gallery scraper',
+        run: (target, ctx) => this.viaGalleryDl(target, ctx),
+      },
+      {
         id: 'ytdlp',
         label: 'the extractor',
         run: (target, ctx) => this.runExtractor(target, ctx),
@@ -149,6 +166,11 @@ export class TwitterProvider extends YtdlpProvider {
     if (media.length) return this.fromEmbed(url, source!, media, context);
 
     if (tweet) {
+      if (tweet.possibly_sensitive) {
+        throw seraError('UNSUPPORTED_SOURCE', {
+          detail: 'twitter: sensitive post attachments not served by syndication',
+        });
+      }
       throw seraError('MEDIA_UNAVAILABLE', {
         message: 'That post has no media to download.',
         detail: 'twitter: embed endpoint reported no attachments',
@@ -174,7 +196,7 @@ export class TwitterProvider extends YtdlpProvider {
       .filter((item): item is ResolvedItem => item !== undefined);
 
     if (!items.length) {
-      throw seraError('MEDIA_UNAVAILABLE', { detail: 'twitter: no usable attachment' });
+      throw seraError('UNSUPPORTED_SOURCE', { detail: 'twitter: no usable direct attachment' });
     }
 
     return {
@@ -208,6 +230,252 @@ export class TwitterProvider extends YtdlpProvider {
     const tweet = JSON.parse(body) as SyndicatedTweet;
     return typeof tweet?.id_str === 'string' ? tweet : undefined;
   }
+
+  private async viaFxTwitter(url: URL, context: ProviderContext): Promise<ResolvedMedia> {
+    const id = /\/status(?:es)?\/(\d+)/.exec(url.pathname)?.[1];
+    if (!id) {
+      throw seraError('UNSUPPORTED_SOURCE', { detail: 'fxtwitter: no tweet id' });
+    }
+
+    const endpoint = new URL(`https://api.fxtwitter.com/status/${id}`);
+    const { body } = await context.fetchText(endpoint, 4 * 1024 * 1024);
+    const parsed = JSON.parse(body) as FxTweetResponse;
+    if (parsed.code === 404) {
+      throw seraError('MEDIA_UNAVAILABLE', {
+        message: 'That post is no longer available.',
+        detail: 'fxtwitter: returned 404',
+      });
+    }
+    const tweet = parsed.tweet;
+    if (!tweet) {
+      throw seraError('UNSUPPORTED_SOURCE', { detail: 'fxtwitter: no tweet in response' });
+    }
+
+    const rawList = tweet.media?.all ?? tweet.media?.photos ?? tweet.media?.videos ?? [];
+    const media = rawList.filter(
+      (item) => typeof item.url === 'string' && item.url.startsWith('https://'),
+    );
+
+    if (!media.length) {
+      throw seraError('MEDIA_UNAVAILABLE', {
+        message: 'That post has no media to download.',
+        detail: 'fxtwitter: post contains no media',
+      });
+    }
+
+    const author = nonEmpty(tweet.author?.name) ?? nonEmpty(tweet.author?.screen_name);
+    const text = nonEmpty(tweet.text);
+
+    const items = media
+      .slice(0, context.config.maxItemsPerJob)
+      .map((entry, index) => toFxItem(entry, index))
+      .filter((item): item is ResolvedItem => item !== undefined);
+
+    if (!items.length) {
+      throw seraError('MEDIA_UNAVAILABLE', { detail: 'fxtwitter: no usable attachments' });
+    }
+
+    return {
+      provider: this.id,
+      providerLabel: this.label,
+      url: url.toString(),
+      type: items.length > 1 ? 'collection' : 'single',
+      title: text ? truncate(text, 200) : `Post by ${author ?? 'an X account'}`,
+      ...(text ? { description: truncate(text, 500) } : {}),
+      ...(author ? { author } : {}),
+      ...(items[0]?.thumbnailUrl ? { thumbnailUrl: items[0].thumbnailUrl } : {}),
+      items,
+      metadata: { attachments: String(media.length), source: 'fxtwitter' },
+    };
+  }
+
+  private async viaGalleryDl(url: URL, context: ProviderContext): Promise<ResolvedMedia> {
+    const media = await extractWithGalleryDl(url, context);
+    return {
+      ...media,
+      provider: this.id,
+      providerLabel: this.label,
+    };
+  }
+}
+
+interface FxTweetFormat {
+  readonly url?: string;
+  readonly bitrate?: number;
+  readonly container?: string;
+  readonly codec?: string;
+}
+
+interface FxTweetVariant {
+  readonly url?: string;
+  readonly bitrate?: number;
+  readonly content_type?: string;
+}
+
+interface FxTweetMediaItem {
+  readonly type?: 'photo' | 'video' | 'gif';
+  readonly id?: string;
+  readonly url?: string;
+  readonly width?: number;
+  readonly height?: number;
+  readonly altText?: string;
+  readonly description?: string;
+  readonly thumbnail_url?: string;
+  readonly duration?: number;
+  readonly format?: string;
+  readonly formats?: readonly FxTweetFormat[];
+  readonly variants?: readonly FxTweetVariant[];
+}
+
+interface FxTweet {
+  readonly text?: string;
+  readonly author?: { readonly name?: string; readonly screen_name?: string };
+  readonly media?: {
+    readonly all?: readonly FxTweetMediaItem[];
+    readonly photos?: readonly FxTweetMediaItem[];
+    readonly videos?: readonly FxTweetMediaItem[];
+  };
+}
+
+interface FxTweetResponse {
+  readonly code?: number;
+  readonly message?: string;
+  readonly tweet?: FxTweet;
+}
+
+function toFxItem(media: FxTweetMediaItem, index: number): ResolvedItem | undefined {
+  const source = media.url;
+  if (!source?.startsWith('https://')) return undefined;
+
+  const width = media.width;
+  const height = media.height;
+  const alt = nonEmpty(media.altText) ?? nonEmpty(media.description);
+  const sourceId =
+    media.id ?? /\/([^/?#]+)\.[a-z0-9]+(?:[?#]|$)/i.exec(source)?.[1] ?? String(index);
+
+  if (media.type === 'photo') {
+    const url = originalPhotoUrl(source);
+    if (!url) return undefined;
+    const container = containerFor(source);
+    return {
+      sourceId,
+      index,
+      kind: 'image',
+      title: alt ? truncate(alt, 120) : `Image ${index + 1}`,
+      thumbnailUrl: source,
+      ...(width ? { width } : {}),
+      ...(height ? { height } : {}),
+      container,
+      plans: ensureRecommendations([
+        {
+          kind: 'image',
+          container,
+          label: 'Original',
+          detail: [container.toUpperCase(), width && height ? `${width} × ${height}` : undefined]
+            .filter(Boolean)
+            .join(' · '),
+          ...(width ? { width } : {}),
+          ...(height ? { height } : {}),
+          requiresConversion: false,
+          recommended: true,
+          fetch: { via: 'direct', url },
+        },
+      ]),
+    };
+  }
+
+  const isGif = media.type === 'gif';
+  const durationSeconds = media.duration;
+
+  const rawVariants = (media.variants ?? [])
+    .filter(
+      (variant) => variant.content_type === 'video/mp4' && variant.url?.startsWith('https://'),
+    )
+    .sort((a, b) => (b.bitrate ?? 0) - (a.bitrate ?? 0));
+
+  const variants: { url: string; bitrate?: number; width?: number; height?: number }[] =
+    rawVariants.length > 0
+      ? rawVariants.map((v) => ({
+          url: v.url!,
+          bitrate: v.bitrate,
+          ...sizeFromVariantUrl(v.url!),
+        }))
+      : [{ url: source, width, height }];
+
+  const plans: DownloadPlan[] = variants.map((variant, position) => {
+    const itemWidth = variant.width ?? width;
+    const itemHeight = variant.height ?? height;
+    const approximateBytes =
+      variant.bitrate && durationSeconds ? (variant.bitrate / 8) * durationSeconds : undefined;
+    return {
+      kind: isGif ? 'gif' : 'video',
+      container: 'mp4',
+      label: isGif ? 'Original' : qualityLabel(itemHeight, itemWidth),
+      detail: ['MP4 · H.264', approximateBytes ? `~${formatBytes(approximateBytes)}` : undefined]
+        .filter(Boolean)
+        .join(' · '),
+      ...(itemWidth ? { width: itemWidth } : {}),
+      ...(itemHeight ? { height: itemHeight } : {}),
+      ...(approximateBytes
+        ? { filesizeBytes: Math.round(approximateBytes), filesizeIsApproximate: true }
+        : {}),
+      requiresConversion: false,
+      recommended: position === 0,
+      fetch: { via: 'direct' as const, url: variant.url },
+    };
+  });
+
+  const best = variants[0]!.url;
+  if (isGif) {
+    plans.push({
+      kind: 'gif',
+      container: 'gif',
+      label: 'GIF',
+      detail: 'Converted from the silent video X stores',
+      requiresConversion: true,
+      recommended: false,
+      fetch: { via: 'direct', url: best },
+      convert: { kind: 'gif' },
+    });
+  } else {
+    plans.push(
+      {
+        kind: 'audio',
+        container: 'mp3',
+        label: 'MP3',
+        detail: '320 kbps · extracted',
+        audioBitrateKbps: 320,
+        requiresConversion: true,
+        recommended: false,
+        fetch: { via: 'direct', url: best },
+        convert: { kind: 'audio', container: 'mp3', bitrateKbps: 320 },
+      },
+      {
+        kind: 'audio',
+        container: 'm4a',
+        label: 'M4A',
+        detail: 'Original quality · AAC',
+        requiresConversion: true,
+        recommended: false,
+        fetch: { via: 'direct', url: best },
+        convert: { kind: 'audio', container: 'm4a' },
+      },
+    );
+  }
+
+  const thumb = media.thumbnail_url ?? source;
+  return {
+    sourceId,
+    index,
+    kind: isGif ? 'gif' : 'video',
+    title: alt ? truncate(alt, 120) : isGif ? `GIF ${index + 1}` : `Video ${index + 1}`,
+    thumbnailUrl: thumb,
+    ...(width ? { width } : {}),
+    ...(height ? { height } : {}),
+    ...(durationSeconds ? { duration: durationSeconds } : {}),
+    container: 'mp4',
+    plans: ensureRecommendations(plans),
+  };
 }
 
 interface TweetVariant {
@@ -230,6 +498,7 @@ interface TweetMedia {
 interface SyndicatedTweet {
   readonly id_str?: string;
   readonly text?: string;
+  readonly possibly_sensitive?: boolean;
   readonly user?: { readonly name?: string; readonly screen_name?: string };
   readonly mediaDetails?: readonly TweetMedia[];
   readonly quoted_tweet?: SyndicatedTweet;

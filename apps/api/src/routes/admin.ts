@@ -75,10 +75,16 @@ export function registerAdminRoutes(app: FastifyInstance, engine: SeraEngine): v
         return reply.header('cache-control', 'no-store').send({ reports: [], total: 0 });
       }
 
-      const jsonFiles = files.filter((f) => f.endsWith('.json'));
+      const jsonFiles = files
+        .filter((f) => f.endsWith('.json'))
+        .sort()
+        .reverse();
+      const total = jsonFiles.length;
+      const paginatedFiles = jsonFiles.slice(offset, offset + limit);
+
       const records = (
         await Promise.all(
-          jsonFiles.map(async (file) => {
+          paginatedFiles.map(async (file) => {
             try {
               const content = await readFile(join(reportDir, file), 'utf-8');
               return JSON.parse(content) as Record<string, unknown>;
@@ -89,16 +95,7 @@ export function registerAdminRoutes(app: FastifyInstance, engine: SeraEngine): v
         )
       ).filter((r): r is Record<string, unknown> => r !== null);
 
-      records.sort((a, b) => {
-        const timeA = typeof a.receivedAt === 'string' ? Date.parse(a.receivedAt) : 0;
-        const timeB = typeof b.receivedAt === 'string' ? Date.parse(b.receivedAt) : 0;
-        return timeB - timeA;
-      });
-
-      const total = records.length;
-      const paginated = records.slice(offset, offset + limit);
-
-      return reply.header('cache-control', 'no-store').send({ reports: paginated, total });
+      return reply.header('cache-control', 'no-store').send({ reports: records, total });
     },
   );
 

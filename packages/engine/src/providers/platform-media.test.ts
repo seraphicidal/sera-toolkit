@@ -20,6 +20,7 @@ function contextWith(
     json?: unknown;
     probe?: () => Promise<never>;
     config?: Partial<typeof baseConfig>;
+    fetchText?: (url: URL) => Promise<{ body: string; url: string }>;
   } = {},
 ): ProviderContext {
   return {
@@ -29,10 +30,12 @@ function contextWith(
       overrides.probe ??
       (() => Promise.reject(seraError('UNSUPPORTED_SOURCE', { detail: 'no extractable video' }))),
     head: () => Promise.reject(new Error('not used')),
-    fetchText: () =>
-      overrides.json === undefined
-        ? Promise.reject(new Error('no fixture'))
-        : Promise.resolve({ body: JSON.stringify(overrides.json), url: 'https://fixture' }),
+    fetchText:
+      overrides.fetchText ??
+      (() =>
+        overrides.json === undefined
+          ? Promise.reject(new Error('no fixture'))
+          : Promise.resolve({ body: JSON.stringify(overrides.json), url: 'https://fixture' })),
   };
 }
 
@@ -171,6 +174,43 @@ describe('TwitterProvider', () => {
     expect(provider.normalize(new URL('https://fxtwitter.com/a/status/5/photo/1')).toString()).toBe(
       'https://x.com/a/status/5',
     );
+  });
+
+  it('falls back to FixTweet when syndication fails', async () => {
+    const fxFixture = {
+      code: 200,
+      tweet: {
+        text: 'A sensitive post with photos',
+        author: { name: 'Artist', screen_name: 'artist' },
+        media: {
+          all: [
+            {
+              type: 'photo',
+              url: 'https://pbs.twimg.com/media/ARTIST_PIC.jpg',
+              width: 1600,
+              height: 1200,
+              altText: 'Artwork',
+            },
+          ],
+        },
+      },
+    };
+    const context = contextWith({
+      fetchText: (fetchUrl: URL) => {
+        if (fetchUrl.hostname === 'cdn.syndication.twimg.com') {
+          return Promise.reject(seraError('UNSUPPORTED_SOURCE', { detail: 'blocked' }));
+        }
+        return Promise.resolve({ body: JSON.stringify(fxFixture), url: fetchUrl.toString() });
+      },
+    });
+    const media = await provider.resolve(url, context);
+    expect(media.items).toHaveLength(1);
+    expect(media.items[0]?.kind).toBe('image');
+    expect(media.items[0]?.plans[0]?.fetch).toEqual({
+      via: 'direct',
+      url: 'https://pbs.twimg.com/media/ARTIST_PIC.jpg?name=orig',
+    });
+    expect(media.metadata?.source).toBe('fxtwitter');
   });
 });
 
