@@ -120,6 +120,7 @@ jobs:
               "SERA_NODE_ID",
               "SERA_NODE_PROVIDERS",
               "SERA_NODE_NETWORK_CLASS",
+              "SERA_REDIS_PASSWORD",
               "SERA_WEB_PORT",
               "SERA_WORKER_CPUS",
               "SERA_WORKER_MEMORY",
