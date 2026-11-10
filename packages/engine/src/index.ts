@@ -86,7 +86,7 @@ export {
 export { AbuseGuard, type AbuseGuardOptions } from './security/abuse.js';
 export { Denylist, type BlockedEntry, type DenylistOptions } from './security/denylist.js';
 export { EgressGuard, confineToHttp, type EgressGuardOptions } from './security/egress.js';
-export { isPublicAddress, isIpLiteral } from './security/ip.js';
+export { isPublicAddress, isIpLiteral, unwrapIpv4Mapped } from './security/ip.js';
 export { parseRobots, isAllowed, isPathAllowed } from './security/robots.js';
 export {
   parseUserUrl,
