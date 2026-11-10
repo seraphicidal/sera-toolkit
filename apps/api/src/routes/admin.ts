@@ -1,5 +1,5 @@
-import { readFile, readdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { readFile, readdir, rm } from 'node:fs/promises';
+import { join, resolve, sep } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { SeraEngine } from '@sera/engine';
@@ -120,10 +120,57 @@ export function registerAdminRoutes(app: FastifyInstance, engine: SeraEngine): v
           .send({ error: { code: 'NOT_FOUND', message: 'Report not found.' } });
       }
 
-      const filePath = join(config.dataDir, 'reports', `${parsedParams.data.id}.json`);
+      const reportsDir = resolve(config.dataDir, 'reports');
+      const filePath = resolve(reportsDir, `${parsedParams.data.id}.json`);
+      if (filePath !== reportsDir && !filePath.startsWith(reportsDir + sep)) {
+        return reply
+          .status(404)
+          .send({ error: { code: 'NOT_FOUND', message: 'Report not found.' } });
+      }
+
       try {
         const content = await readFile(filePath, 'utf-8');
         return reply.header('cache-control', 'no-store').send(JSON.parse(content));
+      } catch {
+        return reply
+          .status(404)
+          .send({ error: { code: 'NOT_FOUND', message: 'Report not found.' } });
+      }
+    },
+  );
+
+  app.delete(
+    '/api/admin/reports/:id',
+    { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
+    async (request, reply) => {
+      if (!checkAdminAuth(request.headers.authorization, config.adminToken)) {
+        return reply.status(401).send({ error: { code: 'NOT_FOUND', message: 'Not found.' } });
+      }
+
+      const parsedParams = reportParamsSchema.safeParse(request.params);
+      if (!parsedParams.success) {
+        return reply
+          .status(400)
+          .send({ error: { code: 'INVALID_PARAMS', message: 'Invalid report ID.' } });
+      }
+
+      if (!config.dataDir) {
+        return reply
+          .status(404)
+          .send({ error: { code: 'NOT_FOUND', message: 'Report not found.' } });
+      }
+
+      const reportsDir = resolve(config.dataDir, 'reports');
+      const filePath = resolve(reportsDir, `${parsedParams.data.id}.json`);
+      if (filePath !== reportsDir && !filePath.startsWith(reportsDir + sep)) {
+        return reply
+          .status(404)
+          .send({ error: { code: 'NOT_FOUND', message: 'Report not found.' } });
+      }
+
+      try {
+        await rm(filePath);
+        return reply.status(200).header('cache-control', 'no-store').send({ deleted: true, id: parsedParams.data.id });
       } catch {
         return reply
           .status(404)
