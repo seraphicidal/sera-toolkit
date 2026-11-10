@@ -49,18 +49,26 @@ export function registerJobRoutes(app: FastifyInstance, engine: SeraEngine): voi
     },
   };
 
-  app.get<{ Params: { id: string } }>('/api/jobs/:id', jobStatusRateLimit, async (request, reply) => {
-    const job = await engine.jobs.get(assertJobId(request.params.id));
-    if (!job) throw seraError('NOT_FOUND', { message: 'That download has expired.' });
-    return reply.header('cache-control', 'no-store').send(job);
-  });
+  app.get<{ Params: { id: string } }>(
+    '/api/jobs/:id',
+    jobStatusRateLimit,
+    async (request, reply) => {
+      const job = await engine.jobs.get(assertJobId(request.params.id));
+      if (!job) throw seraError('NOT_FOUND', { message: 'That download has expired.' });
+      return reply.header('cache-control', 'no-store').send(job);
+    },
+  );
 
-  app.delete<{ Params: { id: string } }>('/api/jobs/:id', jobStatusRateLimit, async (request, reply) => {
-    const id = assertJobId(request.params.id);
-    const deleted = await engine.jobs.delete(id);
-    if (!deleted) throw seraError('NOT_FOUND', { message: 'That download has expired.' });
-    return reply.status(200).send({ cancelled: deleted, deleted: true, id });
-  });
+  app.delete<{ Params: { id: string } }>(
+    '/api/jobs/:id',
+    jobStatusRateLimit,
+    async (request, reply) => {
+      const id = assertJobId(request.params.id);
+      const deleted = await engine.jobs.delete(id);
+      if (!deleted) throw seraError('NOT_FOUND', { message: 'That download has expired.' });
+      return reply.status(200).send({ cancelled: deleted, deleted: true, id });
+    },
+  );
 
   app.get<{ Params: { id: string } }>('/api/jobs/:id/events', async (request, reply) => {
     const id = assertJobId(request.params.id);

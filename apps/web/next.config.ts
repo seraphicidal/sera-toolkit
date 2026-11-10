@@ -24,9 +24,7 @@ const nextConfig: NextConfig = {
   output: 'standalone',
   env: {
     NEXT_PUBLIC_OPERATOR_NAME:
-      process.env.NEXT_PUBLIC_OPERATOR_NAME ??
-      process.env.OPERATOR_NAME ??
-      'SERA.toolkit Operator',
+      process.env.NEXT_PUBLIC_OPERATOR_NAME ?? process.env.OPERATOR_NAME ?? 'SERA.toolkit Operator',
     NEXT_PUBLIC_OPERATOR_ADDRESS:
       process.env.NEXT_PUBLIC_OPERATOR_ADDRESS ??
       process.env.OPERATOR_ADDRESS ??

@@ -170,7 +170,10 @@ export function registerAdminRoutes(app: FastifyInstance, engine: SeraEngine): v
 
       try {
         await rm(filePath);
-        return reply.status(200).header('cache-control', 'no-store').send({ deleted: true, id: parsedParams.data.id });
+        return reply
+          .status(200)
+          .header('cache-control', 'no-store')
+          .send({ deleted: true, id: parsedParams.data.id });
       } catch {
         return reply
           .status(404)
