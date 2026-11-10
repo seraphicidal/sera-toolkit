@@ -29,7 +29,7 @@ export async function buildServer(engine: SeraEngine): Promise<FastifyInstance> 
 
   await app.register(cors, {
     origin: config.corsOrigins.length ? [...config.corsOrigins] : false,
-    methods: ['GET', 'POST', 'DELETE'],
+    methods: ['GET', 'POST', 'DELETE', 'HEAD'],
     maxAge: 600,
   });
 

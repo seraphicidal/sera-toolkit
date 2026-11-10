@@ -45,7 +45,7 @@ export function registerMetaRoutes(app: FastifyInstance, engine: SeraEngine): vo
     },
   };
 
-  app.get('/api/info', async (_request, reply) =>
+  app.get('/api/info', metaRateLimit, async (_request, reply) =>
     reply.header('cache-control', 'public, max-age=60').send(engine.serviceInfo()),
   );
 
