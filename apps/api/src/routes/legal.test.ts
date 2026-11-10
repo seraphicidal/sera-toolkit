@@ -244,6 +244,34 @@ describe('GET /api/admin/reports/:id', () => {
     expect(body.notifierName).toBe('Rights Holder LLC');
     expect(body.clientIp).not.toBe('127.0.0.1');
   });
+
+  it('rejects deletion of report without admin authentication', async () => {
+    const response = await app.inject({
+      method: 'DELETE',
+      url: `/api/admin/reports/${createdReportId}`,
+    });
+
+    expect(response.statusCode).toBe(401);
+  });
+
+  it('deletes report with valid admin authentication and returns 404 on subsequent requests', async () => {
+    const deleteRes = await app.inject({
+      method: 'DELETE',
+      url: `/api/admin/reports/${createdReportId}`,
+      headers: { authorization: 'Bearer test-admin-token-12345' },
+    });
+
+    expect(deleteRes.statusCode).toBe(200);
+    expect(deleteRes.json()).toEqual({ deleted: true, id: createdReportId });
+
+    const getRes = await app.inject({
+      method: 'GET',
+      url: `/api/admin/reports/${createdReportId}`,
+      headers: { authorization: 'Bearer test-admin-token-12345' },
+    });
+
+    expect(getRes.statusCode).toBe(404);
+  });
 });
 
 describe('Admin Denylist Routes (/api/admin/denylist)', () => {
