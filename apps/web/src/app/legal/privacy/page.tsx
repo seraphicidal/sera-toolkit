@@ -18,8 +18,14 @@ export default function PrivacyPage() {
     clean(process.env.NEXT_PUBLIC_OPERATOR_NAME) ??
     clean(process.env.OPERATOR_NAME) ??
     'SERA.toolkit Operator';
+  const operatorAddress =
+    clean(process.env.NEXT_PUBLIC_OPERATOR_ADDRESS) ??
+    clean(process.env.OPERATOR_ADDRESS) ??
+    'Online Service Provider, EU / Global';
   const operatorEmail =
-    clean(process.env.NEXT_PUBLIC_OPERATOR_EMAIL) ?? clean(process.env.OPERATOR_EMAIL);
+    clean(process.env.NEXT_PUBLIC_OPERATOR_EMAIL) ??
+    clean(process.env.OPERATOR_EMAIL) ??
+    'taniervlak@gmail.com';
   const dpoEmail =
     clean(process.env.NEXT_PUBLIC_CONTACT_EMAIL_LEGAL) ??
     clean(process.env.CONTACT_EMAIL_LEGAL) ??
@@ -47,6 +53,9 @@ export default function PrivacyPage() {
         </p>
         <div className="rounded-[var(--radius-panel)] border border-[var(--color-line)] bg-[var(--color-surface)] p-4 text-[0.875rem] text-[var(--color-ink)]">
           <p className="font-medium">{operatorName}</p>
+          {operatorAddress ? (
+            <p className="text-[var(--color-ink-muted)]">{operatorAddress}</p>
+          ) : null}
           {operatorEmail ? (
             <p className="mt-1">
               General Contact:{' '}

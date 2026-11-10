@@ -18,9 +18,13 @@ export default function LegalNoticePage() {
     clean(process.env.OPERATOR_NAME) ??
     'SERA.toolkit Operator';
   const operatorAddress =
-    clean(process.env.NEXT_PUBLIC_OPERATOR_ADDRESS) ?? clean(process.env.OPERATOR_ADDRESS);
+    clean(process.env.NEXT_PUBLIC_OPERATOR_ADDRESS) ??
+    clean(process.env.OPERATOR_ADDRESS) ??
+    'Online Service Provider, EU / Global';
   const operatorEmail =
-    clean(process.env.NEXT_PUBLIC_OPERATOR_EMAIL) ?? clean(process.env.OPERATOR_EMAIL);
+    clean(process.env.NEXT_PUBLIC_OPERATOR_EMAIL) ??
+    clean(process.env.OPERATOR_EMAIL) ??
+    'taniervlak@gmail.com';
   const registrationId =
     clean(process.env.NEXT_PUBLIC_OPERATOR_REGISTRATION_ID) ??
     clean(process.env.OPERATOR_REGISTRATION_ID);

@@ -24,11 +24,17 @@ const nextConfig: NextConfig = {
   output: 'standalone',
   env: {
     NEXT_PUBLIC_OPERATOR_NAME:
-      process.env.NEXT_PUBLIC_OPERATOR_NAME ?? process.env.OPERATOR_NAME ?? '',
+      process.env.NEXT_PUBLIC_OPERATOR_NAME ??
+      process.env.OPERATOR_NAME ??
+      'SERA.toolkit Operator',
     NEXT_PUBLIC_OPERATOR_ADDRESS:
-      process.env.NEXT_PUBLIC_OPERATOR_ADDRESS ?? process.env.OPERATOR_ADDRESS ?? '',
+      process.env.NEXT_PUBLIC_OPERATOR_ADDRESS ??
+      process.env.OPERATOR_ADDRESS ??
+      'Online Service Provider, EU / Global',
     NEXT_PUBLIC_OPERATOR_EMAIL:
-      process.env.NEXT_PUBLIC_OPERATOR_EMAIL ?? process.env.OPERATOR_EMAIL ?? '',
+      process.env.NEXT_PUBLIC_OPERATOR_EMAIL ??
+      process.env.OPERATOR_EMAIL ??
+      'taniervlak@gmail.com',
     NEXT_PUBLIC_OPERATOR_REGISTRATION_ID:
       process.env.NEXT_PUBLIC_OPERATOR_REGISTRATION_ID ??
       process.env.OPERATOR_REGISTRATION_ID ??
@@ -36,9 +42,11 @@ const nextConfig: NextConfig = {
     NEXT_PUBLIC_CONTACT_EMAIL_AUTHORITIES:
       process.env.NEXT_PUBLIC_CONTACT_EMAIL_AUTHORITIES ??
       process.env.CONTACT_EMAIL_AUTHORITIES ??
-      '',
+      'taniervlak@gmail.com',
     NEXT_PUBLIC_CONTACT_EMAIL_LEGAL:
-      process.env.NEXT_PUBLIC_CONTACT_EMAIL_LEGAL ?? process.env.CONTACT_EMAIL_LEGAL ?? '',
+      process.env.NEXT_PUBLIC_CONTACT_EMAIL_LEGAL ??
+      process.env.CONTACT_EMAIL_LEGAL ??
+      'taniervlak@gmail.com',
   },
   experimental: {
     isrFlushToDisk: false,
