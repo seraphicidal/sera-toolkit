@@ -597,13 +597,14 @@ export class JobRunner {
       infoPath?: string,
       sections?: { start: number; end?: number; forceKeyframes: boolean },
       downloadSignal = signal,
+      formatSelector = fetchPlan.selector,
     ) =>
       ytdlpDownload({
         binary: config.ytdlpPath,
         ffmpegPath: config.ffmpegPath,
         timeoutMs: config.jobTimeoutSeconds * 1000,
         url: target,
-        format: fetchPlan.selector,
+        format: formatSelector,
         workdir: scratch,
         outputTemplate: 'media.%(ext)s',
         maxFilesizeBytes: config.maxFilesizeBytes,
@@ -650,13 +651,14 @@ export class JobRunner {
         },
       });
 
-    const download = async (
+    const attemptFormat = async (
+      formatSelector: string,
       sections?: { start: number; end?: number; forceKeyframes: boolean },
       downloadSignal = signal,
     ) => {
       if (loadInfoJsonPath) {
         try {
-          await runDownload(loadInfoJsonPath, sections, downloadSignal);
+          await runDownload(loadInfoJsonPath, sections, downloadSignal, formatSelector);
           return;
         } catch (error) {
           if (downloadSignal?.aborted) throw error;
@@ -671,13 +673,39 @@ export class JobRunner {
               { error, failure },
               'cached info.json download failed; retrying with direct url',
             );
-            await runDownload(undefined, sections, downloadSignal);
+            await runDownload(undefined, sections, downloadSignal, formatSelector);
             return;
           }
           throw error;
         }
       }
-      await runDownload(undefined, sections, downloadSignal);
+      await runDownload(undefined, sections, downloadSignal, formatSelector);
+    };
+
+    const sameHeightFallback = sameHeightFallbackSelector(plan);
+
+    const download = async (
+      sections?: { start: number; end?: number; forceKeyframes: boolean },
+      downloadSignal = signal,
+    ) => {
+      try {
+        await attemptFormat(fetchPlan.selector, sections, downloadSignal);
+      } catch (error) {
+        if (downloadSignal?.aborted || !sameHeightFallback) throw error;
+        const failure = classifyFailure(error);
+        if (!FORMAT_FALLBACK_ANSWERS.has(failure)) throw error;
+        this.deps.logger.info(
+          {
+            jobId: workspace.jobId,
+            provider: args.resolved.provider,
+            failureClass: failure,
+            requestedSelector: fetchPlan.selector,
+            height: plan.height,
+          },
+          'the exact format failed; trying another stream at the same height',
+        );
+        await attemptFormat(sameHeightFallback, sections, downloadSignal);
+      }
     };
 
     if (!args.trim) {
@@ -1282,7 +1310,7 @@ async function findSingleFile(directory: string): Promise<string> {
   return join(directory, sized[0]!.name);
 }
 
-export { lowerQualityAlternatives, SeraError };
+export { lowerQualityAlternatives, sameHeightFallbackSelector, SeraError };
 
 const FORMAT_FALLBACK_ANSWERS = new Set([
   'FORMAT_UNAVAILABLE',
@@ -1290,6 +1318,86 @@ const FORMAT_FALLBACK_ANSWERS = new Set([
   'CDN_DOWNLOAD_FAILURE',
   'SOURCE_ERROR',
 ]);
+
+function sameHeightFallbackSelector(plan: DownloadPlan): string | undefined {
+  if (plan.kind !== 'video' || !plan.height || plan.fetch.via !== 'ytdlp') return undefined;
+  const selector = plan.fetch.selector.trim();
+  if (/\b(?:best|worst)(?:video|audio)?\b/i.test(selector)) return undefined;
+
+  const h = plan.height;
+  const plus = selector.indexOf('+');
+  const rawAudioId = plus >= 0 ? selector.slice(plus + 1).trim() : undefined;
+  const audioId = rawAudioId && /^[A-Za-z0-9_.-]+$/.test(rawAudioId) ? rawAudioId : undefined;
+
+  if (plan.container === 'mov') {
+    const vCodec = "[vcodec~='^(avc|h264|hev|hvc)']";
+    const aCodec = "[acodec~='^(mp4a|aac|ac-3|ec-3)']";
+    return audioId
+      ? [
+          `bestvideo[height=${h}][protocol^=http]${vCodec}+${audioId}`,
+          `bestvideo[height=${h}][protocol^=http]${vCodec}+bestaudio[protocol^=http]${aCodec}`,
+          `best[height=${h}][protocol^=http]${vCodec}`,
+          `bestvideo[height=${h}]${vCodec}+${audioId}`,
+          `bestvideo[height=${h}]${vCodec}+bestaudio${aCodec}`,
+          `best[height=${h}]${vCodec}`,
+        ].join('/')
+      : [
+          `best[height=${h}][protocol^=http]${vCodec}`,
+          `bestvideo[height=${h}][protocol^=http]${vCodec}`,
+          `best[height=${h}]${vCodec}`,
+          `bestvideo[height=${h}]${vCodec}`,
+        ].join('/');
+  }
+
+  if (plan.container === 'webm') {
+    const vCodec = "[vcodec~='^(vp9|vp09|vp8|av01)']";
+    return audioId
+      ? [
+          `bestvideo[height=${h}][protocol^=http]${vCodec}+${audioId}`,
+          `bestvideo[height=${h}][protocol^=http]${vCodec}+bestaudio[protocol^=http][acodec=opus]`,
+          `bestvideo[height=${h}][protocol^=http]+bestaudio[protocol^=http][acodec=opus]`,
+          `bestvideo[height=${h}][protocol^=http]+bestaudio[protocol^=http]`,
+          `best[height=${h}][protocol^=http]`,
+          `bestvideo[height=${h}]+${audioId}`,
+          `bestvideo[height=${h}]+bestaudio`,
+          `best[height=${h}]`,
+        ].join('/')
+      : [
+          `best[height=${h}][protocol^=http]${vCodec}`,
+          `best[height=${h}][protocol^=http]`,
+          `bestvideo[height=${h}][protocol^=http]${vCodec}`,
+          `bestvideo[height=${h}][protocol^=http]`,
+          `best[height=${h}]`,
+          `bestvideo[height=${h}]`,
+        ].join('/');
+  }
+
+  return audioId
+    ? [
+        `bestvideo[height=${h}][protocol^=http][vcodec^=avc]+${audioId}`,
+        `bestvideo[height=${h}][protocol^=http][ext=mp4]+${audioId}`,
+        `bestvideo[height=${h}][protocol^=http]+${audioId}`,
+        `bestvideo[height=${h}][protocol^=http][vcodec^=avc]+bestaudio[protocol^=http][acodec^=mp4a]`,
+        `bestvideo[height=${h}][protocol^=http][ext=mp4]+bestaudio[protocol^=http][acodec^=mp4a]`,
+        `bestvideo[height=${h}][protocol^=http]+bestaudio[protocol^=http][acodec^=mp4a]`,
+        `best[height=${h}][protocol^=http][ext=mp4]`,
+        `best[height=${h}][protocol^=http]`,
+        `bestvideo[height=${h}]+${audioId}`,
+        `bestvideo[height=${h}]+bestaudio[acodec^=mp4a]`,
+        `bestvideo[height=${h}]+bestaudio`,
+        `best[height=${h}]`,
+      ].join('/')
+    : [
+        `best[height=${h}][protocol^=http][ext=mp4]`,
+        `best[height=${h}][protocol^=http]`,
+        `bestvideo[height=${h}][protocol^=http][vcodec^=avc]+bestaudio[protocol^=http][acodec^=mp4a]`,
+        `bestvideo[height=${h}][protocol^=http]+bestaudio[protocol^=http][acodec^=mp4a]`,
+        `bestvideo[height=${h}][protocol^=http]`,
+        `best[height=${h}]`,
+        `bestvideo[height=${h}]+bestaudio`,
+        `bestvideo[height=${h}]`,
+      ].join('/');
+}
 
 function lowerQualityAlternatives(
   item: ResolvedItem,

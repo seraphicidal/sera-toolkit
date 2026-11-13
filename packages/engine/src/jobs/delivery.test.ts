@@ -3,13 +3,14 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { loadConfig } from '../config.js';
 import { silentLogger } from '../logging.js';
+import * as ytdlpModule from '../extract/ytdlp.js';
 import type { DownloadPlan, ResolvedItem, ResolvedMedia } from '../providers/types.js';
 import { sniffTextImposter } from '../util/sniff.js';
 import { WorkspaceManager } from '../storage/workspace.js';
-import { JobRunner } from './runner.js';
+import { JobRunner, sameHeightFallbackSelector } from './runner.js';
 
 const run = promisify(execFile);
 const config = loadConfig({
@@ -28,6 +29,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await rm(dataDir, { recursive: true, force: true });
 });
 
@@ -225,5 +227,114 @@ describe('a refusal that arrives as a 200', () => {
     const bytes = await readFile(join(dataDir, spec.jobId, 'out', result.filename));
     expect(bytes.subarray(4, 8).toString('latin1')).toBe('ftyp');
     expect(result.delivery?.substituted).toBeUndefined();
+  }, 60_000);
+});
+
+describe('same-height stream fallback', () => {
+  it('builds container-aware same-height fallback selectors for pinned format ids', () => {
+    const mp4 = sameHeightFallbackSelector({
+      kind: 'video',
+      container: 'mp4',
+      label: '720p',
+      height: 720,
+      requiresConversion: false,
+      recommended: true,
+      fetch: { via: 'ytdlp', selector: '311+140-13', merge: 'mp4' },
+    });
+    expect(mp4).toContain('bestvideo[height=720][protocol^=http][vcodec^=avc]+140-13');
+    expect(mp4).toContain('best[height=720]');
+
+    const mov = sameHeightFallbackSelector({
+      kind: 'video',
+      container: 'mov',
+      label: '1080p (MOV)',
+      height: 1080,
+      requiresConversion: false,
+      recommended: false,
+      fetch: { via: 'ytdlp', selector: '312+140-13', merge: 'mp4', remux: 'mov' },
+    });
+    expect(mov).toContain("[vcodec~='^(avc|h264|hev|hvc)']+140-13");
+
+    expect(
+      sameHeightFallbackSelector({
+        kind: 'video',
+        container: 'mp4',
+        label: '720p',
+        height: 720,
+        requiresConversion: false,
+        recommended: true,
+        fetch: { via: 'ytdlp', selector: 'bestvideo+bestaudio/best' },
+      }),
+    ).toBeUndefined();
+  });
+
+  it('falls back to another stream at the same height before stepping down resolution', async () => {
+    const formatsTried: string[] = [];
+    vi.spyOn(ytdlpModule, 'download').mockImplementation(async (req) => {
+      formatsTried.push(req.format);
+      if (req.format === '311+140-13') {
+        throw Object.assign(new Error('Requested format is not available'), {
+          code: 'MEDIA_UNAVAILABLE',
+        });
+      }
+      await realVideo(req.workdir, 'media.mp4');
+    });
+
+    const mediaWithPinned720: ResolvedMedia = {
+      ...media,
+      items: [
+        {
+          index: 0,
+          kind: 'video',
+          plans: [
+            {
+              kind: 'video',
+              container: 'mp4',
+              label: '720p',
+              height: 720,
+              requiresConversion: false,
+              recommended: true,
+              fetch: { via: 'ytdlp', selector: '311+140-13', merge: 'mp4' },
+            },
+            {
+              kind: 'video',
+              container: 'mp4',
+              label: '480p',
+              height: 480,
+              requiresConversion: false,
+              recommended: false,
+              fetch: { via: 'ytdlp', selector: '231+140-13', merge: 'mp4' },
+            },
+          ],
+        },
+      ],
+    };
+
+    const runner = new JobRunner({
+      config: { ...config, dataDir },
+      logger: silentLogger(),
+      resolver: {
+        resolveCanonical: () => Promise.resolve(mediaWithPinned720),
+        dispatcher: undefined,
+      } as never,
+      workspaces,
+    });
+
+    const result = await runner.run(
+      {
+        jobId: 'dddddddddddddddddddddddddddddddd',
+        provider: 'youtube',
+        url: media.url,
+        selections: [{ itemIndex: 0, planKey: 'video/mp4/720p' }],
+        packaging: 'auto',
+      },
+      () => undefined,
+    );
+
+    expect(result.sizeBytes).toBeGreaterThan(0);
+    expect(result.delivery?.substituted).toBeUndefined();
+    expect(formatsTried).toHaveLength(2);
+    expect(formatsTried[0]).toBe('311+140-13');
+    expect(formatsTried[1]).toContain('bestvideo[height=720]');
   }, 60_000);
 });

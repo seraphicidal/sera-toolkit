@@ -271,6 +271,44 @@ describe('bestAudio', () => {
   it('returns nothing when there is no audio', () => {
     expect(bestAudio([])).toBeUndefined();
   });
+
+  it('prefers direct https and original language tracks over m3u8 or dubbed twins', () => {
+    const tracks = toUsableFormats([
+      {
+        format_id: '234-13',
+        ext: 'mp4',
+        protocol: 'm3u8_native',
+        vcodec: 'none',
+        acodec: 'mp4a.40.2',
+        abr: 256,
+        language_preference: 10,
+        format_note: 'Untested',
+      },
+      {
+        format_id: '140-0',
+        ext: 'm4a',
+        protocol: 'https',
+        vcodec: 'none',
+        acodec: 'mp4a.40.2',
+        abr: 132,
+        language: 'ar',
+        language_preference: -1,
+        format_note: 'Arabic, medium',
+      },
+      {
+        format_id: '140-13',
+        ext: 'm4a',
+        protocol: 'https',
+        vcodec: 'none',
+        acodec: 'mp4a.40.2',
+        abr: 129,
+        language: 'en-US',
+        language_preference: 10,
+        format_note: 'English (US) original (default), medium',
+      },
+    ]);
+    expect(bestAudio(tracks, 'mp4')?.id).toBe('140-13');
+  });
 });
 
 describe('bestVideoPerHeight', () => {
@@ -283,6 +321,38 @@ describe('bestVideoPerHeight', () => {
 
   it('prefers H.264 at a given height, because it remuxes into MP4 untouched', () => {
     expect(best[0]?.id).toBe('137');
+  });
+
+  it('prefers direct https over m3u8_native even when m3u8 reports a higher bitrate', () => {
+    const renditions = toUsableFormats([
+      {
+        format_id: '311',
+        ext: 'mp4',
+        protocol: 'm3u8_native',
+        vcodec: 'avc1.640020',
+        acodec: 'none',
+        width: 1280,
+        height: 720,
+        fps: 60,
+        tbr: 3714,
+        format_note: 'Untested',
+      },
+      {
+        format_id: '298',
+        ext: 'mp4',
+        protocol: 'https',
+        vcodec: 'avc1.640020',
+        acodec: 'none',
+        width: 1280,
+        height: 720,
+        fps: 60,
+        tbr: 2001,
+        filesize: 266_661_593,
+      },
+    ]);
+    const picked = bestVideoPerHeight(renditions);
+    expect(picked).toHaveLength(1);
+    expect(picked[0]?.id).toBe('298');
   });
 });
 

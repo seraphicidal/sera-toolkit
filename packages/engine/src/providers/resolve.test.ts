@@ -223,6 +223,77 @@ describe('YouTube video', () => {
     expect(media.createdAt).toBe(new Date(1_700_000_000_000).toISOString());
     expect(media.thumbnailUrl).toContain('medium.jpg');
   });
+
+  it('chooses direct https video and original audio over m3u8 untested twins', async () => {
+    const visionOsMixed: YtdlpInfo = {
+      ...youtubeInfo,
+      formats: [
+        {
+          format_id: '311',
+          ext: 'mp4',
+          protocol: 'm3u8_native',
+          vcodec: 'avc1.640020',
+          acodec: 'none',
+          width: 1280,
+          height: 720,
+          fps: 60,
+          tbr: 3714,
+          format_note: 'Untested',
+        },
+        {
+          format_id: '298',
+          ext: 'mp4',
+          protocol: 'https',
+          vcodec: 'avc1.640020',
+          acodec: 'none',
+          width: 1280,
+          height: 720,
+          fps: 60,
+          tbr: 2001,
+          filesize: 266_661_593,
+        },
+        {
+          format_id: '96',
+          ext: 'mp4',
+          protocol: 'm3u8_native',
+          vcodec: 'avc1.640020',
+          acodec: 'mp4a.40.2',
+          width: 1280,
+          height: 720,
+          fps: 60,
+          tbr: 4200,
+        },
+        {
+          format_id: '140-0',
+          ext: 'm4a',
+          protocol: 'https',
+          vcodec: 'none',
+          acodec: 'mp4a.40.2',
+          abr: 131,
+          language: 'ar',
+          language_preference: -1,
+        },
+        {
+          format_id: '140-13',
+          ext: 'm4a',
+          protocol: 'https',
+          vcodec: 'none',
+          acodec: 'mp4a.40.2',
+          abr: 129,
+          language: 'en-US',
+          language_preference: 10,
+          filesize: 17_252_535,
+        },
+      ],
+    };
+
+    const media = await new YouTubeProvider().resolve(
+      new URL(youtubeInfo.webpage_url!),
+      contextFor(visionOsMixed),
+    );
+    const videoPlan = media.items[0]!.plans.find((p) => p.kind === 'video')!;
+    expect(videoPlan.fetch).toMatchObject({ via: 'ytdlp', selector: '298+140-13', merge: 'mp4' });
+  });
 });
 
 const carouselInfo: YtdlpInfo = {

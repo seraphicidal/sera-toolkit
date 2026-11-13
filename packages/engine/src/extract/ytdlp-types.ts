@@ -34,6 +34,7 @@ export interface YtdlpFormat {
   readonly container?: string | null;
   readonly dynamic_range?: string | null;
   readonly language?: string | null;
+  readonly language_preference?: number | null;
   readonly quality?: number | null;
   readonly preference?: number | null;
   readonly fragments?: readonly YtdlpFragment[];

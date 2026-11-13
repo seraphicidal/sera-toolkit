@@ -40,6 +40,7 @@ export interface UsableFormat {
   readonly filesizeIsApproximate: boolean;
   readonly hasVideo: boolean;
   readonly hasAudio: boolean;
+  readonly languagePreference?: number;
   readonly note?: string;
 }
 
@@ -113,6 +114,7 @@ export function toUsableFormats(formats: readonly YtdlpFormat[] | undefined): Us
 
     const exact = num(format.filesize);
     const approx = num(format.filesize_approx);
+    const languagePreference = num(format.language_preference);
 
     const usable: UsableFormat = {
       id,
@@ -130,6 +132,7 @@ export function toUsableFormats(formats: readonly YtdlpFormat[] | undefined): Us
       filesizeIsApproximate: exact === undefined,
       hasVideo,
       hasAudio,
+      ...(languagePreference !== undefined ? { languagePreference } : {}),
       ...(str(format.format_note) ? { note: str(format.format_note)! } : {}),
     };
     out.push(usable);
@@ -198,18 +201,43 @@ export function splitFormats(formats: readonly UsableFormat[]): FormatSplit {
   return { videoOnly, audioOnly, progressive };
 }
 
+export function protocolScore(protocol: string, note?: string): number {
+  const normalized = protocol.toLowerCase();
+  const base =
+    normalized === 'https' || normalized === 'http'
+      ? 2
+      : normalized === 'http_dash_segments'
+        ? 1
+        : 0;
+  return (note ?? '').toLowerCase().includes('untested') ? Math.min(base, 0) - 1 : base;
+}
+
 export function bestAudio(
   audio: readonly UsableFormat[],
   prefer: 'mp4' | 'webm' | 'any' = 'any',
 ): UsableFormat | undefined {
   if (!audio.length) return undefined;
   const score = (format: UsableFormat): number => {
+    const proto = protocolScore(format.protocol, format.note);
     const codec = (format.acodec ?? '').toLowerCase();
     let containerBonus = 0;
-    if (prefer === 'mp4' && (codec.startsWith('mp4a') || codec.startsWith('aac')))
-      containerBonus = 2000;
-    if (prefer === 'webm' && codec.startsWith('opus')) containerBonus = 2000;
-    return containerBonus + (format.abr ?? format.tbr ?? 0);
+    if (prefer === 'mp4' && (codec.startsWith('mp4a') || codec.startsWith('aac'))) {
+      containerBonus = 1;
+    } else if (prefer === 'webm' && codec.startsWith('opus')) {
+      containerBonus = 1;
+    }
+    const langScore =
+      format.languagePreference !== undefined
+        ? Math.max(-10, Math.min(20, format.languagePreference))
+        : (format.note ?? '').toLowerCase().includes('original')
+          ? 5
+          : 0;
+    return (
+      proto * 100_000_000 +
+      containerBonus * 1_000_000 +
+      langScore * 10_000 +
+      (format.abr ?? format.tbr ?? 0)
+    );
   };
   return [...audio].sort((a, b) => score(b) - score(a))[0];
 }
@@ -225,14 +253,15 @@ export function bestVideoPerHeight(video: readonly UsableFormat[]): UsableFormat
   return [...byHeight.values()].sort((a, b) => (b.height ?? 0) - (a.height ?? 0));
 }
 
-function rankVideo(format: UsableFormat): number {
+export function rankVideo(format: UsableFormat): number {
+  const proto = protocolScore(format.protocol, format.note);
   const codec = (format.vcodec ?? '').toLowerCase();
   let codecScore = 0;
   if (codec.startsWith('avc') || codec.startsWith('h264')) codecScore = 3;
   else if (codec.startsWith('av01')) codecScore = 2;
   else if (codec.startsWith('vp9') || codec.startsWith('vp09')) codecScore = 1;
   const fpsScore = (format.fps ?? 30) >= 50 ? 1 : 0;
-  return fpsScore * 100_000 + codecScore * 10_000 + (format.tbr ?? 0);
+  return proto * 100_000_000 + fpsScore * 10_000_000 + codecScore * 1_000_000 + (format.tbr ?? 0);
 }
 
 export function audioBitrateChoices(sourceAbr: number | undefined): number[] {

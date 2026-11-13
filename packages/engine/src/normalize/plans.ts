@@ -14,6 +14,8 @@ import {
   fitsInMp4,
   IMAGE_EXTENSIONS,
   nativeContainer,
+  protocolScore,
+  rankVideo,
   splitFormats,
   toUsableFormats,
   type UsableFormat,
@@ -113,7 +115,7 @@ export function buildVideoPlans(
     const height = format.height;
     if (!height) continue;
     const current = progressiveByHeight.get(height);
-    if (!current || (format.tbr ?? 0) > (current.tbr ?? 0)) progressiveByHeight.set(height, format);
+    if (!current || rankVideo(format) > rankVideo(current)) progressiveByHeight.set(height, format);
   }
 
   const heights = bestVideoPerHeight(videoOnly);
@@ -153,7 +155,12 @@ export function buildVideoPlans(
   for (const video of heights) {
     const height = video.height ?? 0;
     const progressiveMatch = progressiveByHeight.get(height);
-    if (progressiveMatch && (progressiveMatch.tbr ?? 0) >= (video.tbr ?? 0) * 0.8) {
+    if (
+      progressiveMatch &&
+      protocolScore(progressiveMatch.protocol, progressiveMatch.note) >=
+        protocolScore(video.protocol, video.note) &&
+      (progressiveMatch.tbr ?? 0) >= (video.tbr ?? 0) * 0.8
+    ) {
       emit(progressiveMatch, undefined);
       continue;
     }
