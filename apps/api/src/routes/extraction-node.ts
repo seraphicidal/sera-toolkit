@@ -202,16 +202,23 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
 
   const dispatched = new Map<string, Dispatched>();
   const DISPATCH_KEEP_MS = 60_000;
-  const taskByteTrackers = new Map<string, { bytes: number }>();
-  const taskInFlightFiles = new Map<string, Set<string>>();
+  const TASK_UPLOAD_IDLE_MS = 15 * 60_000;
+  const taskUploads = new Map<
+    string,
+    { bytes: number; inFlight: Set<string>; updatedAt: number; init?: Promise<void> }
+  >();
 
   const sweep = setInterval(() => {
     const now = Date.now();
     for (const [id, entry] of dispatched) {
       if (entry.settledAt && now - entry.settledAt > DISPATCH_KEEP_MS) {
         dispatched.delete(id);
-        taskByteTrackers.delete(id);
-        taskInFlightFiles.delete(id);
+        taskUploads.delete(id);
+      }
+    }
+    for (const [id, upload] of taskUploads) {
+      if (now - upload.updatedAt > TASK_UPLOAD_IDLE_MS) {
+        taskUploads.delete(id);
       }
     }
   }, 30_000);
@@ -382,8 +389,7 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
             })
           : seraError('PROVIDER_UNAVAILABLE', { detail: 'node: malformed failure report' });
 
-        taskByteTrackers.delete(request.params.taskId);
-        taskInFlightFiles.delete(request.params.taskId);
+        taskUploads.delete(request.params.taskId);
         const accepted = extractionNodes.fail(request.params.taskId, error);
         return reply.send({ accepted });
       },
@@ -406,36 +412,48 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
         }
 
         const directory = join(config.dataDir, `remote-${taskId}`);
-        await mkdir(directory, { recursive: true });
-        const existing = await readdir(directory).catch(() => [] as string[]);
-        if (existing.length >= config.maxItemsPerJob * 2) {
+        let uploadState = taskUploads.get(taskId);
+        if (!uploadState) {
+          const created = {
+            bytes: 0,
+            inFlight: new Set<string>(),
+            updatedAt: Date.now(),
+            init: undefined as Promise<void> | undefined,
+          };
+          created.init = (async () => {
+            try {
+              await mkdir(directory, { recursive: true });
+              const existing = await readdir(directory).catch(() => [] as string[]);
+              let existingBytes = 0;
+              for (const entry of existing) {
+                created.inFlight.add(entry.toLowerCase());
+                existingBytes += await stat(join(directory, entry)).then(
+                  (info) => info.size,
+                  () => 0,
+                );
+              }
+              created.bytes += existingBytes;
+            } catch (error) {
+              if (taskUploads.get(taskId) === created) taskUploads.delete(taskId);
+              throw error;
+            }
+          })();
+          taskUploads.set(taskId, created);
+          uploadState = created;
+        }
+        uploadState.updatedAt = Date.now();
+        await uploadState.init;
+        uploadState.updatedAt = Date.now();
+
+        if (uploadState.inFlight.size >= config.maxItemsPerJob * 2) {
           throw seraError('TOO_LARGE', { detail: 'node: too many uploaded files' });
         }
-        let existingBytes = 0;
-        for (const entry of existing) {
-          existingBytes += await stat(join(directory, entry)).then(
-            (info) => info.size,
-            () => 0,
-          );
-        }
-        let tracker = taskByteTrackers.get(taskId);
-        if (!tracker) {
-          tracker = { bytes: existingBytes };
-          taskByteTrackers.set(taskId, tracker);
-        }
-
-        let inFlight = taskInFlightFiles.get(taskId);
-        if (!inFlight) {
-          inFlight = new Set<string>();
-          taskInFlightFiles.set(taskId, inFlight);
-        }
-        for (const entry of existing) inFlight.add(entry.toLowerCase());
 
         const name = dedupeFilename(
           sanitizeUploadedFilename(request.query.name ?? 'media.bin'),
-          inFlight,
+          uploadState.inFlight,
         );
-        inFlight.add(name.toLowerCase());
+        uploadState.inFlight.add(name.toLowerCase());
         const path = join(directory, name);
 
         let streamBytes = 0;
@@ -445,9 +463,10 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
               done(seraError('CANCELLED'));
               return;
             }
-            tracker.bytes += chunk.length;
+            uploadState.bytes += chunk.length;
+            uploadState.updatedAt = Date.now();
             streamBytes += chunk.length;
-            if (tracker.bytes > config.maxFilesizeBytes) {
+            if (uploadState.bytes > config.maxFilesizeBytes) {
               done(seraError('TOO_LARGE', { detail: 'node: upload exceeds the size limit' }));
               return;
             }
@@ -460,8 +479,8 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
             signal: AbortSignal.timeout(config.jobTimeoutSeconds * 1000),
           });
         } catch (error) {
-          tracker.bytes -= streamBytes;
-          inFlight.delete(name.toLowerCase());
+          uploadState.bytes = Math.max(0, uploadState.bytes - streamBytes);
+          uploadState.inFlight.delete(name.toLowerCase());
           await rm(path, { force: true }).catch(() => undefined);
           const remaining = await readdir(directory).catch(() => [] as string[]);
           if (remaining.length === 0) {
@@ -484,8 +503,8 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
           path,
         });
         if (!accepted) {
-          tracker.bytes -= streamBytes;
-          inFlight.delete(name.toLowerCase());
+          uploadState.bytes = Math.max(0, uploadState.bytes - streamBytes);
+          uploadState.inFlight.delete(name.toLowerCase());
           await rm(path, { force: true }).catch(() => undefined);
           const remaining = await readdir(directory).catch(() => [] as string[]);
           if (remaining.length === 0) {
@@ -503,8 +522,7 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
         const auth = authenticateNode(request, reply);
         if (!auth) return reply;
         if (!validateTaskOwnership(request.params.taskId, auth, reply)) return reply;
-        taskByteTrackers.delete(request.params.taskId);
-        taskInFlightFiles.delete(request.params.taskId);
+        taskUploads.delete(request.params.taskId);
         return reply.send({ accepted: extractionNodes.completeJob(request.params.taskId) });
       },
     );
@@ -615,10 +633,12 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
 
         if (waitMs > 0 && entry.state === 'pending') {
           const seenStep = request.query.seenStep;
-          const seenPercent =
+          const rawPercent =
             request.query.seenPercent !== undefined
               ? Number.parseFloat(request.query.seenPercent)
               : undefined;
+          const seenPercent =
+            rawPercent !== undefined && Number.isFinite(rawPercent) ? rawPercent : undefined;
 
           const isUnchanged = () =>
             (seenStep === undefined && seenPercent === undefined && entry.progress === undefined) ||

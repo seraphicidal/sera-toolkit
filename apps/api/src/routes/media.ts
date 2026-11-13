@@ -1,7 +1,14 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { importRequestSchema, resolveRequestSchema } from '@sera/contracts';
 import type { SeraEngine } from '@sera/engine';
-import { header, hostMatchesAny, safeFetch, seraError, SeraError } from '@sera/engine';
+import {
+  header,
+  hostMatchesAny,
+  InFlightCoalescer,
+  safeFetch,
+  seraError,
+  SeraError,
+} from '@sera/engine';
 import { abuseGuardFor } from '../plugins/client.js';
 import { clientAbortSignal } from '../plugins/disconnect.js';
 
@@ -27,7 +34,7 @@ interface CachedThumbnail {
 
 export class ThumbnailCache {
   private readonly entries = new Map<string, CachedThumbnail>();
-  private readonly inFlight = new Map<string, Promise<{ body: Buffer; contentType: string }>>();
+  private readonly coalescer = new InFlightCoalescer<{ body: Buffer; contentType: string }>();
   private currentBytes = 0;
 
   constructor(
@@ -91,21 +98,16 @@ export class ThumbnailCache {
     return this.currentBytes;
   }
 
-  getInFlight(url: string): Promise<{ body: Buffer; contentType: string }> | undefined {
-    return this.inFlight.get(url);
-  }
-
-  setInFlight(url: string, promise: Promise<{ body: Buffer; contentType: string }>): void {
-    this.inFlight.set(url, promise);
-  }
-
-  deleteInFlight(url: string): void {
-    this.inFlight.delete(url);
+  coalesce(
+    url: string,
+    start: (signal: AbortSignal) => Promise<{ body: Buffer; contentType: string }>,
+    signal?: AbortSignal,
+  ): Promise<{ body: Buffer; contentType: string }> {
+    return this.coalescer.run(url, start, signal);
   }
 
   clear(): void {
     this.entries.clear();
-    this.inFlight.clear();
     this.currentBytes = 0;
   }
 }
@@ -212,39 +214,30 @@ export function registerMediaRoutes(app: FastifyInstance, engine: SeraEngine): v
         .send(cached.body);
     }
 
-    const active = thumbnailCache.getInFlight(source);
-    const data = active
-      ? await active
-      : await (() => {
-          const promise = (async () => {
-            try {
-              const response = await safeFetch(target, {
-                dispatcher: engine.resolver.dispatcher,
-                timeoutMs: 10_000,
-                maxBytes: MAX_THUMBNAIL_BYTES,
-                signal: clientAbortSignal(request, reply),
-                allowUrl: (url) => !hostMatchesAny(url.hostname, engine.config.blockedHosts),
-              });
+    const data = await thumbnailCache.coalesce(
+      source,
+      async (coalescedSignal) => {
+        const response = await safeFetch(target, {
+          dispatcher: engine.resolver.dispatcher,
+          timeoutMs: 10_000,
+          maxBytes: MAX_THUMBNAIL_BYTES,
+          signal: coalescedSignal,
+          allowUrl: (url) => !hostMatchesAny(url.hostname, engine.config.blockedHosts),
+        });
 
-              if (response.status >= 400) throw seraError('NOT_FOUND');
+        if (response.status >= 400) throw seraError('NOT_FOUND');
 
-              const contentType =
-                (header(response.headers, 'content-type') ?? '')
-                  .split(';')[0]
-                  ?.trim()
-                  .toLowerCase() ?? '';
-              if (!IMAGE_TYPES.has(contentType))
-                throw seraError('NOT_FOUND', { detail: `thumb type ${contentType}` });
+        const contentType =
+          (header(response.headers, 'content-type') ?? '').split(';')[0]?.trim().toLowerCase() ??
+          '';
+        if (!IMAGE_TYPES.has(contentType))
+          throw seraError('NOT_FOUND', { detail: `thumb type ${contentType}` });
 
-              thumbnailCache.set(source, response.body, contentType);
-              return { body: response.body, contentType };
-            } finally {
-              thumbnailCache.deleteInFlight(source);
-            }
-          })();
-          thumbnailCache.setInFlight(source, promise);
-          return promise;
-        })();
+        thumbnailCache.set(source, response.body, contentType);
+        return { body: response.body, contentType };
+      },
+      clientAbortSignal(request, reply),
+    );
 
     return reply
       .header('content-type', data.contentType)

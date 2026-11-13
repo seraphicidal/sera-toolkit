@@ -3,8 +3,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import { loadConfig, SeraEngine, silentLogger } from '@sera/engine';
-import { isPublicAddress, unwrapIpv4Mapped } from '@sera/engine';
+import {
+  InFlightCoalescer,
+  isPublicAddress,
+  loadConfig,
+  SeraEngine,
+  silentLogger,
+  unwrapIpv4Mapped,
+} from '@sera/engine';
+import { parseGalleryDlJson } from '../packages/engine/src/extract/gallerydl.js';
 import { buildServer } from '../apps/api/src/server.js';
 
 let app: FastifyInstance;
@@ -21,6 +28,7 @@ beforeAll(async () => {
       SERA_DATA_DIR: dataDir,
       SERA_ADMIN_TOKEN: 'admin-audit-secret-token',
       SERA_CORS_ORIGINS: 'https://sera.example.com',
+      SERA_TRUST_PROXY: 'true',
     }),
     logger: silentLogger(),
   });
@@ -125,5 +133,98 @@ describe('Security Hardening: Path Traversal Defenses', () => {
     });
 
     expect(res.statusCode).toBe(400);
+  });
+});
+
+describe('Security Hardening: IDOR, Coalescing & Extractor Filtering', () => {
+  it('hides job existence and endpoints across different client keys', async () => {
+    const jobId = 'abcdef0123456789abcdef0123456789';
+    const now = new Date().toISOString();
+    await engine.backend.submit({
+      id: jobId,
+      state: 'queued',
+      step: 'Queued',
+      progress: { percent: 0, currentFile: 1, totalFiles: 1 },
+      provider: 'direct',
+      createdAt: now,
+      updatedAt: now,
+      clientKey: 'other-client-key-0001',
+      spec: {
+        jobId,
+        provider: 'direct',
+        url: 'https://example.com/clip.mp4',
+        selections: [{ itemIndex: 0, planKey: 'video/mp4' }],
+        packaging: 'auto',
+      },
+    });
+
+    const headers = { 'x-forwarded-for': '198.51.100.200' };
+    const getRes = await app.inject({ method: 'GET', url: `/api/jobs/${jobId}`, headers });
+    const delRes = await app.inject({ method: 'DELETE', url: `/api/jobs/${jobId}`, headers });
+    const sseRes = await app.inject({ method: 'GET', url: `/api/jobs/${jobId}/events`, headers });
+    const dlRes = await app.inject({ method: 'GET', url: `/api/jobs/${jobId}/download`, headers });
+
+    expect(getRes.statusCode).toBe(404);
+    expect(delRes.statusCode).toBe(404);
+    expect(sseRes.statusCode).toBe(404);
+    expect(dlRes.statusCode).toBe(404);
+  });
+
+  it('isolates single-caller aborts inside InFlightCoalescer until all callers abort', async () => {
+    const coalescer = new InFlightCoalescer<string>();
+    const ctrlA = new AbortController();
+    const ctrlB = new AbortController();
+    let seenSignal: AbortSignal | undefined;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const pA = coalescer.run(
+      'k1',
+      async (sig) => {
+        seenSignal = sig;
+        await gate;
+        return 'ok';
+      },
+      ctrlA.signal,
+    );
+    const pB = coalescer.run('k1', async () => 'should-reuse', ctrlB.signal);
+
+    ctrlA.abort(new Error('caller-a-left'));
+    await expect(pA).rejects.toThrow('caller-a-left');
+    expect(seenSignal?.aborted).toBe(false);
+
+    release();
+    await expect(pB).resolves.toBe('ok');
+
+    const ctrlC = new AbortController();
+    let sharedSignal: AbortSignal | undefined;
+    const pC = coalescer.run(
+      'k2',
+      async (sig) => {
+        sharedSignal = sig;
+        return await new Promise<string>((_resolve, reject) => {
+          sig.addEventListener('abort', () => reject(new Error('upstream-aborted')), {
+            once: true,
+          });
+        });
+      },
+      ctrlC.signal,
+    );
+    ctrlC.abort(new Error('last-caller-left'));
+    await expect(pC).rejects.toThrow('last-caller-left');
+    expect(sharedSignal?.aborted).toBe(true);
+  });
+
+  it('filters gallery-dl extracted URLs against blockedHosts', () => {
+    const stdout = JSON.stringify([
+      [2, { title: 'Test', uploader: 'alice' }],
+      [3, 'https://blocked.example/a.jpg', { extension: 'jpg' }],
+      [3, 'https://cdn.good.example/b.png', { extension: 'png' }],
+    ]);
+
+    const parsed = parseGalleryDlJson(stdout, false, ['blocked.example']);
+    expect(parsed.entries.map((entry) => entry.url)).toEqual(['https://cdn.good.example/b.png']);
   });
 });

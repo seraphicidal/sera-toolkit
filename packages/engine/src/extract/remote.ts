@@ -504,10 +504,29 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
   private requeue(pending: Pending): void {
     const previous = pending.task;
     const silentNode = pending.claimedBy;
+    this.settled.set(previous.id, {
+      ...(silentNode ? { claimedBy: silentNode } : {}),
+      cancelled: true,
+      settledAt: Date.now(),
+    });
     this.pending.delete(previous.id);
 
     cleanupFiles(pending.files);
-    pending.task = { ...previous, id: newTaskId() };
+    const hasAlternativeNode =
+      silentNode !== undefined &&
+      this.live(previous.networkClass).some(
+        (node) =>
+          node.id !== silentNode &&
+          (!node.providers.length || node.providers.includes(previous.providerId)),
+      );
+    const avoid = hasAlternativeNode
+      ? [...new Set([...(previous.avoid ?? []), silentNode])]
+      : previous.avoid;
+    pending.task = {
+      ...previous,
+      id: newTaskId(),
+      ...(avoid?.length ? { avoid } : {}),
+    };
     pending.files.length = 0;
     delete pending.claimedAt;
     delete pending.claimedBy;

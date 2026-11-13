@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
@@ -21,10 +22,13 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      '@sera/contracts/types': new URL('./packages/contracts/src/types.ts', import.meta.url)
-        .pathname,
-      '@sera/contracts': new URL('./packages/contracts/src/index.ts', import.meta.url).pathname,
-      '@sera/engine': new URL('./packages/engine/src/index.ts', import.meta.url).pathname,
+      '@sera/contracts/types': fileURLToPath(
+        new URL('./packages/contracts/src/types.ts', import.meta.url),
+      ),
+      '@sera/contracts': fileURLToPath(
+        new URL('./packages/contracts/src/index.ts', import.meta.url),
+      ),
+      '@sera/engine': fileURLToPath(new URL('./packages/engine/src/index.ts', import.meta.url)),
     },
   },
 });

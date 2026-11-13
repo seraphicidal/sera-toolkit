@@ -25,10 +25,19 @@ function mediaKindFromFilename(name: string): 'video' | 'audio' | 'image' | unde
 export function ResultPanel({ job, onReset }: { readonly job: Job; readonly onReset: () => void }) {
   const result = job.result;
   const startedFor = useRef<string | undefined>(undefined);
+  const copiedMainTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const copiedFileTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [now, setNow] = useState(() => Date.now());
   const [copiedMain, setCopiedMain] = useState(false);
   const [copiedFile, setCopiedFile] = useState<string | undefined>(undefined);
   const [showPreview, setShowPreview] = useState(false);
+
+  useEffect(() => {
+    return () => {
+      if (copiedMainTimer.current) clearTimeout(copiedMainTimer.current);
+      if (copiedFileTimer.current) clearTimeout(copiedFileTimer.current);
+    };
+  }, []);
 
   useEffect(() => {
     if (
@@ -57,7 +66,8 @@ export function ResultPanel({ job, onReset }: { readonly job: Job; readonly onRe
     try {
       await navigator.clipboard.writeText(absoluteUrl(result.downloadPath));
       setCopiedMain(true);
-      setTimeout(() => setCopiedMain(false), 2000);
+      if (copiedMainTimer.current) clearTimeout(copiedMainTimer.current);
+      copiedMainTimer.current = setTimeout(() => setCopiedMain(false), 2000);
     } catch {}
   };
 
@@ -66,7 +76,8 @@ export function ResultPanel({ job, onReset }: { readonly job: Job; readonly onRe
     try {
       await navigator.clipboard.writeText(absoluteUrl(path));
       setCopiedFile(path);
-      setTimeout(() => setCopiedFile(undefined), 2000);
+      if (copiedFileTimer.current) clearTimeout(copiedFileTimer.current);
+      copiedFileTimer.current = setTimeout(() => setCopiedFile(undefined), 2000);
     } catch {}
   };
 

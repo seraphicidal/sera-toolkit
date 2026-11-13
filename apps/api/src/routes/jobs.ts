@@ -53,7 +53,8 @@ export function registerJobRoutes(app: FastifyInstance, engine: SeraEngine): voi
     '/api/jobs/:id',
     jobStatusRateLimit,
     async (request, reply) => {
-      const job = await engine.jobs.get(assertJobId(request.params.id));
+      const clientKey = request.canary ? undefined : request.clientKey;
+      const job = await engine.jobs.get(assertJobId(request.params.id), clientKey);
       if (!job) throw seraError('NOT_FOUND', { message: 'That download has expired.' });
       return reply.header('cache-control', 'no-store').send(job);
     },
@@ -64,54 +65,67 @@ export function registerJobRoutes(app: FastifyInstance, engine: SeraEngine): voi
     jobStatusRateLimit,
     async (request, reply) => {
       const id = assertJobId(request.params.id);
-      const deleted = await engine.jobs.delete(id);
+      const clientKey = request.canary ? undefined : request.clientKey;
+      const deleted = await engine.jobs.delete(id, clientKey);
       if (!deleted) throw seraError('NOT_FOUND', { message: 'That download has expired.' });
       return reply.status(200).send({ cancelled: deleted, deleted: true, id });
     },
   );
 
-  app.get<{ Params: { id: string } }>('/api/jobs/:id/events', async (request, reply) => {
-    const id = assertJobId(request.params.id);
-    const signal = clientAbortSignal(request, reply);
+  app.get<{ Params: { id: string } }>(
+    '/api/jobs/:id/events',
+    jobStatusRateLimit,
+    async (request, reply) => {
+      const id = assertJobId(request.params.id);
+      const clientKey = request.canary ? undefined : request.clientKey;
+      const existingJob = await engine.jobs.get(id, clientKey);
+      if (!existingJob) throw seraError('NOT_FOUND', { message: 'That download has expired.' });
 
-    const existingHeaders: Record<string, string | number | readonly string[]> = {};
-    for (const [key, value] of Object.entries(reply.getHeaders())) {
-      if (value !== undefined) existingHeaders[key] = value;
-    }
-    reply.raw.writeHead(200, {
-      ...existingHeaders,
-      'content-type': 'text/event-stream; charset=utf-8',
-      'cache-control': 'no-cache, no-transform',
-      connection: 'keep-alive',
-      'x-accel-buffering': 'no',
-      'x-content-type-options': 'nosniff',
-      'referrer-policy': 'no-referrer',
-      'x-frame-options': 'DENY',
-      'content-security-policy': "default-src 'none'; frame-ancestors 'none'",
-    });
-    reply.raw.write('retry: 3000\n\n');
+      const signal = clientAbortSignal(request, reply);
 
-    try {
-      for await (const event of engine.jobs.events(id, signal)) {
-        if (signal.aborted) break;
-        reply.raw.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+      const existingHeaders: Record<string, string | number | readonly string[]> = {};
+      for (const [key, value] of Object.entries(reply.getHeaders())) {
+        if (value !== undefined) existingHeaders[key] = value;
       }
-    } catch (error) {
-      const message =
-        error instanceof SeraError ? error.message : 'Something went wrong on our side.';
-      reply.raw.write(`event: error\ndata: ${JSON.stringify({ type: 'error', message })}\n\n`);
-    } finally {
-      reply.raw.end();
-      if (!reply.raw.destroyed) reply.raw.destroy();
-    }
-    return reply;
-  });
+      reply.raw.writeHead(200, {
+        ...existingHeaders,
+        'content-type': 'text/event-stream; charset=utf-8',
+        'cache-control': 'no-cache, no-transform',
+        connection: 'keep-alive',
+        'x-accel-buffering': 'no',
+        'x-content-type-options': 'nosniff',
+        'referrer-policy': 'no-referrer',
+        'x-frame-options': 'DENY',
+        'content-security-policy': "default-src 'none'; frame-ancestors 'none'",
+      });
+      reply.raw.write('retry: 3000\n\n');
+
+      try {
+        for await (const event of engine.jobs.events(id, signal, clientKey)) {
+          if (signal.aborted) break;
+          reply.raw.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+        }
+      } catch (error) {
+        const message =
+          error instanceof SeraError ? error.message : 'Something went wrong on our side.';
+        reply.raw.write(`event: error\ndata: ${JSON.stringify({ type: 'error', message })}\n\n`);
+      } finally {
+        reply.raw.end();
+        if (!reply.raw.destroyed) reply.raw.destroy();
+      }
+      return reply;
+    },
+  );
 
   app.route<{ Params: { id: string } }>({
     method: ['GET', 'HEAD'],
     url: '/api/jobs/:id/download',
+    ...jobStatusRateLimit,
     handler: async (request, reply) => {
       const id = assertJobId(request.params.id);
+      const clientKey = request.canary ? undefined : request.clientKey;
+      const job = await engine.jobs.get(id, clientKey);
+      if (!job) throw seraError('NOT_FOUND', { message: 'That download has expired.' });
       const manifest = await engine.workspaces.readManifest(id);
       if (!manifest) throw seraError('NOT_FOUND', { message: 'That download has expired.' });
       return sendFile(engine, request, reply, id, manifest.primary, !request.canary);
@@ -121,8 +135,12 @@ export function registerJobRoutes(app: FastifyInstance, engine: SeraEngine): voi
   app.route<{ Params: { id: string; name: string } }>({
     method: ['GET', 'HEAD'],
     url: '/api/jobs/:id/files/:name',
+    ...jobStatusRateLimit,
     handler: async (request, reply) => {
       const id = assertJobId(request.params.id);
+      const clientKey = request.canary ? undefined : request.clientKey;
+      const job = await engine.jobs.get(id, clientKey);
+      if (!job) throw seraError('NOT_FOUND', { message: 'That download has expired.' });
       const manifest = await engine.workspaces.readManifest(id);
       if (!manifest) throw seraError('NOT_FOUND', { message: 'That download has expired.' });
 

@@ -46,9 +46,6 @@ end
 local encoded = cjson.encode(current)
 redis.call('set', KEYS[1], encoded, 'EX', ARGV[2])
 redis.call('publish', ARGV[3], encoded)
-if current.state ~= 'queued' and current.state ~= 'resolving' and current.state ~= 'downloading' and current.state ~= 'merging' and current.state ~= 'converting' and current.state ~= 'packaging' and current.state ~= 'finalizing' then
-  redis.call('srem', KEYS[2] .. current.clientKey, current.id)
-end
 return encoded
 `;
 
@@ -125,9 +122,8 @@ export class RedisJobBackend implements JobBackend {
     const key = RECORD_PREFIX + id;
     const res = await this.connection.eval(
       PATCH_LUA,
-      2,
+      1,
       key,
-      CLIENT_PREFIX,
       JSON.stringify(patch),
       this.recordTtlSeconds,
       UPDATE_CHANNEL,
@@ -135,7 +131,11 @@ export class RedisJobBackend implements JobBackend {
     );
     if (typeof res !== 'string') return undefined;
     try {
-      return JSON.parse(res) as JobRecord;
+      const updated = JSON.parse(res) as JobRecord;
+      if (!isActive(updated.state)) {
+        await this.connection.srem(CLIENT_PREFIX + updated.clientKey, updated.id);
+      }
+      return updated;
     } catch {
       return undefined;
     }

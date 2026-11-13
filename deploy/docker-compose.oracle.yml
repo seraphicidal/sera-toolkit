@@ -13,6 +13,7 @@ services:
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
       - ./deploy/caddy.globals:/etc/caddy/globals:ro
+      - ./deploy/caddy.sites:/etc/caddy/sites:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:

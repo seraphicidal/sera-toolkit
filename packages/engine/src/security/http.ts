@@ -253,9 +253,20 @@ function hopHeaders(
   jar: Map<string, string>,
 ): Record<string, string> {
   const { cookie: _given, ...rest } = options.headers ?? {};
+  const crossOrigin = current.origin !== first.origin;
   const headers: Record<string, string> = { ...DEFAULT_HEADERS };
   for (const [key, value] of Object.entries(rest)) {
-    headers[key.toLowerCase()] = value;
+    const lower = key.toLowerCase();
+    if (
+      crossOrigin &&
+      (lower === 'authorization' ||
+        lower === 'proxy-authorization' ||
+        lower === 'x-api-key' ||
+        lower === 'cookie')
+    ) {
+      continue;
+    }
+    headers[lower] = value;
   }
   if (jar.size && current.hostname === first.hostname) {
     headers.cookie = [...jar].map(([name, value]) => `${name}=${value}`).join('; ');

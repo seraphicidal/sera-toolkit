@@ -2,7 +2,7 @@ import type { ProviderCapabilities } from '@sera/contracts/types';
 import { seraError } from '../errors.js';
 import type { ExtractionStrategy } from '../extract/strategy.js';
 import { ensureRecommendations } from '../normalize/plans.js';
-import { hostMatchesAny, urlExtension } from '../security/url.js';
+import { hostMatchesAny, parseUserUrl, urlExtension } from '../security/url.js';
 import { nonEmpty, truncate } from '../util/format.js';
 import { normalizeContainer } from './direct.js';
 import type { DownloadPlan, ProviderContext, ResolvedItem, ResolvedMedia } from './types.js';
@@ -116,8 +116,8 @@ export class MastodonProvider extends YtdlpProvider {
     }
     if (!status || typeof status !== 'object') return undefined;
 
-    const attachments = (status.media_attachments ?? []).filter(
-      (a) => typeof a?.url === 'string' && a.url.startsWith('https://') && canParseUrl(a.url),
+    const attachments = (status.media_attachments ?? []).filter((a) =>
+      isSafeAttachmentUrl(a?.url, context),
     );
     if (!attachments.length) return undefined;
 
@@ -126,7 +126,7 @@ export class MastodonProvider extends YtdlpProvider {
 
     const items: ResolvedItem[] = attachments
       .slice(0, context.config.maxItemsPerJob)
-      .map((attachment, index) => toItem(attachment, index));
+      .map((attachment, index) => toItem(attachment, index, context));
 
     return {
       provider: this.id,
@@ -170,7 +170,11 @@ function kindFor(type: string | undefined): DownloadPlan['kind'] {
   return 'image';
 }
 
-function toItem(attachment: MastodonAttachment, index: number): ResolvedItem {
+function toItem(
+  attachment: MastodonAttachment,
+  index: number,
+  context: ProviderContext,
+): ResolvedItem {
   const kind = kindFor(attachment.type);
   const extension = urlExtension(new URL(attachment.url)) ?? '';
   const container = normalizeContainer('', extension);
@@ -224,7 +228,7 @@ function toItem(attachment: MastodonAttachment, index: number): ResolvedItem {
     index,
     kind,
     title: describe(attachment.description) ?? `Attachment ${index + 1}`,
-    ...(attachment.preview_url?.startsWith('https://') && canParseUrl(attachment.preview_url)
+    ...(isSafeAttachmentUrl(attachment.preview_url, context)
       ? { thumbnailUrl: attachment.preview_url }
       : {}),
     ...(width ? { width } : {}),
@@ -234,9 +238,14 @@ function toItem(attachment: MastodonAttachment, index: number): ResolvedItem {
   };
 }
 
-function canParseUrl(raw: string): boolean {
+function isSafeAttachmentUrl(raw: unknown, context: ProviderContext): raw is string {
+  if (typeof raw !== 'string') return false;
   try {
-    return Boolean(new URL(raw));
+    const { url } = parseUserUrl(raw, {
+      allowPrivateAddresses: context.config.allowPrivateAddresses,
+    });
+    if (url.protocol !== 'https:') return false;
+    return !hostMatchesAny(url.hostname, context.config.blockedHosts);
   } catch {
     return false;
   }

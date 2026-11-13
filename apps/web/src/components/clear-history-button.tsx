@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { clearHistory } from '@/lib/history';
 
 export function ClearHistoryButton({
@@ -11,11 +11,19 @@ export function ClearHistoryButton({
   readonly className?: string;
 }) {
   const [cleared, setCleared] = useState(false);
+  const resetTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  useEffect(() => {
+    return () => {
+      if (resetTimer.current) clearTimeout(resetTimer.current);
+    };
+  }, []);
 
   const handleClick = () => {
     clearHistory();
     setCleared(true);
-    setTimeout(() => setCleared(false), 2500);
+    if (resetTimer.current) clearTimeout(resetTimer.current);
+    resetTimer.current = setTimeout(() => setCleared(false), 2500);
   };
 
   return (

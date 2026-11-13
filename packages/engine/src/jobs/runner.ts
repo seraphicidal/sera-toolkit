@@ -26,13 +26,38 @@ import {
 } from '../providers/instagram-media.js';
 import type { DownloadPlan, ResolvedItem, ResolvedMedia } from '../providers/types.js';
 import { planKey } from '../providers/types.js';
-import { contradicts, sniffContainer, sniffTextImposter, SNIFF_BYTES } from '../util/sniff.js';
+import {
+  contradicts,
+  isExecutableHeader,
+  sniffContainer,
+  sniffTextImposter,
+  SNIFF_BYTES,
+} from '../util/sniff.js';
 import { hostMatchesAny } from '../security/url.js';
 import type { MediaResolver } from '../resolver.js';
 import type { RemoteExtraction } from '../extract/remote.js';
 import { mimeTypeFor, type Workspace, type WorkspaceManager } from '../storage/workspace.js';
 import { dedupeFilename, mediaFilename, sanitizeStem } from '../util/filename.js';
 import { createZip } from './zip.js';
+
+const MEDIA_IMAGE_EXTENSIONS = new Set([
+  'mp4',
+  'webm',
+  'mov',
+  'mkv',
+  'mp3',
+  'm4a',
+  'opus',
+  'wav',
+  'flac',
+  'ogg',
+  'jpg',
+  'jpeg',
+  'png',
+  'gif',
+  'webp',
+  'avif',
+]);
 
 export interface JobSelection {
   readonly itemIndex: number;
@@ -702,6 +727,9 @@ export class JobRunner {
 
     await rm(scratch, { recursive: true, force: true });
     await mkdir(scratch, { recursive: true });
+    if (args.rawInfoJson && loadInfoJsonPath) {
+      await writeFile(loadInfoJsonPath, args.rawInfoJson, 'utf8');
+    }
     sawPostprocessor = undefined;
     await download();
     const full = await findSingleFile(scratch);
@@ -760,6 +788,7 @@ export class JobRunner {
           dispatcher: this.deps.resolver.dispatcher,
           maxBytes: 10 * 1024 * 1024,
           timeoutMs: 30_000,
+          allowUrl: (url: URL) => !hostMatchesAny(url.hostname, config.blockedHosts),
           ...(args.signal ? { signal: args.signal } : {}),
         });
         coverPath = join(dir, 'cover.jpg');
@@ -1015,12 +1044,19 @@ export class JobRunner {
 
       const extension = file.name.split('.').pop()?.toLowerCase() ?? '';
       if (extension !== 'srt' && extension !== 'vtt') {
-        const imposter = sniffTextImposter(await headOf(file.path));
+        const head = await headOf(file.path);
+        const imposter = sniffTextImposter(head);
         if (imposter) {
           throw seraError('MEDIA_UNAVAILABLE', {
             message: 'The source returned a page instead of the media.',
             hint: 'The post may have become private, or the site may be asking for a login.',
             detail: `${file.name} is ${imposter}, not media`,
+          });
+        }
+        if (MEDIA_IMAGE_EXTENSIONS.has(extension) && isExecutableHeader(head)) {
+          throw seraError('MEDIA_UNAVAILABLE', {
+            message: 'The source returned an unexpected file type instead of media.',
+            detail: `${file.name} has an executable header`,
           });
         }
       }
@@ -1050,6 +1086,13 @@ export class JobRunner {
     }
     if (result.sizeBytes <= 0) {
       throw seraError('CONVERSION_FAILED', { detail: 'result has no bytes' });
+    }
+    if (result.sizeBytes >= config.maxFilesizeBytes) {
+      throw seraError('TOO_LARGE', {
+        message: 'The output exceeds the maximum allowed size.',
+        hint: 'Try a lower quality or fewer items.',
+        detail: `${result.sizeBytes} total bytes`,
+      });
     }
   }
 }

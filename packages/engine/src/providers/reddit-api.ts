@@ -55,6 +55,7 @@ export class RedditTokenSource {
           'user-agent': this.credentials.userAgent,
         },
         body: 'grant_type=client_credentials',
+        redirect: 'manual',
         signal: AbortSignal.timeout(15_000),
       });
     } catch (error) {
@@ -157,6 +158,7 @@ export async function fetchPost(
     try {
       return await fetchImpl(`https://oauth.reddit.com/comments/${postId}?raw_json=1&limit=1`, {
         headers: { authorization: `Bearer ${token}`, 'user-agent': credentials.userAgent },
+        redirect: 'manual',
         signal: AbortSignal.timeout(15_000),
       });
     } catch (error) {

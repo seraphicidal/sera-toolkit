@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { contradicts, sniffContainer, SNIFF_BYTES } from './sniff.js';
+import { contradicts, isExecutableHeader, sniffContainer, SNIFF_BYTES } from './sniff.js';
 
 function header(...parts: (string | number[])[]): Uint8Array {
   const bytes: number[] = [];
@@ -73,5 +73,20 @@ describe('contradicts', () => {
     expect(contradicts('mkv', 'webm')).toBe(false);
     expect(contradicts('apk', 'zip')).toBe(false);
     expect(contradicts('epub', 'zip')).toBe(false);
+  });
+});
+
+describe('isExecutableHeader', () => {
+  it('flags MZ, ELF, and Mach-O binary headers', () => {
+    expect(isExecutableHeader(header('MZ', [0x90, 0x00]))).toBe(true);
+    expect(isExecutableHeader(header([0x7f], 'ELF'))).toBe(true);
+    expect(isExecutableHeader(header([0xcf, 0xfa, 0xed, 0xfe]))).toBe(true);
+    expect(isExecutableHeader(header([0xca, 0xfe, 0xba, 0xbe]))).toBe(true);
+  });
+
+  it('allows media containers and short headers', () => {
+    expect(isExecutableHeader(header([0x00, 0x00, 0x00, 0x20], 'ftypisom'))).toBe(false);
+    expect(isExecutableHeader(header([0x89], 'PNG', [0x0d, 0x0a]))).toBe(false);
+    expect(isExecutableHeader(new Uint8Array([0x4d, 0x5a]))).toBe(false);
   });
 });

@@ -43,6 +43,7 @@ import { EgressGuard } from './security/egress.js';
 import { createSafeDispatcher, header, safeFetch, safeOpen } from './security/http.js';
 import { hostMatchesAny, normalizeUrl, parseUserUrl } from './security/url.js';
 import { TtlCache } from './util/cache.js';
+import { InFlightCoalescer } from './util/coalesce.js';
 import { readToken, signToken, verifyToken } from './util/tokens.js';
 
 interface OptionTokenPayload {
@@ -115,7 +116,7 @@ export class MediaResolver {
 
   private readonly probeImpl: NonNullable<ResolverDependencies['probe']>;
   private readonly cache = new TtlCache<ExtractionOutcome>(200, 5 * 60_000);
-  private readonly inFlightResolves = new Map<string, Promise<ExtractionOutcome>>();
+  private readonly inFlightResolves = new InFlightCoalescer<ExtractionOutcome>();
 
   constructor(deps: ResolverDependencies) {
     this.config = deps.config;
@@ -485,12 +486,10 @@ export class MediaResolver {
     const cached = this.cache.get(cacheKey);
     if (cached) return cached;
 
-    const inFlight = this.inFlightResolves.get(cacheKey);
-    if (inFlight) return inFlight;
-
-    const promise = (async () => {
-      try {
-        const outcome = await this.router.resolve(canonical, providerId, signal);
+    return await this.inFlightResolves.run(
+      cacheKey,
+      async (coalescedSignal) => {
+        const outcome = await this.router.resolve(canonical, providerId, coalescedSignal);
         const media: ResolvedMedia = {
           ...outcome.media,
           ...(outcome.remote ? { remoteBackend: outcome.backend } : { remoteBackend: undefined }),
@@ -503,13 +502,9 @@ export class MediaResolver {
           this.cache.set(`${providerId}|${media.url}`, withMedia);
         }
         return withMedia;
-      } finally {
-        this.inFlightResolves.delete(cacheKey);
-      }
-    })();
-
-    this.inFlightResolves.set(cacheKey, promise);
-    return promise;
+      },
+      signal,
+    );
   }
 
   getCached(providerId: string, url: string): ExtractionOutcome | undefined {

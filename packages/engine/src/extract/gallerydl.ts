@@ -10,7 +10,7 @@ import type {
   ResolvedItem,
   ResolvedMedia,
 } from '../providers/types.js';
-import { parseUserUrl, urlExtension } from '../security/url.js';
+import { hostMatchesAny, parseUserUrl, urlExtension } from '../security/url.js';
 import { truncate } from '../util/format.js';
 import { run } from '../util/spawn.js';
 
@@ -33,6 +33,7 @@ export interface GalleryDlEntry {
 export function parseGalleryDlJson(
   stdout: string,
   allowPrivateAddresses = false,
+  blockedHosts: readonly string[] = [],
 ): { title?: string; author?: string; entries: GalleryDlEntry[] } {
   let parsed: unknown;
   try {
@@ -54,6 +55,7 @@ export function parseGalleryDlJson(
     } catch {
       return;
     }
+    if (hostMatchesAny(validUrl.hostname, blockedHosts)) return;
     const normalized = validUrl.toString();
     if (seen.has(normalized)) return;
     seen.add(normalized);
@@ -165,7 +167,11 @@ export async function extractWithGalleryDl(
     throw seraError('UNSUPPORTED_SOURCE', { detail: 'gallery-dl execution failed', cause: error });
   }
 
-  const parsed = parseGalleryDlJson(stdout, context.config.allowPrivateAddresses);
+  const parsed = parseGalleryDlJson(
+    stdout,
+    context.config.allowPrivateAddresses,
+    context.config.blockedHosts,
+  );
   const selected = parsed.entries.slice(0, context.config.maxItemsPerJob);
   if (!selected.length) {
     throw seraError('UNSUPPORTED_SOURCE', {

@@ -58,6 +58,20 @@ const EQUIVALENT: readonly ReadonlySet<string>[] = [
   new Set(['zip', 'apk', 'epub']),
 ];
 
+export function isExecutableHeader(head: Uint8Array): boolean {
+  if (head.length < 4) return false;
+  if (head[0] === 0x4d && head[1] === 0x5a) return true;
+  if (head[0] === 0x7f && head[1] === 0x45 && head[2] === 0x4c && head[3] === 0x46) return true;
+  const b0 = head[0];
+  const b1 = head[1];
+  const b2 = head[2];
+  const b3 = head[3];
+  const isMachOBe = b0 === 0xfe && b1 === 0xed && b2 === 0xfa && (b3 === 0xce || b3 === 0xcf);
+  const isMachOLe = (b0 === 0xce || b0 === 0xcf) && b1 === 0xfa && b2 === 0xed && b3 === 0xfe;
+  const isFatMachO = b0 === 0xca && b1 === 0xfe && b2 === 0xba && b3 === 0xbe;
+  return isMachOBe || isMachOLe || isFatMachO;
+}
+
 export function contradicts(claimed: string, sniffed: string): boolean {
   if (claimed === sniffed) return false;
   return !EQUIVALENT.some((group) => group.has(claimed) && group.has(sniffed));

@@ -82,6 +82,7 @@ if [ ! -f .env ]; then
   DOMAIN="${SERA_DOMAIN:-${PUBLIC_IP//./-}.sslip.io}"
 
   SECRET="$(openssl rand -hex 32)"
+  REDIS_PASSWORD="$(openssl rand -hex 24)"
 
   CORES="$(nproc 2>/dev/null || echo 1)"
   CONCURRENCY="${SERA_WORKER_CONCURRENCY:-$CORES}"
@@ -89,6 +90,7 @@ if [ ! -f .env ]; then
 
   cat > .env <<EOF
 SERA_SECRET=${SECRET}
+SERA_REDIS_PASSWORD=${REDIS_PASSWORD}
 SERA_DOMAIN=${DOMAIN}
 
 SERA_RETENTION_SECONDS=1800

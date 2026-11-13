@@ -5,15 +5,24 @@ import { createSafeDispatcher, safeFetch } from './http.js';
 
 let server: Server;
 let port: number;
-const seen: { path: string; host: string; cookie?: string }[] = [];
+const seen: {
+  path: string;
+  host: string;
+  cookie?: string;
+  authorization?: string;
+  xApiKey?: string;
+}[] = [];
 
 beforeAll(async () => {
   server = createServer((request: IncomingMessage, response) => {
     const path = request.url ?? '/';
+    const xApiKeyHeader = request.headers['x-api-key'];
     seen.push({
       path,
       host: request.headers.host ?? '',
       ...(request.headers.cookie ? { cookie: request.headers.cookie } : {}),
+      ...(request.headers.authorization ? { authorization: request.headers.authorization } : {}),
+      ...(typeof xApiKeyHeader === 'string' ? { xApiKey: xApiKeyHeader } : {}),
     });
     if (path === '/check') {
       if (!request.headers.cookie?.includes('mid=')) {
@@ -102,5 +111,21 @@ describe('keepCookies', () => {
     const backHop = seen.find((hop) => hop.path === '/back');
     expect(backHop).toBeDefined();
     expect(backHop?.cookie).toBeUndefined();
+  });
+
+  it('strips authorization and api-key headers when redirecting cross-origin', async () => {
+    seen.length = 0;
+    await safeFetch(new URL(`http://127.0.0.1:${String(port)}/away`), {
+      dispatcher,
+      headers: {
+        authorization: 'Bearer super-secret',
+        'x-api-key': 'secret-key',
+      },
+    });
+    expect(seen.map((hop) => hop.path)).toEqual(['/away', '/landed']);
+    expect(seen[0]!.authorization).toBe('Bearer super-secret');
+    expect(seen[0]!.xApiKey).toBe('secret-key');
+    expect(seen[1]!.authorization).toBeUndefined();
+    expect(seen[1]!.xApiKey).toBeUndefined();
   });
 });

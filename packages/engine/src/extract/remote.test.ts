@@ -434,6 +434,27 @@ describe('a node that goes silent on a task it claimed', () => {
     await expect(dispatched).rejects.toMatchObject({ code: 'CANCELLED' });
     expect(await nodes.claim('phone', ['youtube'], 1, 100)).toBeUndefined();
   });
+
+  it('tombstones timed-out task IDs and avoids the silent node when another healthy node exists', async () => {
+    const nodes = leased();
+    const dispatched = nodes.dispatch({ kind: 'resolve', url: media.url, providerId: 'youtube' });
+    nodes.register('desktop', ['youtube'], 1);
+
+    const first = await nodes.claim('laptop', ['youtube'], 1, 200);
+    expect(first).toBeDefined();
+    await wait(250);
+
+    expect(nodes.isCancelled(first!.id)).toBe(true);
+    expect(await nodes.claim('laptop', ['youtube'], 1, 50)).toBeUndefined();
+
+    const second = await nodes.claim('desktop', ['youtube'], 1, 100);
+    expect(second).toBeDefined();
+    expect(second!.id).not.toBe(first!.id);
+    expect(second!.avoid).toContain('laptop');
+
+    expect(nodes.completeResolve(second!.id, media)).toBe(true);
+    await expect(dispatched).resolves.toMatchObject({ title: 'A video' });
+  });
 });
 
 describe('remoteBackend', () => {

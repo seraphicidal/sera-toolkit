@@ -34,7 +34,10 @@ const PROGRESS_THROTTLE_MS = 250;
 
 export class JobService {
   private readonly runner: JobRunner;
-  private readonly inFlight = new Map<string, AbortController>();
+  private readonly inFlight = new Map<
+    string,
+    { controller: AbortController; done: Promise<void> }
+  >();
 
   constructor(private readonly deps: JobServiceDependencies) {
     this.runner =
@@ -175,42 +178,58 @@ export class JobService {
     return toPublicJob(record);
   }
 
-  async get(id: string): Promise<Job | undefined> {
+  async get(id: string, clientKey?: string): Promise<Job | undefined> {
     const record = await this.deps.backend.get(id);
-    return record ? toPublicJob(record) : undefined;
+    if (!record) return undefined;
+    if (clientKey && record.clientKey !== clientKey) return undefined;
+    return toPublicJob(record);
   }
 
-  async cancel(id: string): Promise<boolean> {
-    const record = await this.deps.backend.get(id);
-    if (!record || isTerminalJobState(record.state)) return false;
-
-    this.inFlight.get(id)?.abort();
+  private async abortAndWait(id: string): Promise<void> {
+    const active = this.inFlight.get(id);
+    active?.controller.abort();
     await this.deps.backend.patch(id, {
       state: 'cancelled',
       step: 'Cancelled',
       error: seraError('CANCELLED').toJobError(),
     });
+    if (!active) return;
+    await Promise.race([
+      active.done,
+      new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, 2_000);
+        timer.unref();
+      }),
+    ]);
+  }
+
+  async cancel(id: string, clientKey?: string): Promise<boolean> {
+    const record = await this.deps.backend.get(id);
+    if (
+      !record ||
+      (clientKey && record.clientKey !== clientKey) ||
+      isTerminalJobState(record.state)
+    ) {
+      return false;
+    }
+
+    await this.abortAndWait(id);
     await this.deps.workspaces.destroy(id);
     return true;
   }
 
-  async delete(id: string): Promise<boolean> {
+  async delete(id: string, clientKey?: string): Promise<boolean> {
     const record = await this.deps.backend.get(id);
-    if (!record) return false;
+    if (!record || (clientKey && record.clientKey !== clientKey)) return false;
 
     if (!isTerminalJobState(record.state)) {
-      this.inFlight.get(id)?.abort();
-      await this.deps.backend.patch(id, {
-        state: 'cancelled',
-        step: 'Cancelled',
-        error: seraError('CANCELLED').toJobError(),
-      });
+      await this.abortAndWait(id);
     }
     await this.deps.workspaces.destroy(id);
     return true;
   }
 
-  async *events(id: string, signal?: AbortSignal): AsyncGenerator<JobEvent> {
+  async *events(id: string, signal?: AbortSignal, clientKey?: string): AsyncGenerator<JobEvent> {
     const queue: JobEvent[] = [];
     let notify: (() => void) | undefined;
     const push = (event: JobEvent): void => {
@@ -219,6 +238,7 @@ export class JobService {
     };
 
     const unsubscribe = this.deps.backend.subscribe(id, (updated) => {
+      if (clientKey && updated.clientKey !== clientKey) return;
       const job = toPublicJob(updated);
       push({ type: eventTypeFor(job), job });
     });
@@ -227,7 +247,9 @@ export class JobService {
 
     try {
       const record = await this.deps.backend.get(id);
-      if (!record) throw seraError('NOT_FOUND', { message: 'That download has expired.' });
+      if (!record || (clientKey && record.clientKey !== clientKey)) {
+        throw seraError('NOT_FOUND', { message: 'That download has expired.' });
+      }
 
       const initial = toPublicJob(record);
       yield { type: eventTypeFor(initial), job: initial };
@@ -241,11 +263,16 @@ export class JobService {
         }
         if (signal?.aborted) return;
 
-        await new Promise<void>((resolve) => {
-          notify = resolve;
-          const timer = setTimeout(resolve, 15_000);
-          timer.unref();
-        });
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await new Promise<void>((resolve) => {
+            notify = resolve;
+            timer = setTimeout(resolve, 15_000);
+            timer.unref();
+          });
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
         notify = undefined;
         if (!queue.length && !signal?.aborted) yield { type: 'ping' };
       }
@@ -275,7 +302,11 @@ export class JobService {
     const cancelController = new AbortController();
     const timeoutController = new AbortController();
     const combinedSignal = AbortSignal.any([cancelController.signal, timeoutController.signal]);
-    this.inFlight.set(record.id, cancelController);
+    let markDone!: () => void;
+    const done = new Promise<void>((resolve) => {
+      markDone = resolve;
+    });
+    this.inFlight.set(record.id, { controller: cancelController, done });
 
     const unwatch = backend.subscribe(record.id, (updated) => {
       if (updated.state === 'cancelled') cancelController.abort();
@@ -371,6 +402,7 @@ export class JobService {
       clearTimeout(timeout);
       unwatch();
       this.inFlight.delete(record.id);
+      markDone();
     }
   }
 }

@@ -1,6 +1,6 @@
 'use client';
 
-import { memo, useMemo, useState, type MouseEvent } from 'react';
+import { memo, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import type { MediaInfo, MediaItem } from '@sera/contracts/types';
 import { AudioIcon, CheckIcon, CloseIcon, GifIcon, ImageIcon, VideoIcon } from './icons';
 import { cx, formatDuration, KIND_LABELS, pluralize } from '@/lib/format';
@@ -219,9 +219,16 @@ const ItemTile = memo(function ItemTile({
 }) {
   const [retries, setRetries] = useState(0);
   const [thumbnailFailed, setThumbnailFailed] = useState(false);
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const Icon = KIND_ICON[item.kind];
   const showThumbnail = Boolean(item.thumbnail) && !thumbnailFailed;
   const displayTitle = item.title ?? KIND_LABELS[item.kind === 'unknown' ? 'video' : item.kind];
+
+  useEffect(() => {
+    return () => {
+      if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+    };
+  }, []);
 
   return (
     <label
@@ -260,7 +267,11 @@ const ItemTile = memo(function ItemTile({
             decoding="async"
             onError={() => {
               if (retries < 2) {
-                setTimeout(() => setRetries((r) => r + 1), 1000 * (retries + 1));
+                if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+                retryTimerRef.current = setTimeout(
+                  () => setRetries((r) => r + 1),
+                  1000 * (retries + 1),
+                );
               } else {
                 setThumbnailFailed(true);
               }
