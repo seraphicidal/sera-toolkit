@@ -207,7 +207,7 @@ jobs:
           echo "ytdlp=$(node -p "require('./scripts/tools.manifest.json').ytdlp.version")" >> "$GITHUB_OUTPUT"
 
       - name: Build API image (amd64, for verification)
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
           context: .
           file: docker/api.Dockerfile
@@ -267,7 +267,7 @@ jobs:
           docker network rm sera-ci >/dev/null
 
       - name: Build web image (amd64, build check)
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
           context: .
           file: docker/web.Dockerfile
@@ -313,7 +313,7 @@ jobs:
 
       - name: Publish API image
         if: env.PUSH == 'true'
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
           context: .
           file: docker/api.Dockerfile
@@ -327,7 +327,7 @@ jobs:
 
       - name: Publish web image
         if: env.PUSH == 'true'
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
           context: .
           file: docker/web.Dockerfile
