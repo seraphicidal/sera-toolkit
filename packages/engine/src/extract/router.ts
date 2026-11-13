@@ -106,9 +106,16 @@ export class ExtractionRouter {
     signal?: AbortSignal,
   ): Promise<{ media: ResolvedMedia; rawInfoJson?: string } | undefined> {
     if (!this.deps.lastResort || isDefinitive(failure)) return undefined;
-    const res = await this.deps.lastResort(url, providerId, signal).catch(() => undefined);
-    if (!res) return undefined;
-    return 'media' in res ? { media: res.media, rawInfoJson: res.rawInfoJson } : { media: res };
+    try {
+      const res = await this.deps.lastResort(url, providerId, signal);
+      if (!res) return undefined;
+      return 'media' in res ? { media: res.media, rawInfoJson: res.rawInfoJson } : { media: res };
+    } catch (error) {
+      if (signal?.aborted || SeraError.from(error).code === 'CANCELLED') {
+        throw SeraError.from(error);
+      }
+      return undefined;
+    }
   }
 
   private async withAccount(
@@ -245,7 +252,7 @@ export class ExtractionRouter {
             },
             'extraction failed with no useful alternative',
           );
-          throw SeraError.from(firstError ?? error);
+          throw SeraError.from(isDefinitive(failure) ? error : (firstError ?? error));
         }
 
         logger.warn(

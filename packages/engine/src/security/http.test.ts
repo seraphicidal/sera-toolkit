@@ -139,4 +139,17 @@ describe('keepCookies', () => {
     ).rejects.toMatchObject({ code: 'BLOCKED_ADDRESS' });
     expect(seen.map((hop) => hop.path)).toEqual(['/away']);
   });
+
+  it('rejects non-standard ports when private addresses are disallowed', async () => {
+    const strictDispatcher = createSafeDispatcher();
+    try {
+      await expect(
+        safeFetch(new URL('http://93.184.216.34:8080/'), {
+          dispatcher: strictDispatcher,
+        }),
+      ).rejects.toMatchObject({ code: 'BLOCKED_ADDRESS' });
+    } finally {
+      await strictDispatcher.close();
+    }
+  });
 });

@@ -1,7 +1,7 @@
 import { seraError } from '../errors.js';
 import { ensureRecommendations } from '../normalize/plans.js';
 import { hostMatchesAny, urlExtension } from '../security/url.js';
-import { nonEmpty, truncate } from '../util/format.js';
+import { decodeHtmlEntities, nonEmpty, truncate } from '../util/format.js';
 import { normalizeContainer } from './direct.js';
 import type { DownloadPlan, ResolvedItem, ResolvedMedia } from './types.js';
 
@@ -38,21 +38,7 @@ export function embedUrlFor(ref: ThreadsPostRef): URL {
 }
 
 function decodeEntities(value: string): string {
-  return value
-    .replace(/&#x([0-9a-f]+);/gi, (match, hex: string) => {
-      const cp = parseInt(hex, 16);
-      return Number.isInteger(cp) && cp >= 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : match;
-    })
-    .replace(/&#(\d+);/g, (match, dec: string) => {
-      const cp = Number(dec);
-      return Number.isInteger(cp) && cp >= 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : match;
-    })
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&');
+  return decodeHtmlEntities(value);
 }
 
 function mediaUrl(raw: string | undefined): string | undefined {

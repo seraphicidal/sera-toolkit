@@ -566,6 +566,26 @@ describe('X GIF post', () => {
       new TwitterProvider().resolve(new URL('https://t.co/offsite123'), context),
     ).rejects.toMatchObject({ code: 'UNSUPPORTED_SOURCE' });
   });
+
+  it('rejects a t.co link pointing to a non-standard port', async () => {
+    let opened = false;
+    const context: ProviderContext = {
+      ...contextFor(gifPost),
+      open: () => {
+        opened = true;
+        return Promise.resolve({
+          status: 301,
+          headers: { location: 'https://x.com:8443/someone/status/1' },
+          url: 'https://t.co/port123',
+          body: { destroy: () => undefined },
+        } as unknown as Awaited<ReturnType<NonNullable<ProviderContext['open']>>>);
+      },
+    };
+    await expect(
+      new TwitterProvider().resolve(new URL('https://t.co/port123'), context),
+    ).rejects.toMatchObject({ code: 'BLOCKED_ADDRESS' });
+    expect(opened).toBe(true);
+  });
 });
 
 describe('SoundCloud track', () => {

@@ -1,4 +1,5 @@
 import type { ContainerFormat, ProviderCapabilities } from '@sera/contracts/types';
+import { fetch as undiciFetch, ProxyAgent, type Dispatcher } from 'undici';
 import { declare } from './capabilities.js';
 import { seraError } from '../errors.js';
 import { ensureRecommendations } from '../normalize/plans.js';
@@ -23,6 +24,7 @@ export class RedditProvider extends YtdlpProvider {
   override readonly priority = 20;
 
   private tokens: RedditTokenSource | undefined;
+  private tokenCredsKey: string | undefined;
 
   override readonly capabilities: ProviderCapabilities = declare({
     image: true,
@@ -93,8 +95,30 @@ export class RedditProvider extends YtdlpProvider {
       });
     }
 
-    this.tokens ??= new RedditTokenSource(credentials, context.logger);
-    const post = await fetchPost(postId, this.tokens, credentials);
+    const credsKey = `${credentials.clientId}:${credentials.clientSecret}`;
+    if (!this.tokens || this.tokenCredsKey !== credsKey) {
+      this.tokens = new RedditTokenSource(credentials, context.logger);
+      this.tokenCredsKey = credsKey;
+    }
+
+    const upstream = context.config.proxyFor(this.id);
+    const proxy = context.egressProxy ? await context.egressProxy(url, upstream) : upstream;
+    const proxyAgent = proxy ? new ProxyAgent(proxy) : undefined;
+    const dispatcher: Dispatcher | undefined = proxyAgent ?? context.dispatcher;
+    const redditFetch: typeof fetch | undefined = dispatcher
+      ? (input, init) =>
+          undiciFetch(input as Parameters<typeof undiciFetch>[0], {
+            ...(init as Parameters<typeof undiciFetch>[1]),
+            dispatcher,
+          }) as unknown as Promise<Response>
+      : undefined;
+
+    let post: RedditPost;
+    try {
+      post = await fetchPost(postId, this.tokens, credentials, redditFetch, context.signal);
+    } finally {
+      if (proxyAgent) await proxyAgent.close().catch(() => undefined);
+    }
 
     const source = post.crosspost_parent_list?.[0] ?? post;
     const items = itemsFrom(source, context.config.maxItemsPerJob);

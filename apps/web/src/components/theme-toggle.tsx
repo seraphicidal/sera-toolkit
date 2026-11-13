@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { MonitorIcon, MoonIcon, SunIcon } from './icons';
-import { cx } from '@/lib/format';
+import { cx, stepRadio } from '@/lib/format';
 
 export type ThemePreference = 'system' | 'light' | 'dark';
 
@@ -81,24 +81,18 @@ export function ThemeToggle() {
             type="button"
             role="radio"
             aria-checked={selected}
-            tabIndex={selected ? 0 : -1}
+            tabIndex={selected || (!ready && value === 'system') ? 0 : -1}
             aria-label={label}
             title={label}
             onClick={() => choose(value)}
-            onKeyDown={(event) => {
-              let offset = 0;
-              if (event.key === 'ArrowRight' || event.key === 'ArrowDown') offset = 1;
-              else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') offset = -1;
-              if (!offset) return;
-              event.preventDefault();
-              const nextIndex = (index + offset + OPTIONS.length) % OPTIONS.length;
-              const nextOption = OPTIONS[nextIndex];
-              if (!nextOption) return;
-              choose(nextOption.value);
-              event.currentTarget.parentElement
-                ?.querySelectorAll<HTMLButtonElement>('[role="radio"]')
-                [nextIndex]?.focus();
-            }}
+            onKeyDown={(event) =>
+              stepRadio(
+                event,
+                OPTIONS.map((option) => option.value),
+                index,
+                choose,
+              )
+            }
             className={cx(
               'grid size-7 cursor-pointer place-items-center rounded-full transition-colors duration-150',
               selected

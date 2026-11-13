@@ -1,4 +1,5 @@
 import { readdir } from 'node:fs/promises';
+import { join } from 'node:path';
 import { seraError, SeraError } from '../errors.js';
 import { confineToHttp } from '../security/egress.js';
 import { run } from '../util/spawn.js';
@@ -356,7 +357,7 @@ export async function downloadSubtitles(request: SubtitleDownloadRequest): Promi
       detail: `no .${request.format} written for ${request.lang}`,
     });
   }
-  return `${request.workdir}/${written}`;
+  return join(request.workdir, written);
 }
 
 function sum(map: Map<string, number>): number {
@@ -502,7 +503,6 @@ export function classifyYtdlpFailure(stderr: string, exitCode: number): SeraErro
   if (
     has(
       'no video could be found',
-      'no video formats found',
       'there is no video in this post',
       'no media found',
       'unable to find any media',

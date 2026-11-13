@@ -7,6 +7,7 @@ import {
   formatEta,
   formatSpeed,
   isRunning,
+  isSafeDownloadPath,
   optionBadges,
   PIPELINE_STEPS,
   pluralize,
@@ -129,5 +130,16 @@ describe('resolvePipelineStepIndex', () => {
     expect(resolvePipelineStepIndex('converting', 'Transcoding with FFmpeg')).toBe(2);
     expect(resolvePipelineStepIndex('packaging', 'Tagging metadata')).toBe(3);
     expect(resolvePipelineStepIndex('ready', 'Done')).toBe(4);
+  });
+});
+
+describe('isSafeDownloadPath', () => {
+  it('accepts relative API download paths and rejects external or script URLs', () => {
+    expect(isSafeDownloadPath('/api/jobs/abc123/file')).toBe(true);
+    expect(isSafeDownloadPath('//evil.example/file')).toBe(false);
+    expect(isSafeDownloadPath('/\\evil.example/file')).toBe(false);
+    expect(isSafeDownloadPath('https://evil.example/file')).toBe(false);
+    expect(isSafeDownloadPath('javascript:alert(1)')).toBe(false);
+    expect(isSafeDownloadPath('')).toBe(false);
   });
 });

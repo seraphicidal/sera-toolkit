@@ -42,6 +42,8 @@ describe('sanitizeStem', () => {
     expect(sanitizeStem('COM1')).toBe('media');
     expect(sanitizeStem('LPT9')).toBe('media');
     expect(sanitizeStem('NUL')).toBe('media');
+    expect(sanitizeStem('con.foo')).toBe('media');
+    expect(sanitizeStem('nul.tar.gz')).toBe('media');
   });
 
   it('never yields a leading dot or dash', () => {

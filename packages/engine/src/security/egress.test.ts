@@ -427,6 +427,9 @@ describe('confineToHttp', () => {
       expect(pick(confineToHttp('best'))).toBe('web');
       expect(pick(confineToHttp('web'))).toBe('web');
       expect(pick(confineToHttp('stream'))).toBe('');
+      expect(pick(confineToHttp('stream,web'))).toBe('web');
+      expect(confineToHttp('best, ,worst')).not.toContain(',()');
+      expect(confineToHttp('best, ,worst')).toContain(',');
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

@@ -1,4 +1,14 @@
-import { mkdir, open, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import {
+  copyFile,
+  mkdir,
+  open,
+  readdir,
+  rename,
+  rm,
+  stat,
+  unlink,
+  writeFile,
+} from 'node:fs/promises';
 import { basename, dirname, extname, join } from 'node:path';
 import type {
   JobProgress,
@@ -37,7 +47,12 @@ import { hostMatchesAny } from '../security/url.js';
 import type { MediaResolver } from '../resolver.js';
 import type { RemoteExtraction } from '../extract/remote.js';
 import { mimeTypeFor, type Workspace, type WorkspaceManager } from '../storage/workspace.js';
-import { dedupeFilename, mediaFilename, sanitizeStem } from '../util/filename.js';
+import {
+  assertSafeFilename,
+  dedupeFilename,
+  mediaFilename,
+  sanitizeStem,
+} from '../util/filename.js';
 import { createZip } from './zip.js';
 
 const MEDIA_IMAGE_EXTENSIONS = new Set([
@@ -197,9 +212,10 @@ export class JobRunner {
         );
 
         for (const file of files) {
-          const name = dedupeFilename(file.name, taken);
+          const safeName = assertSafeFilename(basename(file.name));
+          const name = dedupeFilename(safeName, taken);
           const destination = workspace.outputPath(name);
-          await rename(file.path, destination);
+          await moveFile(file.path, destination);
           produced.push({ path: destination, name });
         }
       } finally {
@@ -405,7 +421,7 @@ export class JobRunner {
             taken,
           );
           const destination = workspace.outputPath(name);
-          await rename(res.path, destination);
+          await moveFile(res.path, destination);
           produced.push({ path: destination, name });
         } else {
           if (res.used !== res.plan) {
@@ -416,24 +432,25 @@ export class JobRunner {
             taken,
           );
           const destination = workspace.outputPath(name);
-          await rename(res.finished, destination);
+          await moveFile(res.finished, destination);
           produced.push({ path: destination, name });
 
           if (res.subtitlePath) {
-            const subtitle = dedupeFilename(
-              subtitleName(
-                name.replace(/\.[^.]+$/, `.${spec.subtitles!.format}`),
-                spec.subtitles!.lang,
-              ),
-              taken,
-            );
+            const subExt = `.${spec.subtitles!.format}`;
+            const subBase = /\.[^.]+$/.test(name)
+              ? name.replace(/\.[^.]+$/, subExt)
+              : `${name}${subExt}`;
+            const subtitle = dedupeFilename(subtitleName(subBase, spec.subtitles!.lang), taken);
             const subtitleDestination = workspace.outputPath(subtitle);
-            await rename(res.subtitlePath, subtitleDestination);
+            await moveFile(res.subtitlePath, subtitleDestination);
             produced.push({ path: subtitleDestination, name: subtitle });
           }
         }
       }
     }
+
+    await workspace.clearScratch();
+    await this.validateProduced(produced, signal);
 
     const packaged = await this.package(spec, resolved, workspace, produced, report, signal);
     const backend = spec.imported ? 'visitor-browser' : (remoteBackend ?? 'local');
@@ -445,8 +462,7 @@ export class JobRunner {
       },
     };
 
-    await workspace.clearScratch();
-    await this.validate(produced, result);
+    this.validateResultSize(result);
 
     logger.info(
       {
@@ -595,6 +611,7 @@ export class JobRunner {
         ffprobePath: config.ffprobePath,
         timeoutMs: config.jobTimeoutSeconds * 1000,
         threads: config.ffmpegThreads,
+        maxOutputBytes: config.maxFilesizeBytes,
         ...(signal ? { signal } : {}),
       });
       await rm(fetched, { force: true });
@@ -605,6 +622,14 @@ export class JobRunner {
     let sawPostprocessor: string | undefined;
 
     const target = fetchPlan.target ?? args.resolved.url;
+    if (
+      fetchPlan.target &&
+      (this.deps.resolver as Partial<{ isBlocked: (target: string | URL) => boolean }>).isBlocked?.(
+        fetchPlan.target,
+      ) === true
+    ) {
+      throw seraError('UNSUPPORTED_SOURCE', { detail: 'This URL has been blocked' });
+    }
     const proxy = this.deps.resolver.egressProxy
       ? await this.deps.resolver.egressProxy(target, config.proxyFor(args.resolved.provider))
       : config.proxyFor(args.resolved.provider);
@@ -614,8 +639,9 @@ export class JobRunner {
       sections?: { start: number; end?: number; forceKeyframes: boolean },
       downloadSignal = signal,
       formatSelector = fetchPlan.selector,
-    ) =>
-      ytdlpDownload({
+    ) => {
+      sawPostprocessor = undefined;
+      return ytdlpDownload({
         binary: config.ytdlpPath,
         ffmpegPath: config.ffmpegPath,
         timeoutMs: config.jobTimeoutSeconds * 1000,
@@ -666,6 +692,7 @@ export class JobRunner {
           });
         },
       });
+    };
 
     const attemptFormat = async (
       formatSelector: string,
@@ -774,7 +801,6 @@ export class JobRunner {
     if (args.rawInfoJson && loadInfoJsonPath) {
       await writeFile(loadInfoJsonPath, args.rawInfoJson, 'utf8');
     }
-    sawPostprocessor = undefined;
     await download();
     const full = await findSingleFile(scratch);
     report({ state: 'converting', step: 'Trimming', progress: fileProgress(DOWNLOAD_SHARE) });
@@ -787,6 +813,7 @@ export class JobRunner {
       ffprobePath: config.ffprobePath,
       timeoutMs: config.jobTimeoutSeconds * 1000,
       threads: config.ffmpegThreads,
+      maxOutputBytes: config.maxFilesizeBytes,
       ...(signal ? { signal } : {}),
     });
     await rm(full, { force: true });
@@ -832,7 +859,9 @@ export class JobRunner {
           dispatcher: this.deps.resolver.dispatcher,
           maxBytes: 10 * 1024 * 1024,
           timeoutMs: 30_000,
-          allowUrl: (url: URL) => !hostMatchesAny(url.hostname, config.blockedHosts),
+          allowUrl: (url: URL) =>
+            !this.deps.resolver.isBlocked(url) &&
+            !hostMatchesAny(url.hostname, config.blockedHosts),
           ...(args.signal ? { signal: args.signal } : {}),
         });
         coverPath = join(dir, 'cover.jpg');
@@ -953,7 +982,8 @@ export class JobRunner {
     producedPath: string,
     totalFiles: number,
   ): string {
-    const extension = producedPath.split('.').pop() ?? plan.container;
+    const ext = extname(producedPath).slice(1).toLowerCase();
+    const extension = ext || plan.container;
     const suffix = spec.trim ? trimSuffix(spec.trim, item.duration) : '';
     if (spec.filename && totalFiles === 1) {
       return `${sanitizeStem(spec.filename)}${suffix}.${extension}`;
@@ -1019,24 +1049,35 @@ export class JobRunner {
       progress: { percent: 99, totalFiles: produced.length },
     });
 
-    const archiveName = `${sanitizeStem(
-      spec.filename ?? [resolved.author, resolved.title].filter(Boolean).join(' - '),
-      'media',
-    )}.zip`;
+    const takenArchiveNames = new Set(produced.map((file) => file.name.toLowerCase()));
+    const archiveName = dedupeFilename(
+      `${sanitizeStem(
+        spec.filename ?? [resolved.author, resolved.title].filter(Boolean).join(' - '),
+        'media',
+      )}.zip`,
+      takenArchiveNames,
+    );
     const archivePath = workspace.outputPath(archiveName);
+    const stagingArchivePath = `${archivePath}.tmp`;
 
-    const { sizeBytes } = await createZip({
-      entries: produced.map((file) => ({ path: file.path, name: file.name })),
-      destination: archivePath,
-      ...(signal ? { signal } : {}),
-      onProgress: (percent, currentFile, totalFiles) => {
-        report({
-          state: 'packaging',
-          step: `Packaging ${currentFile} of ${totalFiles}`,
-          progress: { percent: 99, currentFile, totalFiles },
-        });
-      },
-    });
+    let sizeBytes: number;
+    try {
+      ({ sizeBytes } = await createZip({
+        entries: produced.map((file) => ({ path: file.path, name: file.name })),
+        destination: stagingArchivePath,
+        ...(signal ? { signal } : {}),
+        onProgress: (percent, currentFile, totalFiles) => {
+          report({
+            state: 'packaging',
+            step: `Packaging ${currentFile} of ${totalFiles}`,
+            progress: { percent: 99, currentFile, totalFiles },
+          });
+        },
+      }));
+      await rename(stagingArchivePath, archivePath);
+    } finally {
+      await unlink(stagingArchivePath).catch(() => undefined);
+    }
 
     await workspace.writeManifest({
       jobId: spec.jobId,
@@ -1065,9 +1106,9 @@ export class JobRunner {
     };
   }
 
-  private async validate(
+  private async validateProduced(
     produced: readonly { path: string; name: string }[],
-    result: JobResult,
+    signal?: AbortSignal,
   ): Promise<void> {
     const { config } = this.deps;
     for (const file of produced) {
@@ -1078,7 +1119,7 @@ export class JobRunner {
           detail: `empty output: ${file.name}`,
         });
       }
-      if (info.size >= config.maxFilesizeBytes) {
+      if (info.size > config.maxFilesizeBytes) {
         throw seraError('TOO_LARGE', {
           message: 'The converted file is larger than this server allows.',
           hint: 'Try a lower quality.',
@@ -1113,7 +1154,11 @@ export class JobRunner {
           ffmpegPath: config.ffmpegPath,
           ffprobePath: config.ffprobePath,
           timeoutMs: 30_000,
+          ...(signal ? { signal } : {}),
         }).catch(() => undefined);
+        if (signal?.aborted) {
+          throw seraError('CANCELLED');
+        }
         if (probed?.durationSeconds !== undefined && probed.durationSeconds <= 0) {
           throw seraError('CONVERSION_FAILED', {
             message: 'The download finished but the file has no playable content.',
@@ -1128,10 +1173,14 @@ export class JobRunner {
         }
       }
     }
+  }
+
+  private validateResultSize(result: JobResult): void {
+    const { config } = this.deps;
     if (result.sizeBytes <= 0) {
       throw seraError('CONVERSION_FAILED', { detail: 'result has no bytes' });
     }
-    if (result.sizeBytes >= config.maxFilesizeBytes) {
+    if (result.sizeBytes > config.maxFilesizeBytes) {
       throw seraError('TOO_LARGE', {
         message: 'The output exceeds the maximum allowed size.',
         hint: 'Try a lower quality or fewer items.',
@@ -1241,8 +1290,24 @@ function assertSubtitlesOffered(item: ResolvedItem, subtitles: JobSubtitles): vo
 
 function subtitleName(name: string, lang: string): string {
   const dot = name.lastIndexOf('.');
-  const safe = lang.replace(/-orig$/, '').replace(/[^A-Za-z0-9_-]/g, '');
+  const safe = lang.replace(/-orig$/, '').replace(/[^A-Za-z0-9_-]/g, '') || 'subtitles';
+  if (dot <= 0) {
+    return `${name}.${safe}`;
+  }
   return `${name.slice(0, dot)}.${safe}${name.slice(dot)}`;
+}
+
+async function moveFile(source: string, destination: string): Promise<void> {
+  try {
+    await rename(source, destination);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EXDEV') {
+      await copyFile(source, destination);
+      await unlink(source);
+      return;
+    }
+    throw error;
+  }
 }
 
 export const SECTION_STALL_MS = 20_000;

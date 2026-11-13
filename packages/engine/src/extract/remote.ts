@@ -201,6 +201,15 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
       return Promise.resolve(task);
     }
 
+    for (let i = this.waiting.length - 1; i >= 0; i -= 1) {
+      const existing = this.waiting[i]!;
+      if (existing.node.id === nodeId) {
+        clearTimeout(existing.timer);
+        this.waiting.splice(i, 1);
+        existing.resolve(undefined);
+      }
+    }
+
     return new Promise((resolve) => {
       const waiter: Waiter = {
         node,
@@ -232,6 +241,12 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
     const now = Date.now();
     for (const [id, entry] of this.settled) {
       if (now - entry.settledAt > 60_000) this.settled.delete(id);
+    }
+    const pruneAfterMs = Math.max(this.staleAfterMs * 10, this.staleAfterMs + 5000);
+    for (const [nodeId, node] of this.nodes) {
+      if (now - node.seen > pruneAfterMs && this.inFlightFor(nodeId) === 0) {
+        this.nodes.delete(nodeId);
+      }
     }
   }
 
@@ -286,6 +301,7 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
   }
 
   status(): NodeStatus[] {
+    this.sweepSettled();
     const now = Date.now();
     return [...this.nodes.values()].map((node) => ({
       id: node.id,
@@ -413,6 +429,7 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
             cancelled: pending.cancelled || outcome.error?.code === 'CANCELLED',
             settledAt: Date.now(),
           });
+          this.wakeOne();
           if (outcome.error) {
             cleanupFiles(pending.files);
             pending.files.length = 0;
@@ -506,6 +523,7 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
   private requeue(pending: Pending): void {
     const previous = pending.task;
     const silentNode = pending.claimedBy;
+    this.sweepSettled();
     this.settled.set(previous.id, {
       ...(silentNode ? { claimedBy: silentNode } : {}),
       cancelled: true,

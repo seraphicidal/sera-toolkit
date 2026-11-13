@@ -134,8 +134,7 @@ export async function extractWithGalleryDl(
   const binary = options.binary ?? locateTool('gallery-dl', process.env.SERA_GALLERYDL_PATH ?? '');
   const provider = options.providerId ?? 'generic';
   const upstream = options.proxy ?? context.config.proxyFor(provider);
-  const proxy =
-    options.proxy ?? (context.egressProxy ? await context.egressProxy(url, upstream) : upstream);
+  const proxy = context.egressProxy ? await context.egressProxy(url, upstream) : upstream;
 
   const args = [
     '--ignore-config',

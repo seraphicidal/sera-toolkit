@@ -13,6 +13,8 @@ import type { NetworkClass } from './router.js';
 
 export class RemoteOverHttp implements RemoteExtraction {
   private nodes: { readonly at: number; readonly value: NodeStatus[] } | undefined;
+  private readonly timer: ReturnType<typeof setInterval>;
+  private consecutiveFailures = 0;
 
   constructor(
     private readonly apiUrl: string,
@@ -22,8 +24,12 @@ export class RemoteOverHttp implements RemoteExtraction {
     private readonly pollIntervalMs = 1_000,
   ) {
     void this.refresh();
-    const timer = setInterval(() => void this.refresh(), Math.max(1_000, statusTtlMs));
-    timer.unref();
+    this.timer = setInterval(() => void this.refresh(), Math.max(1_000, statusTtlMs));
+    this.timer.unref();
+  }
+
+  close(): void {
+    clearInterval(this.timer);
   }
 
   status(): NodeStatus[] {
@@ -39,10 +45,14 @@ export class RemoteOverHttp implements RemoteExtraction {
       try {
         const response = await this.call('GET', '/internal/extraction/nodes');
         const body = (await response.json()) as { nodes?: NodeStatus[] };
+        this.consecutiveFailures = 0;
         this.nodes = { at: Date.now(), value: body.nodes ?? [] };
       } catch (error) {
+        this.consecutiveFailures += 1;
         this.logger.warn({ err: error }, 'could not read the extraction node list');
-        this.nodes = { at: Date.now(), value: [] };
+        if (!this.nodes || this.nodes.value.length === 0 || this.consecutiveFailures >= 3) {
+          this.nodes = { at: Date.now(), value: [] };
+        }
       } finally {
         this.refreshing = undefined;
       }
@@ -168,7 +178,7 @@ export class RemoteOverHttp implements RemoteExtraction {
         }
 
         if (reqDuration < 200) {
-          await new Promise((done) => setTimeout(done, 250));
+          await new Promise((done) => setTimeout(done, this.pollIntervalMs));
         }
       }
     } catch (error) {
@@ -187,15 +197,30 @@ export class RemoteOverHttp implements RemoteExtraction {
   ): Promise<Response> {
     const timeoutSignal = AbortSignal.timeout(30_000);
     const combinedSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
-    const response = await fetch(`${this.apiUrl}${path}`, {
-      method,
-      headers: {
-        authorization: `Bearer ${this.token}`,
-        ...(body === undefined ? {} : { 'content-type': 'application/json' }),
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      signal: combinedSignal,
-    });
+    let response: Response;
+    try {
+      response = await fetch(`${this.apiUrl}${path}`, {
+        method,
+        headers: {
+          authorization: `Bearer ${this.token}`,
+          ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        signal: combinedSignal,
+      });
+    } catch (cause) {
+      if (signal?.aborted) throw seraError('CANCELLED', { cause });
+      if (
+        cause instanceof Error &&
+        (cause.name === 'TimeoutError' || cause.name === 'AbortError' || timeoutSignal.aborted)
+      ) {
+        throw seraError('TIMEOUT', { detail: `remote: ${method} ${path} timed out`, cause });
+      }
+      throw seraError('PROVIDER_UNAVAILABLE', {
+        detail: `remote: ${method} ${path} transport error`,
+        cause,
+      });
+    }
     if (!response.ok) {
       throw seraError('PROVIDER_UNAVAILABLE', {
         detail: `remote: ${method} ${path} answered ${String(response.status)}`,

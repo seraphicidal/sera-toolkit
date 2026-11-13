@@ -1,7 +1,7 @@
 import type { ContainerFormat } from '@sera/contracts/types';
 import { seraError } from '../errors.js';
 import { ensureRecommendations } from '../normalize/plans.js';
-import { nonEmpty, truncate } from '../util/format.js';
+import { decodeHtmlEntities, nonEmpty, truncate } from '../util/format.js';
 import type { ResolvedItem, ResolvedMedia } from './types.js';
 
 export const REDDIT_EMBED_AGENT = 'SERA.toolkit (+https://github.com/seraphicidal/sera-toolkit)';
@@ -24,13 +24,7 @@ interface Oembed {
 }
 
 function unescapeAttribute(value: string): string {
-  return value
-    .replace(/&quot;/g, '"')
-    .replace(/&#x27;/g, "'")
-    .replace(/&#39;/g, "'")
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&amp;/g, '&');
+  return decodeHtmlEntities(value);
 }
 
 export function embedUrlFor(url: URL): URL {

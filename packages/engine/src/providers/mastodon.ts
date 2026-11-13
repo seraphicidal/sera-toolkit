@@ -3,7 +3,7 @@ import { seraError } from '../errors.js';
 import type { ExtractionStrategy } from '../extract/strategy.js';
 import { ensureRecommendations } from '../normalize/plans.js';
 import { hostMatchesAny, parseUserUrl, urlExtension } from '../security/url.js';
-import { nonEmpty, truncate } from '../util/format.js';
+import { decodeHtmlEntities, nonEmpty, truncate } from '../util/format.js';
 import { normalizeContainer } from './direct.js';
 import type { DownloadPlan, ProviderContext, ResolvedItem, ResolvedMedia } from './types.js';
 import { YtdlpProvider } from './ytdlp-base.js';
@@ -281,33 +281,13 @@ function describe(value: string | undefined): string | undefined {
 }
 
 function stripHtml(html: string): string {
-  return html
-    .replace(/<br\s*\/?>/gi, ' ')
-    .replace(/<\/p>/gi, ' ')
-    .replace(/<[^>]+>/g, '')
-    .replace(
-      /&(?:#x([0-9a-f]+)|#(\d+)|(?:amp|lt|gt|quot|apos|nbsp));/gi,
-      (entity, hex: string | undefined, dec: string | undefined) => {
-        if (hex !== undefined) {
-          const cp = parseInt(hex, 16);
-          return Number.isInteger(cp) && cp >= 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : '';
-        }
-        if (dec !== undefined) {
-          const cp = Number(dec);
-          return Number.isInteger(cp) && cp >= 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : '';
-        }
-        return ENTITIES[entity.toLowerCase()] ?? ' ';
-      },
-    )
+  return decodeHtmlEntities(
+    html
+      .replace(/<br\s*\/?>/gi, ' ')
+      .replace(/<\/p>/gi, ' ')
+      .replace(/<[^>]+>/g, ''),
+    ' ',
+  )
     .replace(/\s+/g, ' ')
     .trim();
 }
-
-const ENTITIES: Record<string, string> = {
-  '&amp;': '&',
-  '&lt;': '<',
-  '&gt;': '>',
-  '&quot;': '"',
-  '&apos;': "'",
-  '&nbsp;': ' ',
-};

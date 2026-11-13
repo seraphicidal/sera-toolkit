@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadConfig } from '../config.js';
+import { SeraEngine } from '../engine.js';
 import { silentLogger } from '../logging.js';
 import { JobService } from './service.js';
 import { MemoryJobBackend } from '../queue/memory.js';
@@ -309,6 +310,67 @@ describe('JobService timeout and cancellation', () => {
       expect(stillCancelled?.state).toBe('cancelled');
       expect((await backend.get(cancelledId))?.state).toBe('cancelled');
     } finally {
+      await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+    }
+  });
+
+  it('serializes per-client slot checks across concurrent create calls', async () => {
+    class DelayedCountBackend extends MemoryJobBackend {
+      override async activeCountFor(clientKey: string): Promise<number> {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return super.activeCountFor(clientKey);
+      }
+    }
+
+    const dir = await mkdtemp(join(tmpdir(), 'sera-srv-race-'));
+    let engine: SeraEngine | undefined;
+    try {
+      const config = loadConfig({
+        NODE_ENV: 'test',
+        LOG_LEVEL: 'silent',
+        SERA_SECRET: 'srv-race-secret',
+        SERA_DATA_DIR: dir,
+        SERA_MAX_CONCURRENT_JOBS_PER_CLIENT: '1',
+      });
+      const backend = new DelayedCountBackend(silentLogger());
+      engine = await SeraEngine.create({
+        config,
+        logger: silentLogger(),
+        backend,
+      });
+
+      const info = engine.resolver.importSubmitted({
+        url: 'https://www.instagram.com/p/RaceTestPost1/',
+        node: {
+          code: 'RaceTestPost1',
+          media_type: 1,
+          image_versions2: {
+            candidates: [
+              {
+                url: 'https://scontent-vie1-1.cdninstagram.com/v/t51/a.jpg',
+                width: 640,
+                height: 480,
+              },
+            ],
+          },
+        },
+      });
+      const optionId = info.items[0]!.options[0]!.id;
+      const request = { infoId: info.id, optionIds: [optionId] };
+
+      const results = await Promise.allSettled([
+        engine.jobs.create(request, 'race-client'),
+        engine.jobs.create(request, 'race-client'),
+      ]);
+
+      const fulfilled = results.filter((r) => r.status === 'fulfilled');
+      const rejected = results.filter((r) => r.status === 'rejected');
+      expect(fulfilled).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+      expect(rejected[0]!.reason).toMatchObject({ code: 'RATE_LIMITED' });
+      expect(await backend.activeCountFor('race-client')).toBe(1);
+    } finally {
+      await engine?.close();
       await rm(dir, { recursive: true, force: true }).catch(() => undefined);
     }
   });

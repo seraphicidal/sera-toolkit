@@ -96,7 +96,10 @@ export class EgressGuard {
     const key = upstream ?? this.defaultUpstreamProxy ?? '';
     let promise = this.listening.get(key);
     if (!promise) {
-      promise = this.start(key || undefined);
+      promise = this.start(key || undefined).catch((err) => {
+        this.listening.delete(key);
+        throw err;
+      });
       this.listening.set(key, promise);
     }
     return promise;
@@ -114,6 +117,7 @@ export class EgressGuard {
   }
 
   private start(upstreamProxy?: string): Promise<string> {
+    const key = upstreamProxy ?? '';
     const server = createServer();
     server.on('request', (req: IncomingMessage, res: ServerResponse) => {
       void this.forward(req, res, upstreamProxy);
@@ -122,14 +126,22 @@ export class EgressGuard {
       void this.tunnel(req, client, head, upstreamProxy);
     });
     server.on('connection', (socket: Socket) => this.track(socket));
-    this.servers.set(upstreamProxy ?? '', server);
+    this.servers.set(key, server);
 
     return new Promise((resolve, reject) => {
-      server.once('error', reject);
+      const onError = (err: Error) => {
+        this.servers.delete(key);
+        server.close();
+        reject(err);
+      };
+      server.once('error', onError);
       server.listen(0, '127.0.0.1', () => {
+        server.off('error', onError);
         server.unref();
         const address = server.address();
         if (!address || typeof address === 'string') {
+          this.servers.delete(key);
+          server.close();
           reject(new Error('egress proxy has no port'));
           return;
         }
@@ -199,8 +211,8 @@ export class EgressGuard {
     }
 
     const upstream = connect({
-      host: proxyUrl.hostname,
-      port: Number(proxyUrl.port) || 80,
+      host: unbracket(proxyUrl.hostname),
+      port: upstreamPort(proxyUrl),
       timeout: this.connectTimeoutMs,
     });
     this.track(upstream);
@@ -213,7 +225,8 @@ export class EgressGuard {
     upstream.once('close', () => client.destroy());
 
     upstream.once('connect', () => {
-      let connectReq = `CONNECT ${target.host}:${String(target.port)} HTTP/1.1\r\nHost: ${target.host}:${String(target.port)}\r\n`;
+      const hostHeader = `${formatAuthorityHost(target.host)}:${String(target.port)}`;
+      let connectReq = `CONNECT ${hostHeader} HTTP/1.1\r\nHost: ${hostHeader}\r\n`;
       if (proxyUrl.username || proxyUrl.password) {
         const creds = Buffer.from(
           `${decodeURIComponent(proxyUrl.username)}:${decodeURIComponent(proxyUrl.password)}`,
@@ -224,7 +237,14 @@ export class EgressGuard {
       upstream.write(connectReq);
 
       let buffer = Buffer.alloc(0);
+      const MAX_CONNECT_HEADER_BYTES = 16_384;
       const onData = (chunk: Buffer) => {
+        if (buffer.length + chunk.length > MAX_CONNECT_HEADER_BYTES) {
+          upstream.off('data', onData);
+          refuse(client, 502, 'Bad Gateway');
+          upstream.destroy();
+          return;
+        }
         buffer = Buffer.concat([buffer, chunk]);
         const headerEnd = buffer.indexOf('\r\n\r\n');
         if (headerEnd === -1) return;
@@ -245,10 +265,47 @@ export class EgressGuard {
           client.pipe(upstream);
         } else {
           refuse(client, 502, 'Bad Gateway');
+          upstream.destroy();
         }
       };
       upstream.on('data', onData);
     });
+  }
+
+  private forwardUpstreamRequest(
+    upstream: ReturnType<typeof httpRequest>,
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): void {
+    upstream.once('timeout', () => upstream.destroy(new Error('connect timeout')));
+    upstream.once('socket', (socket: Socket) => {
+      this.track(socket);
+      socket.once('connect', () => upstream.setTimeout(0));
+    });
+    upstream.once('response', (response: IncomingMessage) => {
+      res.writeHead(response.statusCode ?? 502, forwardable(response.headers));
+      response.pipe(res);
+    });
+    upstream.once('error', () => {
+      if (!res.headersSent) res.writeHead(502).end();
+      else if (!res.destroyed) res.destroy();
+    });
+    res.once('close', () => {
+      if (!res.writableEnded && !upstream.destroyed) {
+        upstream.destroy();
+      }
+    });
+    req.once('aborted', () => {
+      if (!upstream.destroyed) {
+        upstream.destroy();
+      }
+    });
+    req.once('close', () => {
+      if (!req.complete && !upstream.destroyed) {
+        upstream.destroy();
+      }
+    });
+    req.pipe(upstream);
   }
 
   private async forward(
@@ -287,20 +344,7 @@ export class EgressGuard {
         agent: false,
         timeout: this.connectTimeoutMs,
       });
-      upstream.once('timeout', () => upstream.destroy(new Error('connect timeout')));
-      upstream.once('socket', (socket: Socket) => {
-        this.track(socket);
-        socket.once('connect', () => upstream.setTimeout(0));
-      });
-      upstream.once('response', (response: IncomingMessage) => {
-        res.writeHead(response.statusCode ?? 502, forwardable(response.headers));
-        response.pipe(res);
-      });
-      upstream.once('error', () => {
-        if (!res.headersSent) res.writeHead(502).end();
-        else res.destroy();
-      });
-      req.pipe(upstream);
+      this.forwardUpstreamRequest(upstream, req, res);
       return;
     }
 
@@ -324,28 +368,15 @@ export class EgressGuard {
     }
 
     const upstream = httpRequest({
-      host: proxyUrl.hostname,
-      port: Number(proxyUrl.port) || 80,
+      host: unbracket(proxyUrl.hostname),
+      port: upstreamPort(proxyUrl),
       method: req.method,
       path: req.url,
       headers,
       agent: false,
       timeout: this.connectTimeoutMs,
     });
-    upstream.once('timeout', () => upstream.destroy(new Error('connect timeout')));
-    upstream.once('socket', (socket: Socket) => {
-      this.track(socket);
-      socket.once('connect', () => upstream.setTimeout(0));
-    });
-    upstream.once('response', (response: IncomingMessage) => {
-      res.writeHead(response.statusCode ?? 502, forwardable(response.headers));
-      response.pipe(res);
-    });
-    upstream.once('error', () => {
-      if (!res.headersSent) res.writeHead(502).end();
-      else res.destroy();
-    });
-    req.pipe(upstream);
+    this.forwardUpstreamRequest(upstream, req, res);
   }
 }
 
@@ -373,16 +404,36 @@ function refuse(client: Duplex, status: number, reason: string): void {
   );
 }
 
+function unbracket(host: string): string {
+  return host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host;
+}
+
+function formatAuthorityHost(host: string): string {
+  const bare = unbracket(host);
+  return bare.includes(':') ? `[${bare}]` : bare;
+}
+
+function upstreamPort(proxyUrl: URL): number {
+  return Number(proxyUrl.port) || (proxyUrl.protocol === 'https:' ? 443 : 80);
+}
+
 export function confineToHttp(selector: string): string {
   return selector
-    .split('/')
-    .map((alternative) =>
-      alternative
-        .split('+')
-        .map((atom) => (atom.includes('[protocol') ? atom : `${atom}${HTTP_PROTOCOLS}`))
-        .join('+'),
+    .split(',')
+    .map((part) =>
+      part
+        .split('/')
+        .map((alternative) =>
+          alternative
+            .split('+')
+            .map((atom) =>
+              !atom || atom.includes('[protocol') ? atom : `${atom}${HTTP_PROTOCOLS}`,
+            )
+            .join('+'),
+        )
+        .join('/'),
     )
-    .join('/');
+    .join(',');
 }
 
 const HTTP_PROTOCOLS = "[protocol~='^(https?|m3u8(_native)?|http_dash_segments)$']";

@@ -71,6 +71,8 @@ export class GenericProvider implements MediaProvider {
         error instanceof SeraError &&
         (error.code === 'BLOCKED_ADDRESS' ||
           error.code === 'DRM_PROTECTED' ||
+          error.code === 'CANCELLED' ||
+          error.code === 'TIMEOUT' ||
           error.detail?.startsWith('robots.txt disallows'))
       ) {
         throw error;
@@ -84,25 +86,33 @@ export class GenericProvider implements MediaProvider {
     }
 
     if (page && page.media.length > 0) {
-      const hasPlayable = page.media.some((m) => m.kind === 'video' || m.kind === 'audio');
-      const selected = (
-        hasPlayable ? page.media.filter((m) => m.kind !== 'image') : page.media
-      ).slice(0, context.config.maxItemsPerJob);
+      const allowedMedia: DiscoveredMedia[] = [];
+      for (const entry of page.media) {
+        const checkedUrl = validateCandidateUrl(entry.url, context);
+        if (checkedUrl) allowedMedia.push({ ...entry, url: checkedUrl });
+      }
+      if (allowedMedia.length > 0) {
+        const hasPlayable = allowedMedia.some((m) => m.kind === 'video' || m.kind === 'audio');
+        const selected = (
+          hasPlayable ? allowedMedia.filter((m) => m.kind !== 'image') : allowedMedia
+        ).slice(0, context.config.maxItemsPerJob);
 
-      const items: ResolvedItem[] = selected.map((media, index) => toItem(media, index));
+        const items: ResolvedItem[] = selected.map((media, index) => toItem(media, index));
+        const thumbnailUrl = validateCandidateUrl(page.thumbnail, context);
 
-      return {
-        provider: this.id,
-        providerLabel: page.siteName ?? this.label,
-        url: url.toString(),
-        type: items.length > 1 ? 'collection' : 'single',
-        title: page.title ? truncate(page.title, 200) : url.hostname,
-        ...(page.description ? { description: truncate(page.description, 500) } : {}),
-        ...(page.author ? { author: page.author } : {}),
-        ...(page.thumbnail ? { thumbnailUrl: page.thumbnail } : {}),
-        items,
-        metadata: { discoveredFrom: selected[0]?.source ?? 'unknown' },
-      };
+        return {
+          provider: this.id,
+          providerLabel: page.siteName ?? this.label,
+          url: url.toString(),
+          type: items.length > 1 ? 'collection' : 'single',
+          title: page.title ? truncate(page.title, 200) : url.hostname,
+          ...(page.description ? { description: truncate(page.description, 500) } : {}),
+          ...(page.author ? { author: page.author } : {}),
+          ...(thumbnailUrl ? { thumbnailUrl } : {}),
+          items,
+          metadata: { discoveredFrom: selected[0]?.source ?? 'unknown' },
+        };
+      }
     }
 
     if (page && directExt && MEDIA_EXTENSIONS.has(directExt)) {
@@ -291,6 +301,18 @@ function toItem(media: DiscoveredMedia, index: number): ResolvedItem {
     container,
     plans: ensureRecommendations(plans),
   };
+}
+
+function validateCandidateUrl(
+  rawUrl: string | undefined,
+  context: ProviderContext,
+): string | undefined {
+  if (!rawUrl) return undefined;
+  try {
+    return context.allowUrl ? context.allowUrl(rawUrl).toString() : rawUrl;
+  } catch {
+    return undefined;
+  }
 }
 
 function safeExtension(rawUrl: string): string {

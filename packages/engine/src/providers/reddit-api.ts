@@ -27,10 +27,10 @@ export class RedditTokenSource {
     private readonly fetchImpl: typeof fetch = fetch,
   ) {}
 
-  async token(): Promise<string> {
+  async token(signal?: AbortSignal, fetchOverride?: typeof fetch): Promise<string> {
     const cached = this.cached;
     if (cached && cached.expiresAt - RENEW_MARGIN_MS > this.now()) return cached.value;
-    this.inFlight ??= this.request().finally(() => {
+    this.inFlight ??= this.request(signal, fetchOverride).finally(() => {
       this.inFlight = undefined;
     });
     return this.inFlight;
@@ -40,14 +40,17 @@ export class RedditTokenSource {
     this.cached = undefined;
   }
 
-  private async request(): Promise<string> {
+  private async request(signal?: AbortSignal, fetchOverride?: typeof fetch): Promise<string> {
     const basic = Buffer.from(
       `${this.credentials.clientId}:${this.credentials.clientSecret}`,
     ).toString('base64');
 
+    const timeoutSignal = AbortSignal.timeout(15_000);
+    const combinedSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
     let response: Response;
     try {
-      response = await this.fetchImpl(TOKEN_ENDPOINT, {
+      const doFetch = fetchOverride ?? this.fetchImpl;
+      response = await doFetch(TOKEN_ENDPOINT, {
         method: 'POST',
         headers: {
           authorization: `Basic ${basic}`,
@@ -56,9 +59,13 @@ export class RedditTokenSource {
         },
         body: 'grant_type=client_credentials',
         redirect: 'manual',
-        signal: AbortSignal.timeout(15_000),
+        signal: combinedSignal,
       });
     } catch (error) {
+      if (signal?.aborted) throw seraError('CANCELLED', { cause: error });
+      if (timeoutSignal.aborted) {
+        throw seraError('TIMEOUT', { detail: 'reddit: token request timed out', cause: error });
+      }
       throw seraError('NETWORK_ERROR', {
         detail: `reddit: token request failed: ${error instanceof Error ? error.message : 'unknown'}`,
       });
@@ -153,25 +160,32 @@ export async function fetchPost(
   tokens: RedditTokenSource,
   credentials: RedditCredentials,
   fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal,
 ): Promise<RedditPost> {
   const call = async (token: string): Promise<Response> => {
+    const timeoutSignal = AbortSignal.timeout(15_000);
+    const combinedSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
     try {
       return await fetchImpl(`https://oauth.reddit.com/comments/${postId}?raw_json=1&limit=1`, {
         headers: { authorization: `Bearer ${token}`, 'user-agent': credentials.userAgent },
         redirect: 'manual',
-        signal: AbortSignal.timeout(15_000),
+        signal: combinedSignal,
       });
     } catch (error) {
+      if (signal?.aborted) throw seraError('CANCELLED', { cause: error });
+      if (timeoutSignal.aborted) {
+        throw seraError('TIMEOUT', { detail: 'reddit: post request timed out', cause: error });
+      }
       throw seraError('NETWORK_ERROR', {
         detail: `reddit: post request failed: ${error instanceof Error ? error.message : 'unknown'}`,
       });
     }
   };
 
-  let response = await call(await tokens.token());
+  let response = await call(await tokens.token(signal, fetchImpl));
   if (response.status === 401) {
     tokens.invalidate();
-    response = await call(await tokens.token());
+    response = await call(await tokens.token(signal, fetchImpl));
   }
 
   if (response.status === 404) throw seraError('MEDIA_UNAVAILABLE', { detail: 'reddit: 404' });

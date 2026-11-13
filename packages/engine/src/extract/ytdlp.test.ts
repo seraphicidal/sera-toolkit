@@ -45,6 +45,7 @@ describe('classifyYtdlpFailure', () => {
     ],
     ['ERROR: unable to download video data: HTTP Error 404: Not Found', 'MEDIA_UNAVAILABLE'],
     ['ERROR: [twitter] 123: Requested format is not available', 'MEDIA_UNAVAILABLE'],
+    ['ERROR: [generic] abc: No video formats found', 'MEDIA_UNAVAILABLE'],
     ['ERROR: File is larger than max-filesize (900MB)', 'TOO_LARGE'],
     [
       'ERROR: Unable to download webpage: <urlopen error [Errno 11001] getaddrinfo failed>',

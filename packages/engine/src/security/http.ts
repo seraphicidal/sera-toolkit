@@ -129,7 +129,7 @@ export async function safeOpen(url: URL, options: SafeFetchOptions): Promise<Ope
   let current = url;
   const allowPrivate =
     options.allowPrivateAddresses ?? permissiveDispatchers.has(options.dispatcher);
-  const jar = cookieJar(options.headers?.cookie);
+  const jar = cookieJar(findHeader(options.headers, 'cookie'));
   for (let hop = 0; hop <= maxRedirects; hop += 1) {
     if (current.protocol !== 'http:' && current.protocol !== 'https:') {
       throw seraError('BLOCKED_ADDRESS', { detail: `redirect to ${current.protocol}` });
@@ -145,6 +145,9 @@ export async function safeOpen(url: URL, options: SafeFetchOptions): Promise<Ope
       if (!isPublicAddress(bare)) {
         throw seraError('BLOCKED_ADDRESS', { detail: `non-public address ${bare}` });
       }
+    }
+    if (!allowPrivate && current.port !== '' && current.port !== '80' && current.port !== '443') {
+      throw seraError('BLOCKED_ADDRESS', { detail: `port ${current.port}` });
     }
     if (
       hop > 0 &&
@@ -204,7 +207,7 @@ export async function safeOpen(url: URL, options: SafeFetchOptions): Promise<Ope
           detail: `redirect ${response.statusCode} without location`,
         });
       }
-      if (options.keepCookies && current.hostname === url.hostname) {
+      if (options.keepCookies && current.origin === url.origin) {
         keepSetCookies(jar, headers['set-cookie']);
       }
       try {
@@ -224,6 +227,18 @@ export async function safeOpen(url: URL, options: SafeFetchOptions): Promise<Ope
   }
 
   throw seraError('NETWORK_ERROR', { detail: 'redirect loop' });
+}
+
+function findHeader(
+  headers: Readonly<Record<string, string>> | undefined,
+  name: string,
+): string | undefined {
+  if (!headers) return undefined;
+  const target = name.toLowerCase();
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === target) return value;
+  }
+  return undefined;
 }
 
 function cookieJar(cookie: string | undefined): Map<string, string> {
@@ -252,23 +267,20 @@ function hopHeaders(
   current: URL,
   jar: Map<string, string>,
 ): Record<string, string> {
-  const { cookie: _given, ...rest } = options.headers ?? {};
   const crossOrigin = current.origin !== first.origin;
   const headers: Record<string, string> = { ...DEFAULT_HEADERS };
-  for (const [key, value] of Object.entries(rest)) {
+  for (const [key, value] of Object.entries(options.headers ?? {})) {
     const lower = key.toLowerCase();
+    if (lower === 'cookie') continue;
     if (
       crossOrigin &&
-      (lower === 'authorization' ||
-        lower === 'proxy-authorization' ||
-        lower === 'x-api-key' ||
-        lower === 'cookie')
+      (lower === 'authorization' || lower === 'proxy-authorization' || lower === 'x-api-key')
     ) {
       continue;
     }
     headers[lower] = value;
   }
-  if (jar.size && current.hostname === first.hostname) {
+  if (jar.size && current.origin === first.origin) {
     headers.cookie = [...jar].map(([name, value]) => `${name}=${value}`).join('; ');
   }
   return headers;

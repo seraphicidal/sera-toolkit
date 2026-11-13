@@ -237,7 +237,9 @@ export function buildAudioPlans(
   options: PlanBuildOptions,
 ): DownloadPlan[] {
   const { audioOnly, progressive } = splitFormats(formats);
-  const pool = audioOnly.length ? audioOnly : progressive.filter((format) => format.acodec);
+  const pool = audioOnly.length
+    ? audioOnly
+    : progressive.filter((format) => Boolean(format.acodec));
   if (!bestAudio(pool)) return [];
 
   const plans: DownloadPlan[] = [];

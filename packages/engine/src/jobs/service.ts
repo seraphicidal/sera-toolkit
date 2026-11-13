@@ -38,6 +38,7 @@ export class JobService {
     string,
     { controller: AbortController; done: Promise<void> }
   >();
+  private readonly createLocks = new Map<string, Promise<void>>();
 
   constructor(private readonly deps: JobServiceDependencies) {
     this.runner =
@@ -96,89 +97,113 @@ export class JobService {
       ? subtitlesFor(request.subtitles, options, trim !== undefined)
       : undefined;
 
-    const waiting = await backend.waitingCount();
-    if (waiting >= config.maxQueueDepth) {
-      throw seraError('QUEUE_FULL', { detail: `${waiting} jobs waiting` });
-    }
-    const active = await backend.activeCountFor(clientKey);
-    if (active >= config.maxConcurrentJobsPerClient) {
-      throw seraError('RATE_LIMITED', {
-        message: 'You already have downloads in progress.',
-        hint: 'Wait for one to finish, then try again.',
-        detail: `${active} concurrent jobs`,
-      });
-    }
+    return this.withClientCreateLock(clientKey, async () => {
+      const waiting = await backend.waitingCount();
+      if (waiting >= config.maxQueueDepth) {
+        throw seraError('QUEUE_FULL', { detail: `${waiting} jobs waiting` });
+      }
+      const active = await backend.activeCountFor(clientKey);
+      if (active >= config.maxConcurrentJobsPerClient) {
+        throw seraError('RATE_LIMITED', {
+          message: 'You already have downloads in progress.',
+          hint: 'Wait for one to finish, then try again.',
+          detail: `${active} concurrent jobs`,
+        });
+      }
 
-    let resolvedMedia;
-    let rawInfoJson: string | undefined;
-    let resolvedAt: number | undefined;
+      let resolvedMedia;
+      let rawInfoJson: string | undefined;
+      let resolvedAt: number | undefined;
 
-    if (!info.m) {
-      const cached = resolver.getCached(info.p, info.u);
-      if (cached) {
-        try {
-          const mediaJson = JSON.stringify(cached.media);
-          if (mediaJson.length <= 1024 * 1024) {
-            resolvedMedia = cached.media;
-            resolvedAt = cached.resolvedAt ?? Date.now();
-            if (cached.rawInfoJson && cached.rawInfoJson.length <= 1024 * 1024) {
-              rawInfoJson = cached.rawInfoJson;
+      if (!info.m) {
+        const cached = resolver.getCached(info.p, info.u);
+        if (cached) {
+          try {
+            const mediaJson = JSON.stringify(cached.media);
+            if (mediaJson.length <= 1024 * 1024) {
+              resolvedMedia = cached.media;
+              resolvedAt = cached.resolvedAt ?? Date.now();
+              if (cached.rawInfoJson && cached.rawInfoJson.length <= 1024 * 1024) {
+                rawInfoJson = cached.rawInfoJson;
+              }
             }
-          }
-        } catch {}
+          } catch {}
+        }
+      }
+
+      const spec: JobSpec = {
+        jobId: newJobId(),
+        provider: info.p,
+        url: info.u,
+        selections,
+        packaging: request.packaging ?? 'auto',
+        ...(request.filename ? { filename: request.filename } : {}),
+        ...(trim ? { trim } : {}),
+        ...(subtitles ? { subtitles } : {}),
+        ...(resolvedMedia ? { resolvedMedia } : {}),
+        ...(rawInfoJson ? { rawInfoJson } : {}),
+        ...(resolvedAt !== undefined ? { resolvedAt } : {}),
+        ...(info.m
+          ? {
+              imported: {
+                entries: info.m,
+                title: info.t ?? '',
+                ...(info.a ? { author: info.a } : {}),
+                ...(info.x !== undefined ? { expiresAt: info.x } : {}),
+              },
+            }
+          : {}),
+      };
+
+      const now = new Date().toISOString();
+      const record: JobRecord = {
+        id: spec.jobId,
+        state: 'queued',
+        step: 'Waiting to start',
+        progress: {
+          percent: 0,
+          ...(selections.length > 1 ? { totalFiles: selections.length } : {}),
+        },
+        provider: info.p,
+        createdAt: now,
+        updatedAt: now,
+        spec,
+        clientKey,
+        ...(uncounted ? { uncounted: true } : {}),
+      };
+
+      await backend.submit(record);
+      this.deps.logger.info(
+        {
+          jobId: spec.jobId,
+          provider: info.p,
+          source: logSafeUrl(info.u),
+          items: selections.length,
+          ...(spec.imported ? { strategy: 'visitor-browser' } : {}),
+        },
+        'job queued',
+      );
+      return toPublicJob(record);
+    });
+  }
+
+  private async withClientCreateLock<T>(clientKey: string, fn: () => Promise<T>): Promise<T> {
+    const previous = this.createLocks.get(clientKey) ?? Promise.resolve();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const tail = previous.then(() => gate);
+    this.createLocks.set(clientKey, tail);
+    await previous;
+    try {
+      return await fn();
+    } finally {
+      release();
+      if (this.createLocks.get(clientKey) === tail) {
+        this.createLocks.delete(clientKey);
       }
     }
-
-    const spec: JobSpec = {
-      jobId: newJobId(),
-      provider: info.p,
-      url: info.u,
-      selections,
-      packaging: request.packaging ?? 'auto',
-      ...(request.filename ? { filename: request.filename } : {}),
-      ...(trim ? { trim } : {}),
-      ...(subtitles ? { subtitles } : {}),
-      ...(resolvedMedia ? { resolvedMedia } : {}),
-      ...(rawInfoJson ? { rawInfoJson } : {}),
-      ...(resolvedAt !== undefined ? { resolvedAt } : {}),
-      ...(info.m
-        ? {
-            imported: {
-              entries: info.m,
-              title: info.t ?? '',
-              ...(info.a ? { author: info.a } : {}),
-              ...(info.x !== undefined ? { expiresAt: info.x } : {}),
-            },
-          }
-        : {}),
-    };
-
-    const now = new Date().toISOString();
-    const record: JobRecord = {
-      id: spec.jobId,
-      state: 'queued',
-      step: 'Waiting to start',
-      progress: { percent: 0, ...(selections.length > 1 ? { totalFiles: selections.length } : {}) },
-      provider: info.p,
-      createdAt: now,
-      updatedAt: now,
-      spec,
-      clientKey,
-      ...(uncounted ? { uncounted: true } : {}),
-    };
-
-    await backend.submit(record);
-    this.deps.logger.info(
-      {
-        jobId: spec.jobId,
-        provider: info.p,
-        source: logSafeUrl(info.u),
-        items: selections.length,
-        ...(spec.imported ? { strategy: 'visitor-browser' } : {}),
-      },
-      'job queued',
-    );
-    return toPublicJob(record);
   }
 
   async get(id: string, clientKey?: string): Promise<Job | undefined> {
@@ -196,7 +221,7 @@ export class JobService {
     return updated ? toPublicJob(updated) : undefined;
   }
 
-  private async abortAndWait(id: string): Promise<void> {
+  private async abortAndWait(id: string): Promise<boolean> {
     const active = this.inFlight.get(id);
     active?.controller.abort();
     await this.deps.backend.patch(id, {
@@ -204,14 +229,25 @@ export class JobService {
       step: 'Cancelled',
       error: seraError('CANCELLED').toJobError(),
     });
-    if (!active) return;
+    if (!active) return true;
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     await Promise.race([
-      active.done,
+      active.done.then(() => {
+        settled = true;
+      }),
       new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, 2_000);
+        timer = setTimeout(resolve, 4_000);
         timer.unref();
       }),
     ]);
+    if (timer) clearTimeout(timer);
+    if (!settled) {
+      void active.done.finally(() => {
+        void this.deps.workspaces.destroy(id).catch(() => undefined);
+      });
+    }
+    return settled;
   }
 
   async cancel(id: string, clientKey?: string): Promise<boolean> {
@@ -224,8 +260,10 @@ export class JobService {
       return false;
     }
 
-    await this.abortAndWait(id);
-    await this.deps.workspaces.destroy(id);
+    const settled = await this.abortAndWait(id);
+    if (settled) {
+      await this.deps.workspaces.destroy(id);
+    }
     return true;
   }
 
@@ -233,10 +271,13 @@ export class JobService {
     const record = await this.deps.backend.get(id);
     if (!record || (clientKey && record.clientKey !== clientKey)) return false;
 
+    let settled = true;
     if (!isTerminalJobState(record.state)) {
-      await this.abortAndWait(id);
+      settled = await this.abortAndWait(id);
     }
-    await this.deps.workspaces.destroy(id);
+    if (settled) {
+      await this.deps.workspaces.destroy(id);
+    }
     return true;
   }
 

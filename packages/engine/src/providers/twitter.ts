@@ -105,6 +105,9 @@ export class TwitterProvider extends YtdlpProvider {
     if (hostMatchesAny(target.hostname, context.config.blockedHosts)) {
       throw seraError('BLOCKED_ADDRESS', { detail: 't.co redirect to blocked host' });
     }
+    if (target.port !== '' && target.port !== '80' && target.port !== '443') {
+      throw seraError('BLOCKED_ADDRESS', { detail: `t.co redirect to port ${target.port}` });
+    }
     const host = target.hostname.toLowerCase();
     const isTwitterHost = [
       'x.com',
@@ -194,7 +197,7 @@ export class TwitterProvider extends YtdlpProvider {
 
     const items = media
       .slice(0, context.config.maxItemsPerJob)
-      .map((entry, index) => toItem(entry, index))
+      .map((entry, index) => toItem(entry, index, context.allowUrl))
       .filter((item): item is ResolvedItem => item !== undefined);
 
     if (!items.length) {
@@ -282,7 +285,7 @@ export class TwitterProvider extends YtdlpProvider {
 
     const items = media
       .slice(0, context.config.maxItemsPerJob)
-      .map((entry, index) => toFxItem(entry, index))
+      .map((entry, index) => toFxItem(entry, index, context.allowUrl))
       .filter((item): item is ResolvedItem => item !== undefined);
 
     if (!items.length) {
@@ -357,26 +360,56 @@ interface FxTweetResponse {
   readonly tweet?: FxTweet;
 }
 
-function toFxItem(media: FxTweetMediaItem, index: number): ResolvedItem | undefined {
-  const source = media.url;
-  if (!source?.startsWith('https://')) return undefined;
+interface NormalizedTweetMedia {
+  readonly source: string;
+  readonly isPhoto: boolean;
+  readonly isGif: boolean;
+  readonly width?: number | undefined;
+  readonly height?: number | undefined;
+  readonly alt?: string | undefined;
+  readonly sourceId: string;
+  readonly thumbnailUrl: string;
+  readonly durationSeconds?: number | undefined;
+  readonly variants: readonly {
+    url: string;
+    bitrate?: number | undefined;
+    width?: number | undefined;
+    height?: number | undefined;
+  }[];
+}
 
-  const width = media.width;
-  const height = media.height;
-  const alt = nonEmpty(media.altText) ?? nonEmpty(media.description);
-  const sourceId =
-    media.id ?? /\/([^/?#]+)\.[a-z0-9]+(?:[?#]|$)/i.exec(source)?.[1] ?? String(index);
+function validateTwitterMediaUrl(
+  raw: string | undefined,
+  allowUrl?: (url: string | URL) => URL,
+): string | undefined {
+  if (!raw?.startsWith('https://')) return undefined;
+  if (!allowUrl) return raw;
+  try {
+    return allowUrl(raw).toString();
+  } catch {
+    return undefined;
+  }
+}
 
-  if (media.type === 'photo') {
-    const url = originalPhotoUrl(source);
+function buildTwitterMediaItem(
+  normalized: NormalizedTweetMedia,
+  index: number,
+  allowUrl?: (url: string | URL) => URL,
+): ResolvedItem | undefined {
+  const { isPhoto, isGif, width, height, alt, sourceId, thumbnailUrl, durationSeconds, variants } =
+    normalized;
+
+  if (isPhoto) {
+    const rawPhoto = originalPhotoUrl(normalized.source);
+    const url = validateTwitterMediaUrl(rawPhoto, allowUrl);
     if (!url) return undefined;
-    const container = containerFor(source);
+    const container = containerFor(normalized.source);
     return {
       sourceId,
       index,
       kind: 'image',
       title: alt ? truncate(alt, 120) : `Image ${index + 1}`,
-      thumbnailUrl: source,
+      thumbnailUrl,
       ...(width ? { width } : {}),
       ...(height ? { height } : {}),
       container,
@@ -398,23 +431,7 @@ function toFxItem(media: FxTweetMediaItem, index: number): ResolvedItem | undefi
     };
   }
 
-  const isGif = media.type === 'gif';
-  const durationSeconds = media.duration;
-
-  const rawVariants = (media.variants ?? [])
-    .filter(
-      (variant) => variant.content_type === 'video/mp4' && variant.url?.startsWith('https://'),
-    )
-    .sort((a, b) => (b.bitrate ?? 0) - (a.bitrate ?? 0));
-
-  const variants: { url: string; bitrate?: number; width?: number; height?: number }[] =
-    rawVariants.length > 0
-      ? rawVariants.map((v) => ({
-          url: v.url!,
-          bitrate: v.bitrate,
-          ...sizeFromVariantUrl(v.url!),
-        }))
-      : [{ url: source, width, height }];
+  if (!variants.length) return undefined;
 
   const seenLabels = new Set<string>();
   const plans: DownloadPlan[] = [];
@@ -484,19 +501,73 @@ function toFxItem(media: FxTweetMediaItem, index: number): ResolvedItem | undefi
     );
   }
 
-  const thumb = media.thumbnail_url ?? source;
+  const bestSize = sizeFromVariantUrl(best);
+  const itemWidth = bestSize.width ?? width;
+  const itemHeight = bestSize.height ?? height;
   return {
     sourceId,
     index,
     kind: isGif ? 'gif' : 'video',
     title: alt ? truncate(alt, 120) : isGif ? `GIF ${index + 1}` : `Video ${index + 1}`,
-    thumbnailUrl: thumb,
-    ...(width ? { width } : {}),
-    ...(height ? { height } : {}),
+    thumbnailUrl,
+    ...(itemWidth ? { width: itemWidth } : {}),
+    ...(itemHeight ? { height: itemHeight } : {}),
     ...(durationSeconds ? { duration: durationSeconds } : {}),
     container: 'mp4',
     plans: ensureRecommendations(plans),
   };
+}
+
+function toFxItem(
+  media: FxTweetMediaItem,
+  index: number,
+  allowUrl?: (url: string | URL) => URL,
+): ResolvedItem | undefined {
+  const source = validateTwitterMediaUrl(media.url, allowUrl);
+  if (!source) return undefined;
+
+  const width = media.width;
+  const height = media.height;
+  const alt = nonEmpty(media.altText) ?? nonEmpty(media.description);
+  const sourceId =
+    media.id ?? /\/([^/?#]+)\.[a-z0-9]+(?:[?#]|$)/i.exec(source)?.[1] ?? String(index);
+  const rawVariants = (media.variants ?? [])
+    .filter((variant) => variant.content_type === 'video/mp4')
+    .map((variant) => ({
+      url: validateTwitterMediaUrl(variant.url, allowUrl),
+      bitrate: variant.bitrate,
+    }))
+    .filter((variant): variant is { url: string; bitrate: number | undefined } =>
+      Boolean(variant.url),
+    )
+    .sort((a, b) => (b.bitrate ?? 0) - (a.bitrate ?? 0));
+
+  const variants =
+    rawVariants.length > 0
+      ? rawVariants.map((v) => ({
+          url: v.url,
+          bitrate: v.bitrate,
+          ...sizeFromVariantUrl(v.url),
+        }))
+      : [{ url: source, width, height }];
+
+  const thumbnailUrl = validateTwitterMediaUrl(media.thumbnail_url, allowUrl) ?? source;
+  return buildTwitterMediaItem(
+    {
+      source,
+      isPhoto: media.type === 'photo',
+      isGif: media.type === 'gif',
+      width,
+      height,
+      alt,
+      sourceId,
+      thumbnailUrl,
+      durationSeconds: media.duration,
+      variants,
+    },
+    index,
+    allowUrl,
+  );
 }
 
 interface TweetVariant {
@@ -560,136 +631,52 @@ function containerFor(url: string): ContainerFormat {
   return 'mp4';
 }
 
-function toItem(media: TweetMedia, index: number): ResolvedItem | undefined {
-  const source = media.media_url_https;
-  if (!source?.startsWith('https://')) return undefined;
+function toItem(
+  media: TweetMedia,
+  index: number,
+  allowUrl?: (url: string | URL) => URL,
+): ResolvedItem | undefined {
+  const source = validateTwitterMediaUrl(media.media_url_https, allowUrl);
+  if (!source) return undefined;
 
   const width = media.original_info?.width;
   const height = media.original_info?.height;
   const alt = nonEmpty(media.ext_alt_text);
   const sourceId = /\/([^/?#]+)\.[a-z0-9]+(?:[?#]|$)/i.exec(source)?.[1] ?? String(index);
-
-  if (media.type === 'photo') {
-    const url = originalPhotoUrl(source);
-    if (!url) return undefined;
-    const container = containerFor(source);
-    return {
-      sourceId,
-      index,
-      kind: 'image',
-      title: alt ? truncate(alt, 120) : `Image ${index + 1}`,
-      thumbnailUrl: source,
-      ...(width ? { width } : {}),
-      ...(height ? { height } : {}),
-      container,
-      plans: ensureRecommendations([
-        {
-          kind: 'image',
-          container,
-          label: 'Original',
-          detail: [container.toUpperCase(), width && height ? `${width} × ${height}` : undefined]
-            .filter(Boolean)
-            .join(' · '),
-          ...(width ? { width } : {}),
-          ...(height ? { height } : {}),
-          requiresConversion: false,
-          recommended: true,
-          fetch: { via: 'direct', url },
-        },
-      ]),
-    };
-  }
-
   const variants = (media.video_info?.variants ?? [])
-    .filter(
-      (variant) => variant.content_type === 'video/mp4' && variant.url?.startsWith('https://'),
+    .filter((variant) => variant.content_type === 'video/mp4')
+    .map((variant) => ({
+      url: validateTwitterMediaUrl(variant.url, allowUrl),
+      bitrate: variant.bitrate,
+    }))
+    .filter((variant): variant is { url: string; bitrate: number | undefined } =>
+      Boolean(variant.url),
     )
-    .sort((a, b) => (b.bitrate ?? 0) - (a.bitrate ?? 0));
-  if (!variants.length) return undefined;
+    .sort((a, b) => (b.bitrate ?? 0) - (a.bitrate ?? 0))
+    .map((v) => ({
+      url: v.url,
+      bitrate: v.bitrate,
+      ...sizeFromVariantUrl(v.url),
+    }));
 
-  const isGif = media.type === 'animated_gif';
   const durationSeconds = media.video_info?.duration_millis
     ? media.video_info.duration_millis / 1000
     : undefined;
 
-  const seenLabels = new Set<string>();
-  const plans: DownloadPlan[] = [];
-  for (const variant of variants) {
-    const size = sizeFromVariantUrl(variant.url!);
-    const label = isGif ? 'Original' : qualityLabel(size.height, size.width);
-    if (seenLabels.has(label)) continue;
-    seenLabels.add(label);
-    const approximateBytes =
-      variant.bitrate && durationSeconds ? (variant.bitrate / 8) * durationSeconds : undefined;
-    plans.push({
-      kind: isGif ? 'gif' : 'video',
-      container: 'mp4',
-      label,
-      detail: ['MP4 · H.264', approximateBytes ? `~${formatBytes(approximateBytes)}` : undefined]
-        .filter(Boolean)
-        .join(' · '),
-      ...(size.width ? { width: size.width } : {}),
-      ...(size.height ? { height: size.height } : {}),
-      ...(approximateBytes
-        ? { filesizeBytes: Math.round(approximateBytes), filesizeIsApproximate: true }
-        : {}),
-      requiresConversion: false,
-      recommended: plans.length === 0,
-      fetch: { via: 'direct' as const, url: variant.url! },
-    });
-  }
-
-  const best = variants[0]!.url!;
-  if (isGif) {
-    if (!durationSeconds || durationSeconds <= 30) {
-      plans.push({
-        kind: 'gif',
-        container: 'gif',
-        label: 'GIF',
-        detail: 'Converted from the silent video X stores',
-        requiresConversion: true,
-        recommended: false,
-        fetch: { via: 'direct', url: best },
-        convert: { kind: 'gif' },
-      });
-    }
-  } else {
-    plans.push(
-      {
-        kind: 'audio',
-        container: 'mp3',
-        label: 'MP3',
-        detail: '320 kbps · extracted',
-        audioBitrateKbps: 320,
-        requiresConversion: true,
-        recommended: false,
-        fetch: { via: 'direct', url: best },
-        convert: { kind: 'audio', container: 'mp3', bitrateKbps: 320 },
-      },
-      {
-        kind: 'audio',
-        container: 'm4a',
-        label: 'M4A',
-        detail: 'Original quality · AAC',
-        requiresConversion: true,
-        recommended: false,
-        fetch: { via: 'direct', url: best },
-        convert: { kind: 'audio', container: 'm4a' },
-      },
-    );
-  }
-
-  const size = sizeFromVariantUrl(best);
-  return {
-    sourceId,
+  return buildTwitterMediaItem(
+    {
+      source,
+      isPhoto: media.type === 'photo',
+      isGif: media.type === 'animated_gif',
+      width,
+      height,
+      alt,
+      sourceId,
+      thumbnailUrl: source,
+      durationSeconds,
+      variants,
+    },
     index,
-    kind: isGif ? 'gif' : 'video',
-    title: alt ? truncate(alt, 120) : isGif ? `GIF ${index + 1}` : `Video ${index + 1}`,
-    thumbnailUrl: source,
-    ...((size.width ?? width) ? { width: size.width ?? width } : {}),
-    ...((size.height ?? height) ? { height: size.height ?? height } : {}),
-    ...(durationSeconds ? { duration: durationSeconds } : {}),
-    container: 'mp4',
-    plans: ensureRecommendations(plans),
-  };
+    allowUrl,
+  );
 }

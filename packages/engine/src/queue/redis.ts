@@ -84,12 +84,8 @@ export class RedisJobBackend implements JobBackend {
       },
     );
     this.subscriber.on('message', (_channel, payload) => {
-      let record: JobRecord;
-      try {
-        record = JSON.parse(payload) as JobRecord;
-      } catch {
-        return;
-      }
+      const record = parseRedisRecord(payload);
+      if (!record) return;
       for (const listener of this.listeners.get(record.id) ?? []) listener(record);
     });
   }
@@ -113,11 +109,7 @@ export class RedisJobBackend implements JobBackend {
   async get(id: string): Promise<JobRecord | undefined> {
     const raw = await this.connection.get(RECORD_PREFIX + id);
     if (!raw) return undefined;
-    try {
-      return JSON.parse(raw) as JobRecord;
-    } catch {
-      return undefined;
-    }
+    return parseRedisRecord(raw);
   }
 
   async patch(id: string, patch: JobPatch): Promise<JobRecord | undefined> {
@@ -132,15 +124,12 @@ export class RedisJobBackend implements JobBackend {
       new Date().toISOString(),
     );
     if (typeof res !== 'string') return undefined;
-    try {
-      const updated = JSON.parse(res) as JobRecord;
-      if (!isActive(updated.state)) {
-        await this.connection.srem(CLIENT_PREFIX + updated.clientKey, updated.id);
-      }
-      return updated;
-    } catch {
-      return undefined;
+    const updated = parseRedisRecord(res);
+    if (!updated) return undefined;
+    if (!isActive(updated.state)) {
+      await this.connection.srem(CLIENT_PREFIX + updated.clientKey, updated.id);
     }
+    return updated;
   }
 
   ready(): Promise<void> {
@@ -240,4 +229,55 @@ export class RedisJobBackend implements JobBackend {
       this.recordTtlSeconds,
     );
   }
+}
+
+function isArrayValue<T>(value: readonly T[] | undefined): value is readonly T[] {
+  return Array.isArray(value);
+}
+
+function asArray<T>(value: readonly T[] | undefined): T[] {
+  return isArrayValue(value) ? [...value] : [];
+}
+
+export function parseRedisRecord(raw: string): JobRecord | undefined {
+  let parsed: JobRecord;
+  try {
+    parsed = JSON.parse(raw) as JobRecord;
+  } catch {
+    return undefined;
+  }
+  if (!parsed || typeof parsed !== 'object') return undefined;
+  const spec = parsed.spec
+    ? {
+        ...parsed.spec,
+        selections: asArray(parsed.spec.selections),
+        ...(parsed.spec.imported
+          ? {
+              imported: {
+                ...parsed.spec.imported,
+                entries: asArray(parsed.spec.imported.entries),
+              },
+            }
+          : {}),
+      }
+    : parsed.spec;
+  const result = parsed.result
+    ? {
+        ...parsed.result,
+        ...(parsed.result.files !== undefined ? { files: asArray(parsed.result.files) } : {}),
+        ...(parsed.result.delivery?.substituted !== undefined
+          ? {
+              delivery: {
+                ...parsed.result.delivery,
+                substituted: asArray(parsed.result.delivery.substituted),
+              },
+            }
+          : {}),
+      }
+    : parsed.result;
+  return {
+    ...parsed,
+    ...(spec ? { spec } : {}),
+    ...(result ? { result } : {}),
+  };
 }

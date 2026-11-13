@@ -5,13 +5,8 @@ import type { FastifyInstance } from 'fastify';
 import { legalReportRequestSchema } from '@sera/contracts';
 import type { LegalReportResponse } from '@sera/contracts/types';
 import type { SeraEngine } from '@sera/engine';
-import { computeClientKey, matchesToken, normalizeClientAddress } from '../plugins/client.js';
-
-function checkAdminAuth(header: string | undefined, adminToken: string): boolean {
-  if (!adminToken) return false;
-  const presented = header?.startsWith('Bearer ') ? header.slice(7) : '';
-  return matchesToken(presented, adminToken);
-}
+import { checkAdminAuth } from '../plugins/admin-auth.js';
+import { computeClientKey, normalizeClientAddress } from '../plugins/client.js';
 
 export function registerLegalRoutes(app: FastifyInstance, engine: SeraEngine): void {
   app.post(

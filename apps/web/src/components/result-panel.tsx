@@ -3,11 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Job } from '@sera/contracts/types';
 import { CheckIcon, CopyIcon, DownloadIcon, PlayIcon } from './icons';
-import { formatBytes, pluralize } from '@/lib/format';
-
-function isSafeDownloadPath(path: string): boolean {
-  return path.startsWith('/api/') && !path.startsWith('//');
-}
+import { formatBytes, isSafeDownloadPath, pluralize } from '@/lib/format';
 
 function absoluteUrl(path: string): string {
   if (typeof window === 'undefined') return path;

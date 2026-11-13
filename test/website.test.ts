@@ -15,6 +15,9 @@ describe('Website Legal Pages Content & Compliance', () => {
   const reportPath = fileURLToPath(
     new URL('../apps/web/src/app/legal/report/page.tsx', import.meta.url),
   );
+  const reportFormPath = fileURLToPath(
+    new URL('../apps/web/src/components/legal-report-form.tsx', import.meta.url),
+  );
   const aboutPath = fileURLToPath(new URL('../apps/web/src/app/about/page.tsx', import.meta.url));
   const layoutPath = fileURLToPath(new URL('../apps/web/src/app/layout.tsx', import.meta.url));
   const cssPath = fileURLToPath(new URL('../apps/web/src/styles/globals.css', import.meta.url));
@@ -60,7 +63,10 @@ describe('Website Legal Pages Content & Compliance', () => {
   });
 
   it('verifies Notice-and-Action Takedown Form (DSA Art. 16 & DMCA 512)', () => {
-    const content = readFileSync(reportPath, 'utf8');
+    const pageContent = readFileSync(reportPath, 'utf8');
+    expect(pageContent).toContain('force-dynamic');
+    expect(pageContent).toContain('LegalReportForm');
+    const content = `${pageContent}\n${readFileSync(reportFormPath, 'utf8')}`;
     expect(content).toContain('/api/legal/report');
     expect(content).toContain('targetUrl');
     expect(content).toContain('category');

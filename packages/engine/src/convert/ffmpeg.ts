@@ -126,8 +126,17 @@ export async function probe(path: string, options: FfmpegOptions): Promise<Probe
 function parseFrameRate(value: string | undefined): number | undefined {
   if (!value) return undefined;
   const [numerator, denominator] = value.split('/').map(Number);
-  if (!numerator || !denominator) return undefined;
-  return Math.round((numerator / denominator) * 100) / 100;
+  if (
+    !Number.isFinite(numerator) ||
+    !Number.isFinite(denominator) ||
+    !numerator ||
+    !denominator ||
+    denominator <= 0
+  ) {
+    return undefined;
+  }
+  const fps = Math.round((numerator / denominator) * 100) / 100;
+  return Number.isFinite(fps) && fps > 0 ? fps : undefined;
 }
 
 export type ConversionSpec =

@@ -600,6 +600,7 @@ export class MediaResolver {
       ...(signal ? { signal } : {}),
       allowUrl,
       egressProxy: (target, upstreamProxy) => this.egressProxy(target, upstreamProxy),
+      dispatcher: this.dispatcher,
       probe: (url, options) => this.probeImpl(url, { ...options, ...(signal ? { signal } : {}) }),
       fetchText: async (url, maxBytes, options) => {
         const response = await safeFetch(url, {

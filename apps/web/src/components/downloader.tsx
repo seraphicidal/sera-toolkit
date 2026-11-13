@@ -9,7 +9,7 @@ import type {
   SubtitleFormat,
 } from '@sera/contracts/types';
 import { ApiError, cancelJob, createJob, resolveMedia } from '@/lib/api';
-import { cx, formatBytes, formatDuration, isRunning, pluralize } from '@/lib/format';
+import { cx, formatBytes, formatDuration, isRunning, pluralize, stepRadio } from '@/lib/format';
 import { addToHistory } from '@/lib/history';
 import {
   availableKinds,
@@ -665,26 +665,6 @@ const PACKAGING_OPTIONS: readonly (readonly [PackagingMode, string])[] = [
   ['zip', 'One ZIP'],
   ['individual', 'Separate files'],
 ];
-
-function stepRadio<T>(
-  event: React.KeyboardEvent<HTMLButtonElement>,
-  values: readonly T[],
-  index: number,
-  onSelect: (value: T) => void,
-): void {
-  let offset = 0;
-  if (event.key === 'ArrowRight' || event.key === 'ArrowDown') offset = 1;
-  else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') offset = -1;
-  if (!offset || !values.length) return;
-  event.preventDefault();
-  const nextIndex = (index + offset + values.length) % values.length;
-  const nextValue = values[nextIndex];
-  if (nextValue === undefined) return;
-  onSelect(nextValue);
-  event.currentTarget.parentElement
-    ?.querySelectorAll<HTMLButtonElement>('[role="radio"]')
-    [nextIndex]?.focus();
-}
 
 function AdvancedOptions({
   open,

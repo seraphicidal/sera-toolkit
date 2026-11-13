@@ -229,6 +229,9 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
     }
   }, 30_000);
   sweep.unref();
+  rootApp.addHook('onClose', async () => {
+    clearInterval(sweep);
+  });
 
   void rootApp.register(async (app) => {
     app.addContentTypeParser('application/octet-stream', (_request, payload, done) =>
@@ -291,6 +294,10 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
       auth: { nodeId: string; isLegacy?: boolean },
       reply: FastifyReply,
     ): boolean => {
+      if (!/^[a-f0-9]{16,64}$/.test(taskId)) {
+        void reply.status(404).send({ error: { code: 'NOT_FOUND', message: 'Not found.' } });
+        return false;
+      }
       const owner = extractionNodes.claimedBy(taskId);
       if (!owner) {
         void reply.status(404).send({ error: { code: 'NOT_FOUND', message: 'Not found.' } });
@@ -658,23 +665,33 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
 
           if (isUnchanged()) {
             await new Promise<void>((resolve) => {
+              let settled = false;
+              const settle = () => {
+                if (settled) return;
+                settled = true;
+                cleanup();
+                resolve();
+              };
               const listener = () => {
                 if (!isUnchanged() || entry.state !== 'pending') {
-                  cleanup();
-                  resolve();
+                  settle();
                 }
+              };
+              const onAbort = () => {
+                settle();
               };
               const cleanup = () => {
                 clearTimeout(timer);
                 entry.listeners.delete(listener);
-                request.signal.removeEventListener('abort', listener);
+                request.signal.removeEventListener('abort', onAbort);
               };
-              const timer = setTimeout(() => {
-                cleanup();
-                resolve();
-              }, waitMs);
+              const timer = setTimeout(settle, waitMs);
+              if (request.signal.aborted) {
+                settle();
+                return;
+              }
               entry.listeners.add(listener);
-              request.signal.addEventListener('abort', listener);
+              request.signal.addEventListener('abort', onAbort, { once: true });
             });
           }
         }

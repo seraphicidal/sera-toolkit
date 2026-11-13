@@ -1,5 +1,5 @@
 import { readFile, writeFile } from 'node:fs/promises';
-import { extname } from 'node:path';
+import { extname, join } from 'node:path';
 import { seraError } from '../errors.js';
 import { run } from '../util/spawn.js';
 import { probe, type FfmpegOptions } from './ffmpeg.js';
@@ -93,11 +93,12 @@ export async function tagAudio(request: TagAudioRequest): Promise<void> {
   if (oggCover) {
     const jpeg = await readFile(request.coverPath);
     const cover = await probe(request.coverPath, request);
-    const side = cover.video?.width ?? 0;
-    lines.push(`METADATA_BLOCK_PICTURE=${escapeMetadata(pictureBlock(jpeg, side, side))}`);
+    const width = cover.video?.width ?? 0;
+    const height = cover.video?.height ?? 0;
+    lines.push(`METADATA_BLOCK_PICTURE=${escapeMetadata(pictureBlock(jpeg, width, height))}`);
   }
 
-  const metadataPath = `${request.scratchDir}/tags.ffmeta`;
+  const metadataPath = join(request.scratchDir, 'tags.ffmeta');
   await writeFile(metadataPath, `${lines.join('\n')}\n`, 'utf8');
 
   const picture = request.coverPath && !oggCover;

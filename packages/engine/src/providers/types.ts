@@ -7,6 +7,7 @@ import type {
   ProviderCapabilities,
 } from '@sera/contracts/types';
 import type { ConversionSpec } from '../convert/ffmpeg.js';
+import type { Dispatcher } from 'undici';
 import type { EngineConfig } from '../config.js';
 import type { Logger } from '../logging.js';
 import type { OpenResponse } from '../security/http.js';
@@ -69,6 +70,7 @@ export interface ProviderContext {
   ) => Promise<OpenResponse>;
   readonly allowUrl?: (url: string | URL) => URL;
   readonly egressProxy?: (target: URL | string, upstreamProxy?: string) => Promise<string>;
+  readonly dispatcher?: Dispatcher;
 }
 
 export type FetchPlan =

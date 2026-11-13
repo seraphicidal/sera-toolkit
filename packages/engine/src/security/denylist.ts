@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { hostMatchesAny, normalizeUrl, stripWww } from './url.js';
 
@@ -78,7 +78,7 @@ export class Denylist {
       return { blocked: true, reason: 'host is on the deny list' };
     }
 
-    if (this.dynamicHosts.size > 0 && hostMatchesAny(host, [...this.dynamicHosts])) {
+    if (this.dynamicHosts.size > 0 && hostMatchesAny(host, this.dynamicHosts)) {
       return { blocked: true, reason: 'host is blocked' };
     }
 
@@ -93,10 +93,7 @@ export class Denylist {
   blockHost(host: string, reason = 'Report mitigation'): BlockedEntry | undefined {
     const cleanHost = stripWww(host.toLowerCase());
     if (!cleanHost) return undefined;
-    if (
-      PROTECTED_HOSTS.has(cleanHost) ||
-      [...PROTECTED_HOSTS].some((p) => cleanHost.endsWith(`.${p}`))
-    ) {
+    if (hostMatchesAny(cleanHost, PROTECTED_HOSTS)) {
       return undefined;
     }
     if (this.dynamicHosts.has(cleanHost)) {
@@ -182,9 +179,11 @@ export class Denylist {
 
   private save(): void {
     if (!this.filePath) return;
+    const tmpPath = `${this.filePath}.${String(process.pid)}.${Math.random().toString(36).slice(2, 8)}.tmp`;
     try {
       mkdirSync(dirname(this.filePath), { recursive: true });
-      writeFileSync(this.filePath, JSON.stringify({ entries: this.entries }, null, 2), 'utf-8');
+      writeFileSync(tmpPath, JSON.stringify({ entries: this.entries }, null, 2), 'utf-8');
+      renameSync(tmpPath, this.filePath);
     } catch {}
   }
 }

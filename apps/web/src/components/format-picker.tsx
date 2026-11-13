@@ -2,7 +2,7 @@
 
 import type { DownloadOption, MediaInfo } from '@sera/contracts/types';
 import { AudioIcon, ChevronIcon, GifIcon, ImageIcon, VideoIcon } from './icons';
-import { cx, formatBytes, optionBadges } from '@/lib/format';
+import { cx, formatBytes, optionBadges, stepRadio } from '@/lib/format';
 import {
   availableKinds,
   kindLabel,
@@ -68,20 +68,7 @@ export function FormatPicker({
                   aria-checked={selected}
                   tabIndex={selected ? 0 : -1}
                   onClick={() => onKindChange(candidate)}
-                  onKeyDown={(event) => {
-                    let offset = 0;
-                    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') offset = 1;
-                    else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') offset = -1;
-                    if (!offset) return;
-                    event.preventDefault();
-                    const nextIndex = (index + offset + kinds.length) % kinds.length;
-                    const nextKind = kinds[nextIndex];
-                    if (!nextKind) return;
-                    onKindChange(nextKind);
-                    event.currentTarget.parentElement
-                      ?.querySelectorAll<HTMLButtonElement>('[role="radio"]')
-                      [nextIndex]?.focus();
-                  }}
+                  onKeyDown={(event) => stepRadio(event, kinds, index, onKindChange)}
                   className={cx(
                     'flex min-w-0 cursor-pointer items-center justify-center gap-2 rounded-lg px-1.5 py-2.5 text-[0.8125rem] font-medium transition-all duration-150 min-[400px]:px-3',
                     selected
@@ -142,20 +129,7 @@ export function FormatPicker({
                   aria-checked={selected}
                   tabIndex={selected ? 0 : -1}
                   onClick={() => onLabelChange(candidate)}
-                  onKeyDown={(event) => {
-                    let offset = 0;
-                    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') offset = 1;
-                    else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') offset = -1;
-                    if (!offset) return;
-                    event.preventDefault();
-                    const nextIndex = (index + offset + labels.length) % labels.length;
-                    const nextLabel = labels[nextIndex];
-                    if (!nextLabel) return;
-                    onLabelChange(nextLabel);
-                    event.currentTarget.parentElement
-                      ?.querySelectorAll<HTMLButtonElement>('[role="radio"]')
-                      [nextIndex]?.focus();
-                  }}
+                  onKeyDown={(event) => stepRadio(event, labels, index, onLabelChange)}
                   className={cx(
                     'flex cursor-pointer flex-col gap-1.5 rounded-xl border px-3 py-2.5 text-left transition-all duration-150',
                     selected

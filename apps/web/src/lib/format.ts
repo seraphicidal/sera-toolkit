@@ -1,3 +1,4 @@
+import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import {
   formatTimecode,
   isTerminalJobState,
@@ -180,4 +181,28 @@ export function resolvePipelineStepIndex(state: JobState, step?: string): number
     return 1;
   }
   return 0;
+}
+
+export function isSafeDownloadPath(path: string): boolean {
+  return path.startsWith('/api/') && !path.startsWith('//');
+}
+
+export function stepRadio<T>(
+  event: ReactKeyboardEvent<HTMLButtonElement>,
+  values: readonly T[],
+  index: number,
+  onSelect: (value: T) => void,
+): void {
+  let offset = 0;
+  if (event.key === 'ArrowRight' || event.key === 'ArrowDown') offset = 1;
+  else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') offset = -1;
+  if (!offset || !values.length) return;
+  event.preventDefault();
+  const nextIndex = (index + offset + values.length) % values.length;
+  const nextValue = values[nextIndex];
+  if (nextValue === undefined) return;
+  onSelect(nextValue);
+  event.currentTarget.parentElement
+    ?.querySelectorAll<HTMLButtonElement>('[role="radio"]')
+    [nextIndex]?.focus();
 }

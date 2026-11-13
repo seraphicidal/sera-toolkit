@@ -73,6 +73,12 @@ describe('signToken / verifyToken', () => {
     expect(codeOf(() => verifyToken(`${token}=`, secret))).toBe('EXPIRED');
     expect(codeOf(() => verifyToken(` ${token}`, secret))).toBe('EXPIRED');
   });
+
+  it('refuses oversized malformed tokens before decoding', () => {
+    expect(codeOf(() => verifyToken(`${'a'.repeat(16_385)}.${'b'.repeat(43)}`, secret))).toBe(
+      'EXPIRED',
+    );
+  });
 });
 
 describe('newJobId', () => {

@@ -46,6 +46,9 @@ describe('isPublicAddress', () => {
       '0000:0000:0000:0000:0000:ffff:7f00:0001',
       '::127.0.0.1',
       '::ffff:0:127.0.0.1',
+      '::ffff:0:0:127.0.0.1',
+      '0::ffff:127.0.0.1',
+      'fec0::1',
       '64:ff9b::127.0.0.1',
       '64:ff9b:1::1',
       '2001:0::1',
@@ -65,7 +68,14 @@ describe('isPublicAddress', () => {
   });
 
   it('rejects anything that is not an address at all', () => {
-    for (const value of ['', 'example.com', '999.999.999.999', '127.0.0.1.evil.com', 'not-an-ip']) {
+    for (const value of [
+      '',
+      'example.com',
+      '999.999.999.999',
+      '127.0.0.1.evil.com',
+      '2001::1::1',
+      'not-an-ip',
+    ]) {
       expect(isPublicAddress(value), value).toBe(false);
     }
   });
@@ -74,14 +84,16 @@ describe('isPublicAddress', () => {
 describe('unwrapIpv4Mapped', () => {
   it('reads compressed, expanded, dotted, and hex spellings', () => {
     expect(unwrapIpv4Mapped('::ffff:192.168.0.1')).toBe('192.168.0.1');
+    expect(unwrapIpv4Mapped('0::ffff:127.0.0.1')).toBe('127.0.0.1');
     expect(unwrapIpv4Mapped('::ffff:c0a8:1')).toBe('192.168.0.1');
     expect(unwrapIpv4Mapped('::ffff:7f00:1')).toBe('127.0.0.1');
     expect(unwrapIpv4Mapped('0:0:0:0:0:ffff:127.0.0.1')).toBe('127.0.0.1');
     expect(unwrapIpv4Mapped('0000:0000:0000:0000:0000:ffff:7f00:0001')).toBe('127.0.0.1');
   });
 
-  it('returns nothing for an address that is not mapped', () => {
+  it('returns nothing for an address that is not mapped or malformed', () => {
     expect(unwrapIpv4Mapped('2001:4860:4860::8888')).toBeUndefined();
+    expect(unwrapIpv4Mapped('2001::1::1')).toBeUndefined();
     expect(unwrapIpv4Mapped('8.8.8.8')).toBeUndefined();
   });
 });

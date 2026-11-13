@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { isSafeDownloadPath } from '@/lib/format';
 import { ClearHistoryButton } from './clear-history-button';
 import {
   HISTORY_EVENT,
@@ -59,6 +60,7 @@ export function RecentDownloads({ onAgain }: { readonly onAgain: (url: string) =
       <ul className="divide-y divide-[var(--color-line)] overflow-hidden rounded-[var(--radius-input)] border border-[var(--color-line)] bg-[var(--color-surface)]">
         {entries.map((entry) => {
           const expired = isExpired(entry, now);
+          const canDownload = !expired && isSafeDownloadPath(entry.downloadPath);
           return (
             <li key={entry.jobId} className="flex items-center gap-3 px-3.5 py-2.5">
               <div className="min-w-0 flex-1">
@@ -70,16 +72,7 @@ export function RecentDownloads({ onAgain }: { readonly onAgain: (url: string) =
                   {expired && ' · expired'}
                 </p>
               </div>
-              {expired ? (
-                <button
-                  type="button"
-                  onClick={() => onAgain(entry.url)}
-                  aria-label={`Download again: ${entry.title}`}
-                  className="shrink-0 cursor-pointer rounded-lg border border-[var(--color-line)] px-2.5 py-1.5 text-xs font-medium transition-colors hover:bg-[var(--color-sunken)]"
-                >
-                  Download again
-                </button>
-              ) : (
+              {canDownload ? (
                 <a
                   href={entry.downloadPath}
                   download={entry.filename}
@@ -88,6 +81,15 @@ export function RecentDownloads({ onAgain }: { readonly onAgain: (url: string) =
                 >
                   Download
                 </a>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => onAgain(entry.url)}
+                  aria-label={`Download again: ${entry.title}`}
+                  className="shrink-0 cursor-pointer rounded-lg border border-[var(--color-line)] px-2.5 py-1.5 text-xs font-medium transition-colors hover:bg-[var(--color-sunken)]"
+                >
+                  Download again
+                </button>
               )}
             </li>
           );

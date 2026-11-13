@@ -11,6 +11,7 @@ export interface TrimMediaRequest extends FfmpegOptions {
   readonly output: string;
   readonly range: TrimRange;
   readonly threads?: number;
+  readonly maxOutputBytes?: number;
 }
 
 export function copyIsAccurate(start: number, keyframe: number | undefined): boolean {
@@ -129,6 +130,7 @@ export async function trimMedia(request: TrimMediaRequest): Promise<{ reencoded:
     ...(extension === 'mp4' || extension === 'mov' || extension === 'm4a'
       ? ['-movflags', '+faststart']
       : []),
+    ...(request.maxOutputBytes ? ['-fs', String(request.maxOutputBytes)] : []),
     request.output,
   ];
 

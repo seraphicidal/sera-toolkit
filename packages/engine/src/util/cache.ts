@@ -1,5 +1,8 @@
+const SWEEP_BATCH = 16;
+
 export class TtlCache<V> {
   private readonly entries = new Map<string, { value: V; expiresAt: number }>();
+  private sweepCursor: IterableIterator<[string, { value: V; expiresAt: number }]> | undefined;
 
   constructor(
     private readonly maxEntries: number,
@@ -30,6 +33,7 @@ export class TtlCache<V> {
 
   clear(): void {
     this.entries.clear();
+    this.sweepCursor = undefined;
   }
 
   get size(): number {
@@ -37,8 +41,17 @@ export class TtlCache<V> {
   }
 
   private evict(now: number): void {
-    for (const [key, entry] of this.entries) {
-      if (entry.expiresAt <= now) this.entries.delete(key);
+    if (this.entries.size > 0) {
+      this.sweepCursor ??= this.entries.entries();
+      for (let i = 0; i < SWEEP_BATCH; i += 1) {
+        const next = this.sweepCursor.next();
+        if (next.done) {
+          this.sweepCursor = undefined;
+          break;
+        }
+        const [key, entry] = next.value;
+        if (entry.expiresAt <= now) this.entries.delete(key);
+      }
     }
     while (this.entries.size > this.maxEntries) {
       const oldest = this.entries.keys().next();

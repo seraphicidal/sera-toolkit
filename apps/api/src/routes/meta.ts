@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { HealthReport } from '@sera/contracts/types';
 import type { SeraEngine } from '@sera/engine';
-import { matchesToken } from '../plugins/client.js';
+import { checkAdminAuth } from '../plugins/admin-auth.js';
 
 function isLoopback(address: string): boolean {
   return (
@@ -13,12 +13,7 @@ function isLoopback(address: string): boolean {
 }
 
 function isAuthorized(request: FastifyRequest, engine: SeraEngine): boolean {
-  if (request.canary) return true;
-  const { adminToken } = engine.config;
-  if (!adminToken) return false;
-  const header = request.headers.authorization ?? '';
-  const presented = header.startsWith('Bearer ') ? header.slice(7) : '';
-  return matchesToken(presented, adminToken);
+  return request.canary || checkAdminAuth(request.headers.authorization, engine.config.adminToken);
 }
 
 function redactHealthReport(report: HealthReport): HealthReport {
@@ -40,7 +35,10 @@ export function registerMetaRoutes(app: FastifyInstance, engine: SeraEngine): vo
         max: 60,
         timeWindow: '1 minute',
         allowList: (request: FastifyRequest) =>
-          request.canary || (!request.headers['x-forwarded-for'] && isLoopback(request.ip)),
+          request.canary ||
+          (!request.headers['x-forwarded-for'] &&
+            !request.headers.forwarded &&
+            isLoopback(request.ip)),
       },
     },
   };

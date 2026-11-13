@@ -23,7 +23,8 @@ export function sanitizeStem(input: string, fallback = 'media'): string {
   }
   out = out.replace(/[.\-\s]+$/, '').trim();
 
-  if (!out || RESERVED_WINDOWS.test(out)) return fallback;
+  const primaryStem = out.split('.')[0] ?? '';
+  if (!out || RESERVED_WINDOWS.test(out) || RESERVED_WINDOWS.test(primaryStem)) return fallback;
   return out;
 }
 

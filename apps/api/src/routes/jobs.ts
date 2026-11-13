@@ -68,7 +68,10 @@ export function registerJobRoutes(app: FastifyInstance, engine: SeraEngine): voi
       const clientKey = request.canary ? undefined : request.clientKey;
       const deleted = await engine.jobs.delete(id, clientKey);
       if (!deleted) throw seraError('NOT_FOUND', { message: 'That download has expired.' });
-      return reply.status(200).send({ cancelled: deleted, deleted: true, id });
+      return reply
+        .header('cache-control', 'no-store')
+        .status(200)
+        .send({ cancelled: deleted, deleted: true, id });
     },
   );
 
@@ -96,21 +99,28 @@ export function registerJobRoutes(app: FastifyInstance, engine: SeraEngine): voi
         'x-content-type-options': 'nosniff',
         'referrer-policy': 'no-referrer',
         'x-frame-options': 'DENY',
+        'strict-transport-security': 'max-age=63072000; includeSubDomains',
         'content-security-policy': "default-src 'none'; frame-ancestors 'none'",
       });
-      reply.raw.write('retry: 3000\n\n');
+      const writeSse = (payload: string): void => {
+        if (!signal.aborted && !reply.raw.destroyed && !reply.raw.writableEnded) {
+          reply.raw.write(payload);
+        }
+      };
+
+      writeSse('retry: 3000\n\n');
 
       try {
         for await (const event of engine.jobs.events(id, signal, clientKey)) {
           if (signal.aborted) break;
-          reply.raw.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+          writeSse(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
         }
       } catch (error) {
         const message =
           error instanceof SeraError ? error.message : 'Something went wrong on our side.';
-        reply.raw.write(`event: error\ndata: ${JSON.stringify({ type: 'error', message })}\n\n`);
+        writeSse(`event: error\ndata: ${JSON.stringify({ type: 'error', message })}\n\n`);
       } finally {
-        reply.raw.end();
+        if (!reply.raw.writableEnded) reply.raw.end();
         if (!reply.raw.destroyed) reply.raw.destroy();
       }
       return reply;
@@ -131,7 +141,7 @@ export function registerJobRoutes(app: FastifyInstance, engine: SeraEngine): voi
         await engine.jobs.markExpired(id);
         throw seraError('NOT_FOUND', { message: 'That download has expired.' });
       }
-      return sendFile(engine, request, reply, id, manifest.primary, !request.canary);
+      return sendFile(engine, request, reply, id, manifest.primary, !request.canary, job.provider);
     },
   });
 
@@ -152,7 +162,7 @@ export function registerJobRoutes(app: FastifyInstance, engine: SeraEngine): voi
 
       const name = request.params.name;
       if (!manifest.files.some((file) => file.name === name)) throw seraError('NOT_FOUND');
-      return sendFile(engine, request, reply, id, name, !request.canary);
+      return sendFile(engine, request, reply, id, name, !request.canary, job.provider);
     },
   });
 }
@@ -202,6 +212,7 @@ async function sendFile(
   jobId: string,
   filename: string,
   counted: boolean,
+  provider: string,
 ): Promise<FastifyReply> {
   const path = await engine.workspaces.resolveFile(jobId, filename);
   const info = await stat(path);
@@ -237,15 +248,12 @@ async function sendFile(
       const chunkSize = end - start + 1;
       if (counted) {
         reply.raw.once('finish', () => {
-          void engine.jobs
-            .get(jobId)
-            .then((job) =>
-              engine.usage.record({
-                source: job?.provider ?? 'other',
-                kind: 'bytes',
-                bytes: chunkSize,
-              }),
-            )
+          void engine.usage
+            .record({
+              source: provider || 'other',
+              kind: 'bytes',
+              bytes: chunkSize,
+            })
             .catch(() => undefined);
         });
       }
@@ -259,15 +267,12 @@ async function sendFile(
 
   if (counted) {
     reply.raw.once('finish', () => {
-      void engine.jobs
-        .get(jobId)
-        .then((job) =>
-          engine.usage.record({
-            source: job?.provider ?? 'other',
-            kind: 'bytes',
-            bytes: info.size,
-          }),
-        )
+      void engine.usage
+        .record({
+          source: provider || 'other',
+          kind: 'bytes',
+          bytes: info.size,
+        })
         .catch(() => undefined);
     });
   }

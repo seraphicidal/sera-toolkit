@@ -71,3 +71,36 @@ export function nonEmpty(value: string | undefined | null): string | undefined {
   if (!trimmed) return undefined;
   return trimmed;
 }
+
+const HTML_ENTITIES: Readonly<Record<string, string>> = {
+  '&amp;': '&',
+  '&lt;': '<',
+  '&gt;': '>',
+  '&quot;': '"',
+  '&apos;': "'",
+  '&nbsp;': ' ',
+};
+
+function decodeCodePoint(raw: string, radix: number, entity: string, fallback?: string): string {
+  const cp = radix === 16 ? parseInt(raw, 16) : Number(raw);
+  return Number.isInteger(cp) && cp >= 0 && cp <= 0x10ffff
+    ? String.fromCodePoint(cp)
+    : (fallback ?? entity);
+}
+
+export function decodeHtmlEntities(value: string, unknownNamedFallback?: string): string {
+  return value.replace(
+    /&(?:#x([0-9a-f]+)|#(\d+)|([a-z]+));/gi,
+    (entity, hex: string | undefined, dec: string | undefined) => {
+      if (hex !== undefined) {
+        return decodeCodePoint(hex, 16, entity, unknownNamedFallback);
+      }
+      if (dec !== undefined) {
+        return decodeCodePoint(dec, 10, entity, unknownNamedFallback);
+      }
+      const mapped = HTML_ENTITIES[entity.toLowerCase()];
+      if (mapped !== undefined) return mapped;
+      return unknownNamedFallback ?? entity;
+    },
+  );
+}

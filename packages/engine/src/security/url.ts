@@ -155,8 +155,11 @@ export function hostMatches(host: string, domain: string): boolean {
   return h === d || h.endsWith(`.${d}`);
 }
 
-export function hostMatchesAny(host: string, domains: readonly string[]): boolean {
-  return domains.some((d) => hostMatches(host, d));
+export function hostMatchesAny(host: string, domains: Iterable<string>): boolean {
+  for (const d of domains) {
+    if (hostMatches(host, d)) return true;
+  }
+  return false;
 }
 
 export const MEDIA_EXTENSIONS = new Set([

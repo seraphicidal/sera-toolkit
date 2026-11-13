@@ -30,8 +30,12 @@ export function signToken<T extends object>(
 }
 
 const BASE64URL_PART = /^[A-Za-z0-9_-]+$/;
+const MAX_TOKEN_LENGTH = 16_384;
 
 export function readToken<T extends object>(token: string, secret: Buffer): T & SignedPayload {
+  if (!token || token.length > MAX_TOKEN_LENGTH) {
+    throw seraError('EXPIRED', { detail: 'malformed token' });
+  }
   const index = token.indexOf(SEPARATOR);
   if (index <= 0 || index === token.length - 1) {
     throw seraError('EXPIRED', { detail: 'malformed token' });

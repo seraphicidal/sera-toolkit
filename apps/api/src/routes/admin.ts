@@ -4,7 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { SeraEngine } from '@sera/engine';
 import { totalUsage, USAGE_RETENTION_DAYS } from '@sera/engine';
-import { matchesToken } from '../plugins/client.js';
+import { checkAdminAuth } from '../plugins/admin-auth.js';
 
 const usageQuerySchema = z.object({
   days: z.coerce.number().int().min(1).max(USAGE_RETENTION_DAYS).default(7),
@@ -28,11 +28,6 @@ const denylistCreateSchema = z.object({
 const denylistParamsSchema = z.object({
   id: z.string().regex(/^[a-zA-Z0-9_-]+$/),
 });
-
-function checkAdminAuth(header: string | undefined, adminToken: string): boolean {
-  const presented = header?.startsWith('Bearer ') ? header.slice(7) : '';
-  return matchesToken(presented, adminToken);
-}
 
 export function registerAdminRoutes(app: FastifyInstance, engine: SeraEngine): void {
   const { config } = engine;

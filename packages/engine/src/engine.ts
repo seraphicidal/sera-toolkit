@@ -52,6 +52,7 @@ export class SeraEngine {
   private readonly startedAt = Date.now();
   private stopReaper: (() => void) | undefined;
   private worker: WorkerHandle | undefined;
+  private remote: RemoteExtraction | undefined;
 
   private constructor(parts: {
     config: EngineConfig;
@@ -64,6 +65,7 @@ export class SeraEngine {
     jobs: JobService;
     usage: UsageCounter;
     denylist: Denylist;
+    remote?: RemoteExtraction;
   }) {
     this.config = parts.config;
     this.logger = parts.logger;
@@ -75,6 +77,7 @@ export class SeraEngine {
     this.jobs = parts.jobs;
     this.usage = parts.usage;
     this.denylist = parts.denylist;
+    this.remote = parts.remote;
   }
 
   static async create(options: EngineOptions = {}): Promise<SeraEngine> {
@@ -147,6 +150,7 @@ export class SeraEngine {
       jobs,
       usage,
       denylist,
+      remote,
     });
     engine.stopReaper = workspaces.startReaper(config.reapIntervalSeconds);
     void workspaces.reap().catch(() => undefined);
@@ -267,6 +271,7 @@ export class SeraEngine {
     await this.backend.close().catch(() => undefined);
     await this.usage.close().catch(() => undefined);
     await this.resolver.close().catch(() => undefined);
+    (this.remote as { close?: () => void } | undefined)?.close?.();
   }
 }
 

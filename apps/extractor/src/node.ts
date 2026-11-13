@@ -251,7 +251,10 @@ export class ExtractionNode {
     let currentBytesDownloaded: number | undefined;
     let currentBytesTotal: number | undefined;
     let lastSentAt = 0;
+    let heartbeatInFlight = false;
     const heartbeat = setInterval(() => {
+      if (heartbeatInFlight || abort.signal.aborted) return;
+      heartbeatInFlight = true;
       lastSentAt = Date.now();
       void this.progress(
         task.id,
@@ -260,7 +263,9 @@ export class ExtractionNode {
         abort,
         currentBytesDownloaded,
         currentBytesTotal,
-      );
+      ).finally(() => {
+        heartbeatInFlight = false;
+      });
     }, PROGRESS_INTERVAL_MS);
     heartbeat.unref();
 
@@ -413,6 +418,7 @@ export class ExtractionNode {
             });
           } catch (error) {
             uploadError ??= error;
+            abort.abort();
             break;
           }
         }

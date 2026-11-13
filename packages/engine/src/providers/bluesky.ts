@@ -41,7 +41,7 @@ export class BlueskyProvider extends YtdlpProvider {
       {
         id: 'at-protocol',
         label: "Bluesky's public API",
-        answers: ['UNSUPPORTED_MEDIA'],
+        answers: ['UNSUPPORTED_MEDIA', 'FORMAT_UNAVAILABLE'],
         run: (target, ctx) => this.resolveImages(target, ctx),
       },
     ];

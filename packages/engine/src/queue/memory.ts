@@ -17,6 +17,8 @@ export class MemoryJobBackend implements JobBackend {
   private readonly waiting: string[] = [];
   private readonly events = new EventEmitter();
   private readonly running = new Set<string>();
+  private readonly activeByClient = new Map<string, Set<string>>();
+  private readonly evictionTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   private handler: JobHandler | undefined;
   private concurrency = 1;
@@ -32,6 +34,7 @@ export class MemoryJobBackend implements JobBackend {
 
   async submit(record: JobRecord): Promise<void> {
     this.records.set(record.id, record);
+    if (isActive(record.state)) this.trackActive(record.clientKey, record.id);
     this.waiting.push(record.id);
     this.wake?.();
     return Promise.resolve();
@@ -71,6 +74,9 @@ export class MemoryJobBackend implements JobBackend {
       updatedAt: new Date().toISOString(),
     };
     this.records.set(id, next);
+    if (!isActive(next.state)) {
+      this.untrackActive(next.clientKey, id);
+    }
     this.events.emit(id, next);
 
     if (!isActive(next.state)) this.scheduleEviction(id);
@@ -87,11 +93,7 @@ export class MemoryJobBackend implements JobBackend {
   }
 
   activeCountFor(clientKey: string): Promise<number> {
-    let count = 0;
-    for (const record of this.records.values()) {
-      if (record.clientKey === clientKey && isActive(record.state)) count += 1;
-    }
-    return Promise.resolve(count);
+    return Promise.resolve(this.activeByClient.get(clientKey)?.size ?? 0);
   }
 
   startWorker(handler: JobHandler, concurrency: number): WorkerHandle {
@@ -111,6 +113,8 @@ export class MemoryJobBackend implements JobBackend {
   async close(): Promise<void> {
     this.closed = true;
     this.wake?.();
+    for (const timer of this.evictionTimers.values()) clearTimeout(timer);
+    this.evictionTimers.clear();
     this.events.removeAllListeners();
     return Promise.resolve();
   }
@@ -122,8 +126,15 @@ export class MemoryJobBackend implements JobBackend {
         void this.process(id);
       }
       await new Promise<void>((resolve) => {
-        this.wake = resolve;
-        const timer = setTimeout(resolve, 250);
+        let settled = false;
+        const done = () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          resolve();
+        };
+        this.wake = done;
+        const timer = setTimeout(done, 250);
         timer.unref();
       });
       this.wake = undefined;
@@ -151,8 +162,32 @@ export class MemoryJobBackend implements JobBackend {
     }
   }
 
+  private trackActive(clientKey: string, id: string): void {
+    let ids = this.activeByClient.get(clientKey);
+    if (!ids) {
+      ids = new Set();
+      this.activeByClient.set(clientKey, ids);
+    }
+    ids.add(id);
+  }
+
+  private untrackActive(clientKey: string, id: string): void {
+    const ids = this.activeByClient.get(clientKey);
+    if (!ids) return;
+    ids.delete(id);
+    if (ids.size === 0) this.activeByClient.delete(clientKey);
+  }
+
   private scheduleEviction(id: string): void {
-    const timer = setTimeout(() => this.records.delete(id), this.retentionMs);
+    const prev = this.evictionTimers.get(id);
+    if (prev) clearTimeout(prev);
+    const timer = setTimeout(() => {
+      this.evictionTimers.delete(id);
+      const record = this.records.get(id);
+      if (record) this.untrackActive(record.clientKey, id);
+      this.records.delete(id);
+    }, this.retentionMs);
     timer.unref();
+    this.evictionTimers.set(id, timer);
   }
 }

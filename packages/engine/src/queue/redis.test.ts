@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Redis } from 'ioredis';
 import { silentLogger } from '../logging.js';
 import type { JobSpec } from '../jobs/runner.js';
-import { QUEUE_NAME, RedisJobBackend } from './redis.js';
+import { parseRedisRecord, QUEUE_NAME, RedisJobBackend } from './redis.js';
 import type { JobRecord } from './types.js';
 
 describe('queue naming', () => {
@@ -23,6 +23,39 @@ describe('a job carrying an imported post', () => {
   it('survives the round trip the Redis driver puts it through', () => {
     const job = importedRecord('i0');
     expect(JSON.parse(JSON.stringify(job))).toEqual(job);
+  });
+
+  it('coerces empty Lua cjson objects back into arrays in parseRedisRecord', () => {
+    const base = importedRecord('i1');
+    const serialized = JSON.stringify({
+      ...base,
+      spec: {
+        ...base.spec,
+        selections: {},
+        imported: {
+          ...base.spec.imported!,
+          entries: {},
+        },
+      },
+      result: {
+        downloadPath: '/api/jobs/i1/file',
+        filename: 'file.mp4',
+        sizeBytes: 1024,
+        mimeType: 'video/mp4',
+        isArchive: false,
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        files: {},
+        delivery: {
+          backend: 'local',
+          substituted: {},
+        },
+      },
+    });
+    const parsed = parseRedisRecord(serialized);
+    expect(parsed?.spec.selections).toEqual([]);
+    expect(parsed?.spec.imported?.entries).toEqual([]);
+    expect(parsed?.result?.files).toEqual([]);
+    expect(parsed?.result?.delivery?.substituted).toEqual([]);
   });
 });
 
