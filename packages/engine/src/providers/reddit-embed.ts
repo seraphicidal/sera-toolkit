@@ -131,7 +131,7 @@ function videoItem(base: string): ResolvedItem {
         fetch: {
           via: 'ytdlp',
           selector: 'bestaudio/best',
-          audio: { format: 'mp3', quality: '192' },
+          audio: { format: 'mp3', quality: '192K' },
           useExtractors: MANIFEST_EXTRACTORS,
         },
       },

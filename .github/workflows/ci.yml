@@ -79,7 +79,7 @@ jobs:
         run: npm run build
 
       - name: Lint the deploy scripts
-        run: shellcheck deploy/*.sh deploy/node-android/*.sh
+        run: shellcheck -e SC1091 deploy/*.sh deploy/node-android/*.sh
 
       - name: Check the API URL is the same at build time and run time
         run: |
@@ -236,10 +236,8 @@ jobs:
             -e SERA_QUEUE_DRIVER=redis
             -e SERA_REDIS_URL=redis://sera-redis-ci:6379"
 
-          # shellcheck disable=SC2086
-          docker run -d --name sera-api-ci --network sera-ci $common -e SERA_EMBEDDED_WORKER=false -p 4000:4000 "$IMAGE_API:verify" >/dev/null
-          # shellcheck disable=SC2086
-          docker run -d --name sera-worker-ci --network sera-ci $common "$IMAGE_API:verify" node apps/worker/dist/index.js >/dev/null
+                    docker run -d --name sera-api-ci --network sera-ci $common -e SERA_EMBEDDED_WORKER=false -p 4000:4000 "$IMAGE_API:verify" >/dev/null
+                    docker run -d --name sera-worker-ci --network sera-ci $common "$IMAGE_API:verify" node apps/worker/dist/index.js >/dev/null
 
           for _ in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:4000/health >/dev/null 2>&1; then break; fi

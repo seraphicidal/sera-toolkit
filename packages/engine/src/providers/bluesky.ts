@@ -1,8 +1,9 @@
-import type { ContainerFormat, ProviderCapabilities } from '@sera/contracts/types';
+import type { ProviderCapabilities } from '@sera/contracts/types';
 import { seraError } from '../errors.js';
 import type { ExtractionStrategy } from '../extract/strategy.js';
 import { ensureRecommendations } from '../normalize/plans.js';
 import { normalizeContainer } from './direct.js';
+import { urlExtension } from '../security/url.js';
 import { nonEmpty, truncate } from '../util/format.js';
 import type { DownloadPlan, ProviderContext, ResolvedItem, ResolvedMedia } from './types.js';
 import { YtdlpProvider } from './ytdlp-base.js';
@@ -70,11 +71,16 @@ export class BlueskyProvider extends YtdlpProvider {
     const text = typeof post.record?.text === 'string' ? post.record.text.trim() : '';
     const title = text ? truncate(text, 200) : `Post by ${author ?? 'Bluesky user'}`;
 
-    const container = await this.containerOf(images[0]!.fullsize, context);
-
     const items: ResolvedItem[] = images
       .slice(0, context.config.maxItemsPerJob)
       .map((image, index) => {
+        let pathExt = '';
+        try {
+          pathExt = urlExtension(new URL(image.fullsize)) ?? '';
+        } catch {}
+        const suffixExt = /@([a-z0-9]+)(?:[?#]|$)/i.exec(image.fullsize)?.[1] ?? '';
+        const detected = normalizeContainer('', suffixExt || pathExt || 'jpg');
+        const container = detected === 'bin' ? 'jpg' : detected;
         const plans: DownloadPlan[] = [
           {
             kind: 'image',
@@ -121,17 +127,6 @@ export class BlueskyProvider extends YtdlpProvider {
       items,
       metadata: { images: String(images.length) },
     };
-  }
-
-  private async containerOf(url: string, context: ProviderContext): Promise<ContainerFormat> {
-    try {
-      const head = await context.head(new URL(url));
-      const contentType = (head.contentType ?? '').split(';')[0]?.trim().toLowerCase() ?? '';
-      const container = normalizeContainer(contentType, '');
-      return container === 'bin' ? 'jpg' : container;
-    } catch {
-      return 'jpg';
-    }
   }
 
   private async resolveHandle(handle: string, context: ProviderContext): Promise<string> {

@@ -379,11 +379,10 @@ export function confineToHttp(selector: string): string {
     .map((alternative) =>
       alternative
         .split('+')
-        .map((atom) => (KEYWORD_ATOM.test(atom) ? `${atom}${HTTP_PROTOCOLS}` : atom))
+        .map((atom) => (atom.includes('[protocol') ? atom : `${atom}${HTTP_PROTOCOLS}`))
         .join('+'),
     )
     .join('/');
 }
 
-const KEYWORD_ATOM = /^(?:best|worst|b|w)(?:video|audio|v|a)?\*?(?:\.\d+)?(?:\[|$)/;
 const HTTP_PROTOCOLS = "[protocol~='^(https?|m3u8(_native)?|http_dash_segments)$']";

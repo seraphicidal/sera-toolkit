@@ -16,6 +16,7 @@ import {
   initialKind,
   qualityLabels,
   resolveSelection,
+  selectItemsUpToMax,
   type SelectableKind,
 } from '@/lib/selection';
 import { urlFromFragment } from '@/lib/share';
@@ -40,6 +41,7 @@ import { UrlForm } from './url-form';
 type Phase = 'idle' | 'analyzing' | 'ready' | 'submitting' | 'running' | 'done';
 
 const PREFERRED_KIND_KEY = 'sera-preferred-kind';
+const MAX_SELECTED_ITEMS = 25;
 
 function getPreferredKind(): SelectableKind | undefined {
   try {
@@ -62,7 +64,7 @@ function seedFrom(info: MediaInfo): {
   selectedIds: Set<string>;
   label: string | undefined;
 } {
-  const selectedIds = new Set(info.items.map((item) => item.id));
+  const selectedIds = selectItemsUpToMax(info.items, MAX_SELECTED_ITEMS);
   const available = availableKinds(info, selectedIds);
   const preferred = getPreferredKind();
   const kind = preferred && available.includes(preferred) ? preferred : initialKind(info);
@@ -71,6 +73,10 @@ function seedFrom(info: MediaInfo): {
 
 export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo } = {}) {
   const importMode = initialInfo !== undefined;
+  const initialSeed = useMemo(
+    () => (initialInfo ? seedFrom(initialInfo) : undefined),
+    [initialInfo],
+  );
   const [url, setUrl] = useState('');
   const [batchQueue, setBatchQueue] = useState<readonly string[]>([]);
   const [batchIndex, setBatchIndex] = useState(0);
@@ -80,15 +86,11 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
   const [jobId, setJobId] = useState<string | undefined>();
   const [initialJob, setInitialJob] = useState<Job | undefined>();
 
-  const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() =>
-    initialInfo ? seedFrom(initialInfo).selectedIds : new Set(),
+  const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(
+    () => initialSeed?.selectedIds ?? new Set(),
   );
-  const [kind, setKind] = useState<SelectableKind>(() =>
-    initialInfo ? seedFrom(initialInfo).kind : 'video',
-  );
-  const [label, setLabel] = useState<string | undefined>(() =>
-    initialInfo ? seedFrom(initialInfo).label : undefined,
-  );
+  const [kind, setKind] = useState<SelectableKind>(() => initialSeed?.kind ?? 'video');
+  const [label, setLabel] = useState<string | undefined>(() => initialSeed?.label);
   const [filename, setFilename] = useState('');
   const [trimStart, setTrimStart] = useState('');
   const [trimEnd, setTrimEnd] = useState('');
@@ -139,6 +141,13 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
     setLabel(undefined);
   }, [initialInfo]);
 
+  const clearAll = useCallback(() => {
+    reset();
+    setUrl('');
+    setBatchQueue([]);
+    setBatchIndex(0);
+  }, [reset]);
+
   const analyze = useCallback(async (raw: string) => {
     sessionRef.current += 1;
     analyzeAbort.current?.abort();
@@ -163,7 +172,7 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
       const resolved = await resolveMedia(raw, controller.signal);
       if (controller.signal.aborted) return;
 
-      const everyItem = new Set(resolved.items.map((item) => item.id));
+      const everyItem = selectItemsUpToMax(resolved.items, MAX_SELECTED_ITEMS);
       const available = availableKinds(resolved, everyItem);
       const preferred = getPreferredKind();
       const startingKind =
@@ -392,9 +401,9 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
       });
     }
     if (info) actions.push({ label: 'Change format', onClick: () => setError(undefined) });
-    actions.push({ label: info ? 'Start over' : 'Clear', onClick: reset });
+    actions.push({ label: info ? 'Start over' : 'Clear', onClick: clearAll });
     return actions;
-  }, [error, info, url, importMode, analyze, start, reset]);
+  }, [error, info, url, importMode, analyze, start, clearAll]);
 
   return (
     <div className="flex flex-col gap-4">
@@ -515,7 +524,7 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
           <MediaPreview info={info} />
 
           {phase === 'done' && job ? (
-            <ResultPanel job={job} onReset={reset} />
+            <ResultPanel job={job} onReset={clearAll} />
           ) : working && job && isRunning(job.state) ? (
             <ProgressPanel job={job} onCancel={cancel} />
           ) : working ? (
@@ -535,9 +544,12 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
                     })
                   }
                   onSelectAll={(all) =>
-                    setSelectedIds(all ? new Set(info.items.map((item) => item.id)) : new Set())
+                    setSelectedIds(
+                      all ? selectItemsUpToMax(info.items, MAX_SELECTED_ITEMS) : new Set(),
+                    )
                   }
                   onSelectIds={setSelectedIds}
+                  maxItems={MAX_SELECTED_ITEMS}
                 />
               )}
 

@@ -227,4 +227,41 @@ describe('Security Hardening: IDOR, Coalescing & Extractor Filtering', () => {
     const parsed = parseGalleryDlJson(stdout, false, ['blocked.example']);
     expect(parsed.entries.map((entry) => entry.url)).toEqual(['https://cdn.good.example/b.png']);
   });
+
+  it('rejects /api/media/import and /api/thumb/:token when denied dynamically', async () => {
+    const postUrl = 'https://www.instagram.com/p/ZZ99yyXX11w';
+    const thumbPath = engine.resolver.thumbnailPath('https://img.denied-thumb.example/a.jpg');
+    engine.denylist.blockUrl(postUrl, 'Takedown');
+    engine.denylist.blockHost('img.denied-thumb.example', 'Takedown');
+
+    const importRes = await app.inject({
+      method: 'POST',
+      url: '/api/media/import',
+      headers: { 'x-forwarded-for': '198.51.100.211' },
+      payload: {
+        url: `${postUrl}/`,
+        node: {
+          code: 'ZZ99yyXX11w',
+          media_type: 1,
+          image_versions2: {
+            candidates: [
+              {
+                url: 'https://scontent-vie1-1.cdninstagram.com/v/t51/a.jpg',
+                width: 640,
+                height: 480,
+              },
+            ],
+          },
+        },
+      },
+    });
+    expect(importRes.json().error.code).toBe('UNSUPPORTED_SOURCE');
+
+    const thumbRes = await app.inject({
+      method: 'GET',
+      url: thumbPath,
+      headers: { 'x-forwarded-for': '198.51.100.212' },
+    });
+    expect(thumbRes.json().error.code).toBe('UNSUPPORTED_SOURCE');
+  });
 });

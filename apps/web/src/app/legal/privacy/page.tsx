@@ -2,6 +2,8 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { ClearHistoryButton } from '@/components/clear-history-button';
 
+export const dynamic = 'force-dynamic';
+
 export const metadata: Metadata = {
   title: 'Privacy Notice',
   description:
@@ -15,20 +17,16 @@ function clean(value?: string): string | undefined {
 
 export default function PrivacyPage() {
   const operatorName =
-    clean(process.env.NEXT_PUBLIC_OPERATOR_NAME) ??
     clean(process.env.OPERATOR_NAME) ??
+    clean(process.env.NEXT_PUBLIC_OPERATOR_NAME) ??
     'SERA.toolkit Operator';
   const operatorAddress =
-    clean(process.env.NEXT_PUBLIC_OPERATOR_ADDRESS) ??
-    clean(process.env.OPERATOR_ADDRESS) ??
-    'Online Service Provider, EU / Global';
+    clean(process.env.OPERATOR_ADDRESS) ?? clean(process.env.NEXT_PUBLIC_OPERATOR_ADDRESS);
   const operatorEmail =
-    clean(process.env.NEXT_PUBLIC_OPERATOR_EMAIL) ??
-    clean(process.env.OPERATOR_EMAIL) ??
-    'taniervlak@gmail.com';
+    clean(process.env.OPERATOR_EMAIL) ?? clean(process.env.NEXT_PUBLIC_OPERATOR_EMAIL);
   const dpoEmail =
-    clean(process.env.NEXT_PUBLIC_CONTACT_EMAIL_LEGAL) ??
     clean(process.env.CONTACT_EMAIL_LEGAL) ??
+    clean(process.env.NEXT_PUBLIC_CONTACT_EMAIL_LEGAL) ??
     operatorEmail;
 
   return (

@@ -22,30 +22,6 @@ const nextConfig: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
   output: 'standalone',
-  env: {
-    NEXT_PUBLIC_OPERATOR_NAME:
-      process.env.NEXT_PUBLIC_OPERATOR_NAME ?? process.env.OPERATOR_NAME ?? 'SERA.toolkit Operator',
-    NEXT_PUBLIC_OPERATOR_ADDRESS:
-      process.env.NEXT_PUBLIC_OPERATOR_ADDRESS ??
-      process.env.OPERATOR_ADDRESS ??
-      'Online Service Provider, EU / Global',
-    NEXT_PUBLIC_OPERATOR_EMAIL:
-      process.env.NEXT_PUBLIC_OPERATOR_EMAIL ??
-      process.env.OPERATOR_EMAIL ??
-      'taniervlak@gmail.com',
-    NEXT_PUBLIC_OPERATOR_REGISTRATION_ID:
-      process.env.NEXT_PUBLIC_OPERATOR_REGISTRATION_ID ??
-      process.env.OPERATOR_REGISTRATION_ID ??
-      '',
-    NEXT_PUBLIC_CONTACT_EMAIL_AUTHORITIES:
-      process.env.NEXT_PUBLIC_CONTACT_EMAIL_AUTHORITIES ??
-      process.env.CONTACT_EMAIL_AUTHORITIES ??
-      'taniervlak@gmail.com',
-    NEXT_PUBLIC_CONTACT_EMAIL_LEGAL:
-      process.env.NEXT_PUBLIC_CONTACT_EMAIL_LEGAL ??
-      process.env.CONTACT_EMAIL_LEGAL ??
-      'taniervlak@gmail.com',
-  },
   experimental: {
     isrFlushToDisk: false,
     proxyTimeout: 180_000,
@@ -79,10 +55,6 @@ const nextConfig: NextConfig = {
             value: 'max-age=63072000; includeSubDomains',
           },
         ],
-      },
-      {
-        source: '/import',
-        headers: [{ key: 'cross-origin-opener-policy', value: 'unsafe-none' }],
       },
     ]);
   },

@@ -16,27 +16,23 @@ function clean(value?: string): string | undefined {
 
 export default function LegalNoticePage() {
   const operatorName =
-    clean(process.env.NEXT_PUBLIC_OPERATOR_NAME) ??
     clean(process.env.OPERATOR_NAME) ??
+    clean(process.env.NEXT_PUBLIC_OPERATOR_NAME) ??
     'SERA.toolkit Operator';
   const operatorAddress =
-    clean(process.env.NEXT_PUBLIC_OPERATOR_ADDRESS) ??
-    clean(process.env.OPERATOR_ADDRESS) ??
-    'Online Service Provider, EU / Global';
+    clean(process.env.OPERATOR_ADDRESS) ?? clean(process.env.NEXT_PUBLIC_OPERATOR_ADDRESS);
   const operatorEmail =
-    clean(process.env.NEXT_PUBLIC_OPERATOR_EMAIL) ??
-    clean(process.env.OPERATOR_EMAIL) ??
-    'taniervlak@gmail.com';
+    clean(process.env.OPERATOR_EMAIL) ?? clean(process.env.NEXT_PUBLIC_OPERATOR_EMAIL);
   const registrationId =
-    clean(process.env.NEXT_PUBLIC_OPERATOR_REGISTRATION_ID) ??
-    clean(process.env.OPERATOR_REGISTRATION_ID);
+    clean(process.env.OPERATOR_REGISTRATION_ID) ??
+    clean(process.env.NEXT_PUBLIC_OPERATOR_REGISTRATION_ID);
   const authoritiesEmail =
-    clean(process.env.NEXT_PUBLIC_CONTACT_EMAIL_AUTHORITIES) ??
     clean(process.env.CONTACT_EMAIL_AUTHORITIES) ??
+    clean(process.env.NEXT_PUBLIC_CONTACT_EMAIL_AUTHORITIES) ??
     operatorEmail;
   const legalEmail =
-    clean(process.env.NEXT_PUBLIC_CONTACT_EMAIL_LEGAL) ??
     clean(process.env.CONTACT_EMAIL_LEGAL) ??
+    clean(process.env.NEXT_PUBLIC_CONTACT_EMAIL_LEGAL) ??
     operatorEmail;
 
   return (

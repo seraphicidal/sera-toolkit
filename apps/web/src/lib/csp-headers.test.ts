@@ -13,19 +13,13 @@ async function rules(): Promise<HeaderRule[]> {
 const keys = (rule: HeaderRule) => rule.headers.map((h) => h.key).sort();
 const value = (rule: HeaderRule, key: string) => rule.headers.find((h) => h.key === key)?.value;
 
-describe('the /import COOP exception', () => {
-  it('is scoped to exactly /import, and nothing broader', async () => {
+describe('the site-wide COOP policy', () => {
+  it('does not relax COOP for /import or any other route', async () => {
     const importRules = (await rules()).filter((r) => r.source.includes('/import'));
-    expect(importRules.map((r) => r.source)).toEqual(['/import']);
+    expect(importRules).toEqual([]);
   });
 
-  it('changes only the opener policy, and only to unsafe-none', async () => {
-    const rule = (await rules()).find((r) => r.source === '/import')!;
-    expect(keys(rule)).toEqual(['cross-origin-opener-policy']);
-    expect(value(rule, 'cross-origin-opener-policy')).toBe('unsafe-none');
-  });
-
-  it('leaves the site-wide security headers in force, including the default same-origin COOP', async () => {
+  it('enforces the site-wide security headers, including same-origin COOP', async () => {
     const site = (await rules()).find((r) => r.source === '/:path*')!;
     expect(site).toBeDefined();
     for (const key of [
@@ -41,14 +35,6 @@ describe('the /import COOP exception', () => {
     }
     expect(value(site, 'cross-origin-opener-policy')).toBe('same-origin');
   });
-
-  it('applies the override after the site rule, so the later rule wins for that key', async () => {
-    const all = await rules();
-    const site = all.findIndex((r) => r.source === '/:path*');
-    const imp = all.findIndex((r) => r.source === '/import');
-    expect(site).toBeGreaterThanOrEqual(0);
-    expect(imp).toBeGreaterThan(site);
-  });
 });
 
 describe('the installable app under the site-wide policy', () => {
@@ -58,8 +44,8 @@ describe('the installable app under the site-wide policy', () => {
       .map((part) => part.trim())
       .find((part) => part.startsWith(`${name} `));
 
-  it('adds no header rule beyond the site rule and the /import exception', async () => {
-    expect((await rules()).map((r) => r.source)).toEqual(['/:path*', '/import']);
+  it('adds no header rule beyond the site rule', async () => {
+    expect((await rules()).map((r) => r.source)).toEqual(['/:path*']);
   });
 
   it('serves the manifest, icons and /share under the strict policy, with nothing relaxed', async () => {

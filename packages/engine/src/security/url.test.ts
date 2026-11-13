@@ -83,8 +83,10 @@ describe('parseUserUrl', () => {
     expect(codeFor('   ')).toBe('INVALID_URL');
   });
 
-  it('drops the fragment', () => {
+  it('drops the fragment except on mega decryption links', () => {
     expect(parseUserUrl('https://example.com/v.mp4#t=30').url.hash).toBe('');
+    expect(parseUserUrl('https://mega.nz/file/abc#secretKey').url.hash).toBe('#secretKey');
+    expect(parseUserUrl('https://mega.co.nz/#!abc!def').url.hash).toBe('#!abc!def');
   });
 });
 
@@ -134,6 +136,12 @@ describe('normalizeUrl', () => {
 
   it('lowercases the host', () => {
     expect(normalizeUrl(new URL('https://YouTube.COM/watch?v=a')).hostname).toBe('youtube.com');
+  });
+
+  it('preserves hash fragments only for mega domains', () => {
+    expect(normalizeUrl(new URL('https://mega.nz/file/abc#secretKey')).hash).toBe('#secretKey');
+    expect(normalizeUrl(new URL('https://mega.co.nz/folder/x#key')).hash).toBe('#key');
+    expect(normalizeUrl(new URL('https://example.com/v.mp4#t=30')).hash).toBe('');
   });
 });
 

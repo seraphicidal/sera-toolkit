@@ -83,6 +83,7 @@ const BY_PHRASE: readonly (readonly [FailureClass, readonly string[]])[] = [
 
 export function classifyFailure(error: unknown): FailureClass {
   const seraError = SeraError.from(error);
+  if (seraError.code === 'UNSUPPORTED_SOURCE') return 'UNSUPPORTED_MEDIA';
   const haystack = `${seraError.message} ${seraError.detail ?? ''}`.toLowerCase();
 
   for (const [failure, phrases] of BY_PHRASE) {

@@ -19,7 +19,7 @@ import { YtdlpProvider } from './ytdlp-base.js';
 export class RedditProvider extends YtdlpProvider {
   readonly id = 'reddit';
   readonly label = 'Reddit';
-  readonly hosts = ['reddit.com', 'redd.it', 'v.redd.it', 'i.redd.it', 'old.reddit.com'];
+  readonly hosts = ['reddit.com', 'redd.it', 'v.redd.it', 'old.reddit.com'];
   override readonly priority = 20;
 
   private tokens: RedditTokenSource | undefined;
@@ -106,12 +106,11 @@ export class RedditProvider extends YtdlpProvider {
     }
 
     const author = nonEmpty(post.author);
-    const extractFrom = manifestUrlFor(source) ?? url.toString();
 
     return {
       provider: this.id,
       providerLabel: this.label,
-      url: extractFrom,
+      url: url.toString(),
       type: items.length > 1 ? 'collection' : 'single',
       title: nonEmpty(post.title) ? truncate(post.title!, 200) : 'Reddit post',
       ...(author ? { author: `u/${author}` } : {}),
@@ -292,8 +291,9 @@ function videoItem(video: RedditVideo, post: RedditPost): ResolvedItem | undefin
   const fetchPlan: DownloadPlan['fetch'] = viaManifest
     ? {
         via: 'ytdlp',
-        selector: 'best',
+        selector: 'bestvideo*+bestaudio/best',
         merge: 'mp4',
+        target: url,
         ...(onRedditVideoHost(url) ? { useExtractors: MANIFEST_EXTRACTORS } : {}),
       }
     : { via: 'direct', url };
@@ -318,7 +318,29 @@ function videoItem(video: RedditVideo, post: RedditPost): ResolvedItem | undefin
     },
   ];
 
-  if (isGif) {
+  if (!isGif && video.has_audio !== false) {
+    plans.push({
+      kind: 'audio',
+      container: 'mp3',
+      label: 'MP3',
+      detail: '192 kbps · extracted',
+      audioBitrateKbps: 192,
+      requiresConversion: true,
+      recommended: false,
+      fetch: viaManifest
+        ? {
+            via: 'ytdlp',
+            selector: 'bestaudio/best',
+            audio: { format: 'mp3', quality: '192K' },
+            target: url,
+            ...(onRedditVideoHost(url) ? { useExtractors: MANIFEST_EXTRACTORS } : {}),
+          }
+        : { via: 'direct', url },
+      ...(viaManifest ? {} : { convert: { kind: 'audio', container: 'mp3', bitrateKbps: 192 } }),
+    });
+  }
+
+  if (isGif && (!video.duration || video.duration <= 30)) {
     plans.push({
       kind: 'gif',
       container: 'gif',

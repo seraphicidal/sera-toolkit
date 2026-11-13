@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -46,7 +47,14 @@ function start(label, command, args, colour) {
 function shutdown(code = 0) {
   if (shuttingDown) return;
   shuttingDown = true;
-  for (const child of children) child.kill();
+  clearInterval(readyTimer);
+  for (const child of children) {
+    if (process.platform === 'win32' && child.pid) {
+      spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+    } else {
+      child.kill();
+    }
+  }
   setTimeout(() => process.exit(code), 200).unref();
 }
 
@@ -55,13 +63,21 @@ process.on('SIGTERM', () => shutdown(0));
 
 start('tsc', NPX, ['tsc', '--build', '--watch', '--preserveWatchOutput'], '36');
 
-setTimeout(() => {
-  if (shuttingDown) return;
+const apiEntry = resolve(ROOT, 'apps/api/dist/index.js');
+const workerEntry = resolve(ROOT, 'apps/worker/dist/index.js');
+const readyTimer = setInterval(() => {
+  if (shuttingDown) {
+    clearInterval(readyTimer);
+    return;
+  }
+  if (!existsSync(apiEntry)) return;
+  if (withWorker && !existsSync(workerEntry)) return;
+  clearInterval(readyTimer);
   start('api', 'node', ['--enable-source-maps', '--watch', 'apps/api/dist/index.js'], '32');
   if (withWorker) {
     start('worker', 'node', ['--enable-source-maps', '--watch', 'apps/worker/dist/index.js'], '33');
   }
-}, 2500);
+}, 250);
 
 start('web', NPM, ['run', 'dev', '--workspace', '@sera/web'], '35');
 

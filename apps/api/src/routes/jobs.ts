@@ -127,7 +127,10 @@ export function registerJobRoutes(app: FastifyInstance, engine: SeraEngine): voi
       const job = await engine.jobs.get(id, clientKey);
       if (!job) throw seraError('NOT_FOUND', { message: 'That download has expired.' });
       const manifest = await engine.workspaces.readManifest(id);
-      if (!manifest) throw seraError('NOT_FOUND', { message: 'That download has expired.' });
+      if (!manifest) {
+        await engine.jobs.markExpired(id);
+        throw seraError('NOT_FOUND', { message: 'That download has expired.' });
+      }
       return sendFile(engine, request, reply, id, manifest.primary, !request.canary);
     },
   });
@@ -142,7 +145,10 @@ export function registerJobRoutes(app: FastifyInstance, engine: SeraEngine): voi
       const job = await engine.jobs.get(id, clientKey);
       if (!job) throw seraError('NOT_FOUND', { message: 'That download has expired.' });
       const manifest = await engine.workspaces.readManifest(id);
-      if (!manifest) throw seraError('NOT_FOUND', { message: 'That download has expired.' });
+      if (!manifest) {
+        await engine.jobs.markExpired(id);
+        throw seraError('NOT_FOUND', { message: 'That download has expired.' });
+      }
 
       const name = request.params.name;
       if (!manifest.files.some((file) => file.name === name)) throw seraError('NOT_FOUND');

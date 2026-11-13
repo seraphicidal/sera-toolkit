@@ -1,5 +1,4 @@
 {
-  "$comment": "Standalone from the composite build: Next needs noEmit and a DOM lib, which a composite project cannot provide.",
   "compilerOptions": {
     "target": "ES2022",
     "lib": ["dom", "dom.iterable", "ES2023"],
@@ -20,10 +19,7 @@
     "noFallthroughCasesInSwitch": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    // Redundant under TypeScript 6, but `next build` writes it back if it is missing.
     "esModuleInterop": true,
-    // No baseUrl: it is deprecated in TypeScript 6, and paths resolve relative to this
-    // file without it.
     "paths": {
       "@/*": ["./src/*"],
       "@sera/contracts/types": ["../../packages/contracts/src/types.ts"]

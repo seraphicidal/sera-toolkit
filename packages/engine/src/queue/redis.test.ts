@@ -227,4 +227,15 @@ describe.skipIf(!REDIS_URL)('RedisJobBackend against a live Redis', () => {
   it('reports the waiting count', async () => {
     expect(await backend.waitingCount()).toBeGreaterThanOrEqual(0);
   });
+
+  it('allows ready jobs to transition to expired while keeping expired terminal', async () => {
+    await backend.submit(record('b11'));
+    await backend.patch('b11', { state: 'ready', step: 'Ready', progress: { percent: 100 } });
+
+    const expired = await backend.patch('b11', { state: 'expired', step: 'Expired' });
+    expect(expired?.state).toBe('expired');
+
+    const after = await backend.patch('b11', { state: 'ready', step: 'Ready' });
+    expect(after?.state).toBe('expired');
+  });
 });

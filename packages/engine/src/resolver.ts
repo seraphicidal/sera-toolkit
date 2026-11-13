@@ -133,6 +133,7 @@ export class MediaResolver {
         staticHosts: deps.config.blockedHosts,
         filePath: deps.config.dataDir ? join(deps.config.dataDir, 'denylist.json') : undefined,
       });
+    this.denylist.onUpdate(() => this.cache.clear());
 
     this.router = new ExtractionRouter({
       primary: {
@@ -177,9 +178,21 @@ export class MediaResolver {
       });
   }
 
-  async egressProxy(url: string, upstreamProxy?: string): Promise<string> {
+  async egressProxy(url: string | URL, upstreamProxy?: string): Promise<string> {
     await this.egress.assertPublicDestination(url);
     return this.egress.proxyUrl(upstreamProxy);
+  }
+
+  isBlocked(target: string | URL): boolean {
+    try {
+      const url = typeof target === 'string' ? new URL(target) : target;
+      return (
+        this.denylist.isBlocked(url).blocked ||
+        hostMatchesAny(url.hostname, this.config.blockedHosts)
+      );
+    } catch {
+      return false;
+    }
   }
 
   async close(): Promise<void> {
@@ -317,8 +330,11 @@ export class MediaResolver {
         allowPrivateAddresses: this.config.allowPrivateAddresses,
       });
       source = logSafeUrl(url);
-      if (hostMatchesAny(url.hostname, this.config.blockedHosts)) {
-        throw seraError('UNSUPPORTED_SOURCE', { detail: 'host is on the deny list' });
+      if (
+        this.denylist.isBlocked(url).blocked ||
+        hostMatchesAny(url.hostname, this.config.blockedHosts)
+      ) {
+        throw seraError('UNSUPPORTED_SOURCE', { detail: 'This URL has been blocked' });
       }
       const provider = this.registry.detect(url);
       if (provider?.id !== 'instagram' || !provider.capabilities.browserImport) {
@@ -329,6 +345,9 @@ export class MediaResolver {
       }
 
       const canonical = normalizeUrl(normalizeForProvider(provider, url));
+      if (this.denylist.isBlocked(canonical).blocked) {
+        throw seraError('UNSUPPORTED_SOURCE', { detail: 'This URL has been blocked' });
+      }
       const shortcode = shortcodeFrom(canonical);
       if (!shortcode) {
         throw seraError('UNSUPPORTED_SOURCE', {
@@ -469,6 +488,15 @@ export class MediaResolver {
     providerId: string,
     signal?: AbortSignal,
   ): Promise<ResolvedMedia> {
+    if (
+      this.denylist.isBlocked(canonical).blocked ||
+      hostMatchesAny(canonical.hostname, this.config.blockedHosts)
+    ) {
+      throw seraError('UNSUPPORTED_SOURCE', { detail: 'This URL has been blocked' });
+    }
+    if (!this.config.allowPrivateAddresses) {
+      await this.egress.assertPublicDestination(canonical);
+    }
     return (await this.route(canonical, providerId, signal)).media;
   }
 
@@ -553,19 +581,32 @@ export class MediaResolver {
   }
 
   private providerContext(signal?: AbortSignal): ProviderContext {
-    const allowUrl = (candidate: URL) =>
-      !hostMatchesAny(candidate.hostname, this.config.blockedHosts);
+    const allowCandidate = (candidate: URL) =>
+      !hostMatchesAny(candidate.hostname, this.config.blockedHosts) &&
+      !this.denylist.isBlocked(candidate).blocked;
+    const allowUrl = (candidate: string | URL): URL => {
+      const { url: parsed } = parseUserUrl(
+        typeof candidate === 'string' ? candidate : candidate.toString(),
+        { allowPrivateAddresses: this.config.allowPrivateAddresses },
+      );
+      if (!allowCandidate(parsed)) {
+        throw seraError('UNSUPPORTED_SOURCE', { detail: 'Host or URL is blocked' });
+      }
+      return parsed;
+    };
     return {
       config: this.config,
       logger: this.logger,
       ...(signal ? { signal } : {}),
+      allowUrl,
+      egressProxy: (target, upstreamProxy) => this.egressProxy(target, upstreamProxy),
       probe: (url, options) => this.probeImpl(url, { ...options, ...(signal ? { signal } : {}) }),
       fetchText: async (url, maxBytes, options) => {
         const response = await safeFetch(url, {
           dispatcher: this.dispatcher,
           timeoutMs: this.config.resolveTimeoutSeconds * 1000,
           maxBytes: maxBytes ?? 2 * 1024 * 1024,
-          allowUrl,
+          allowUrl: allowCandidate,
           allowPrivateAddresses: this.config.allowPrivateAddresses,
           ...(options?.headers ? { headers: options.headers } : {}),
           ...(options?.keepCookies ? { keepCookies: true } : {}),
@@ -584,7 +625,7 @@ export class MediaResolver {
           method: 'HEAD',
           timeoutMs: this.config.resolveTimeoutSeconds * 1000,
           maxBytes: 1,
-          allowUrl,
+          allowUrl: allowCandidate,
           allowPrivateAddresses: this.config.allowPrivateAddresses,
           ...(signal ? { signal } : {}),
         });
@@ -603,7 +644,7 @@ export class MediaResolver {
           method: options?.method ?? 'GET',
           followRedirects: options?.followRedirects ?? true,
           timeoutMs: options?.timeoutMs ?? this.config.resolveTimeoutSeconds * 1000,
-          allowUrl,
+          allowUrl: allowCandidate,
           allowPrivateAddresses: this.config.allowPrivateAddresses,
           ...(options?.headers ? { headers: options.headers } : {}),
           ...(options?.signal ? { signal: options.signal } : signal ? { signal } : {}),
@@ -753,6 +794,9 @@ export class MediaResolver {
     });
     if (hostMatchesAny(url.hostname, this.config.blockedHosts)) {
       throw seraError('BLOCKED_ADDRESS', { detail: 'host is on the deny list' });
+    }
+    if (this.denylist.isBlocked(url).blocked) {
+      throw seraError('UNSUPPORTED_SOURCE', { detail: 'Blocked thumbnail host' });
     }
     return url.toString();
   }

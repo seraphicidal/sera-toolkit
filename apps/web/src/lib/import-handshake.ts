@@ -88,7 +88,6 @@ export function openImportChannel(target: Window, timeoutMs = 20_000): ImportCha
   };
 
   target.addEventListener('message', onMessage);
-  if (opener) opener.postMessage({ type: READY }, '*');
 
   return { received, close };
 }
@@ -118,20 +117,28 @@ function mediaUrlsOf(node: unknown): string[] {
       out.push('invalid://nested-too-deep');
       return;
     }
+    const isRecord = (item: unknown): item is Record<string, unknown> =>
+      typeof item === 'object' && item !== null && !Array.isArray(item);
     const slide = value as {
-      image_versions2?: { candidates?: unknown[] };
-      video_versions?: unknown[];
-      carousel_media?: unknown[];
+      image_versions2?: { candidates?: unknown };
+      video_versions?: unknown;
+      carousel_media?: unknown;
     };
-    for (const candidate of slide.image_versions2?.candidates ?? []) {
-      const url = (candidate as { url?: unknown })?.url;
+    const candidates =
+      isRecord(slide.image_versions2) && Array.isArray(slide.image_versions2.candidates)
+        ? slide.image_versions2.candidates
+        : [];
+    for (const candidate of candidates) {
+      const url = isRecord(candidate) ? candidate.url : undefined;
       if (typeof url === 'string') out.push(url);
     }
-    for (const version of slide.video_versions ?? []) {
-      const url = (version as { url?: unknown })?.url;
+    const videos = Array.isArray(slide.video_versions) ? slide.video_versions : [];
+    for (const version of videos) {
+      const url = isRecord(version) ? version.url : undefined;
       if (typeof url === 'string') out.push(url);
     }
-    for (const child of slide.carousel_media ?? []) walk(child, depth + 1);
+    const carousel = Array.isArray(slide.carousel_media) ? slide.carousel_media : [];
+    for (const child of carousel) walk(child, depth + 1);
   };
   walk(node, 0);
   return out;

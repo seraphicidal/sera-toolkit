@@ -12,6 +12,7 @@ import {
   splitFormats,
   toUsableFormats,
 } from './formats.js';
+import { buildVideoPlans } from './plans.js';
 
 const youtubeFormats: YtdlpFormat[] = [
   { format_id: 'sb0', ext: 'mhtml', protocol: 'mhtml', vcodec: 'none', acodec: 'none' },
@@ -183,6 +184,21 @@ describe('toUsableFormats', () => {
 
   it('drops entries with neither a video nor an audio codec', () => {
     expect(toUsableFormats([{ format_id: 'x', vcodec: 'none', acodec: 'none' }])).toEqual([]);
+  });
+
+  it('treats known video formats when acodec is null as having audio', () => {
+    const parsed = toUsableFormats([
+      {
+        format_id: '0',
+        url: 'https://cdn.example.com/v.mp4',
+        ext: 'mp4',
+        vcodec: 'avc1.640028',
+        acodec: null,
+        height: 720,
+      },
+    ]);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]).toMatchObject({ id: '0', hasVideo: true, hasAudio: true });
   });
 
   it('keeps a video rendition yt-dlp names no codecs for, as picture and sound', () => {
@@ -425,5 +441,24 @@ describe('audioBitrateChoices', () => {
 
   it('assumes the best when the source bitrate is unknown', () => {
     expect(audioBitrateChoices(undefined)[0]).toBe(320);
+  });
+});
+
+describe('buildVideoPlans', () => {
+  it('emits a fallback plan when formats omit height', () => {
+    const formats = toUsableFormats([
+      {
+        format_id: '0',
+        url: 'https://cdn.example.com/v.mp4',
+        ext: 'mp4',
+        protocol: 'https',
+        vcodec: 'avc1.640028',
+        acodec: 'mp4a.40.2',
+        tbr: 1200,
+      },
+    ]);
+    const plans = buildVideoPlans(formats, 30, {});
+    expect(plans).toHaveLength(1);
+    expect(plans[0]).toMatchObject({ kind: 'video', container: 'mp4', recommended: true });
   });
 });

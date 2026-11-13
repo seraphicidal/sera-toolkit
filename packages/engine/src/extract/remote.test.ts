@@ -273,7 +273,7 @@ describe('a task that needs more than a download', () => {
 
   it('names what a task needs', () => {
     expect(requiredFeatures({})).toEqual([]);
-    expect(requiredFeatures({ items: [{ index: 0 }, { index: 1 }] })).toEqual([]);
+    expect(requiredFeatures({ items: [{ index: 0 }, { index: 1 }] })).toEqual(['items']);
     expect(requiredFeatures({ items: [{ index: 0 }, { index: 2 }] })).toEqual(['items']);
     expect(
       requiredFeatures({

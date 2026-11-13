@@ -1,6 +1,6 @@
 @echo off
 
-set "REPO=C:\path\to\sera-toolkit"
+for %%I in ("%~dp0..\..") do set "REPO=%%~fI"
 set "NODE=C:\Program Files\nodejs\node.exe"
 set "HERE=%~dp0"
 set "LOG=%HERE%node.log"
@@ -10,7 +10,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%HERE%kill-orphans.ps1"
 if exist "%LOG%" move /y "%LOG%" "%LOG%.old" >nul
 if exist "%HERE%ytdlp-update.log" move /y "%HERE%ytdlp-update.log" "%HERE%ytdlp-update.log.old" >nul
 
-cd /d "%REPO%"
+cd /d "%REPO%" || exit /b 1
 
 call "%HERE%refresh-ytdlp.cmd" once
 start "" /b cmd /d /c ""%HERE%refresh-ytdlp.cmd" daily"

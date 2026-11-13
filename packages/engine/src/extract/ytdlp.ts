@@ -395,7 +395,8 @@ export function scrubCredentials(text: string): string {
 }
 
 export function classifyYtdlpFailure(stderr: string, exitCode: number): SeraError {
-  const text = stderr.toLowerCase();
+  const errorLines = stderr.split(/\r?\n/).filter((line) => /^\s*error:/i.test(line));
+  const text = (errorLines.length ? errorLines.join('\n') : stderr).toLowerCase();
   const detail = `yt-dlp exit ${exitCode}: ${scrubCredentials(stderr).slice(-600)}`;
 
   const has = (...needles: string[]): boolean => needles.some((n) => text.includes(n));
@@ -415,7 +416,6 @@ export function classifyYtdlpFailure(stderr: string, exitCode: number): SeraErro
   }
   if (
     has(
-      'drm',
       'protected by widevine',
       'widevine',
       'fairplay',
@@ -423,11 +423,12 @@ export function classifyYtdlpFailure(stderr: string, exitCode: number): SeraErro
       'clearkey',
       'drm protected',
       'drm_protected',
-      'encrypted',
+      'is encrypted',
+      'encrypted media',
       'encrypted_media',
-      'cenc',
       'sample-aes',
       'this video is drm protected',
+      'known to use drm',
     )
   ) {
     return seraError('DRM_PROTECTED', { detail });
@@ -534,11 +535,10 @@ export function classifyYtdlpFailure(stderr: string, exitCode: number): SeraErro
       'this video is not available',
       'has been removed',
       'no longer available',
-      'http error 404',
-      'not found',
       'page does not exist',
       'account has been suspended',
-    )
+    ) ||
+    (!has('fragment') && has('http error 404', 'not found'))
   ) {
     return seraError('MEDIA_UNAVAILABLE', { detail });
   }

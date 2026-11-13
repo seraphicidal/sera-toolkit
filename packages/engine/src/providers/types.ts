@@ -67,6 +67,8 @@ export interface ProviderContext {
       readonly headers?: Readonly<Record<string, string>>;
     },
   ) => Promise<OpenResponse>;
+  readonly allowUrl?: (url: string | URL) => URL;
+  readonly egressProxy?: (target: URL | string, upstreamProxy?: string) => Promise<string>;
 }
 
 export type FetchPlan =

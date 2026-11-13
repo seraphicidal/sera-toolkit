@@ -47,12 +47,23 @@ export class MastodonProvider extends YtdlpProvider {
     url: URL,
     _context: ProviderContext,
   ): readonly ExtractionStrategy[] {
+    let cachedTarget: string | undefined;
+    let cachedApi: Promise<ResolvedMedia | undefined> | undefined;
+    const resolveApiOnce = (target: URL, ctx: ProviderContext) => {
+      const key = target.toString();
+      if (!cachedApi || cachedTarget !== key) {
+        cachedTarget = key;
+        cachedApi = this.resolveViaApi(target, ctx);
+      }
+      return cachedApi;
+    };
+
     return [
       {
         id: 'instance-api',
         label: "the instance's public API",
         run: async (target, ctx) => {
-          const media = await this.resolveViaApi(target, ctx);
+          const media = await resolveApiOnce(target, ctx);
           if (!media?.items.length) {
             throw seraError('UNSUPPORTED_SOURCE', {
               detail: 'mastodon: the status carries no attachments this API can read',
@@ -78,7 +89,7 @@ export class MastodonProvider extends YtdlpProvider {
         id: 'instance-api-anything',
         label: "the instance's public API, taking whatever it has",
         run: async (target, ctx) => {
-          const media = await this.resolveViaApi(target, ctx);
+          const media = await resolveApiOnce(target, ctx);
           if (!media?.items.length) {
             if (!hostMatchesAny(target.hostname, this.hosts)) {
               throw seraError('UNSUPPORTED_SOURCE', {
@@ -149,7 +160,13 @@ interface MastodonAttachment {
   readonly url: string;
   readonly preview_url?: string;
   readonly description?: string;
-  readonly meta?: { readonly original?: { readonly width?: number; readonly height?: number } };
+  readonly meta?: {
+    readonly original?: {
+      readonly width?: number;
+      readonly height?: number;
+      readonly duration?: number;
+    };
+  };
 }
 
 interface MastodonStatus {
@@ -180,6 +197,7 @@ function toItem(
   const container = normalizeContainer('', extension);
   const width = attachment.meta?.original?.width;
   const height = attachment.meta?.original?.height;
+  const duration = attachment.meta?.original?.duration;
 
   const plans: DownloadPlan[] = [
     {
@@ -197,7 +215,7 @@ function toItem(
     },
   ];
 
-  if (kind === 'gif') {
+  if (kind === 'gif' && (!duration || duration <= 30)) {
     plans.push({
       kind: 'gif',
       container: 'gif',
@@ -268,8 +286,18 @@ function stripHtml(html: string): string {
     .replace(/<\/p>/gi, ' ')
     .replace(/<[^>]+>/g, '')
     .replace(
-      /&(?:amp|lt|gt|quot|apos|nbsp|#\d+);/gi,
-      (entity) => ENTITIES[entity.toLowerCase()] ?? ' ',
+      /&(?:#x([0-9a-f]+)|#(\d+)|(?:amp|lt|gt|quot|apos|nbsp));/gi,
+      (entity, hex: string | undefined, dec: string | undefined) => {
+        if (hex !== undefined) {
+          const cp = parseInt(hex, 16);
+          return Number.isInteger(cp) && cp >= 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : '';
+        }
+        if (dec !== undefined) {
+          const cp = Number(dec);
+          return Number.isInteger(cp) && cp >= 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : '';
+        }
+        return ENTITIES[entity.toLowerCase()] ?? ' ';
+      },
     )
     .replace(/\s+/g, ' ')
     .trim();
@@ -281,6 +309,5 @@ const ENTITIES: Record<string, string> = {
   '&gt;': '>',
   '&quot;': '"',
   '&apos;': "'",
-  '&#39;': "'",
   '&nbsp;': ' ',
 };

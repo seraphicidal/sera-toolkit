@@ -114,6 +114,7 @@ export class ThumbnailCache {
 
 export function registerMediaRoutes(app: FastifyInstance, engine: SeraEngine): void {
   const thumbnailCache = new ThumbnailCache();
+  engine.denylist.onUpdate(() => thumbnailCache.clear());
   app.post(
     '/api/media/info',
     {
@@ -222,7 +223,9 @@ export function registerMediaRoutes(app: FastifyInstance, engine: SeraEngine): v
           timeoutMs: 10_000,
           maxBytes: MAX_THUMBNAIL_BYTES,
           signal: coalescedSignal,
-          allowUrl: (url) => !hostMatchesAny(url.hostname, engine.config.blockedHosts),
+          allowUrl: (url) =>
+            !hostMatchesAny(url.hostname, engine.config.blockedHosts) &&
+            !engine.resolver.isBlocked(url),
         });
 
         if (response.status >= 400) throw seraError('NOT_FOUND');

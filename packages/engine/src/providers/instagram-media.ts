@@ -44,7 +44,14 @@ export async function oembedFor(
   const endpoint = new URL('https://www.instagram.com/api/v1/oembed/');
   endpoint.searchParams.set('url', url.toString());
   const { body } = await fetchText(endpoint, 256 * 1024);
-  return JSON.parse(body) as InstagramOembed;
+  try {
+    return JSON.parse(body) as InstagramOembed;
+  } catch (cause) {
+    throw seraError('PROVIDER_AUTH_REQUIRED', {
+      detail: 'instagram: oembed endpoint did not return JSON',
+      cause,
+    });
+  }
 }
 
 const SHORTCODE_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';

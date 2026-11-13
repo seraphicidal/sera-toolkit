@@ -45,7 +45,8 @@ export class MemoryJobBackend implements JobBackend {
     const current = this.records.get(id);
     if (!current) return Promise.resolve(undefined);
 
-    if (isTerminalJobState(current.state)) return Promise.resolve(current);
+    const allowingExpiration = current.state === 'ready' && patch.state === 'expired';
+    if (isTerminalJobState(current.state) && !allowingExpiration) return Promise.resolve(current);
 
     const cleanedSpec = current.spec
       ? {

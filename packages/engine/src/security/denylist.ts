@@ -13,6 +13,7 @@ export interface BlockedEntry {
 export interface DenylistOptions {
   readonly staticHosts?: readonly string[];
   readonly filePath?: string;
+  readonly onUpdate?: () => void;
 }
 
 const PROTECTED_HOSTS = new Set([
@@ -45,11 +46,23 @@ export class Denylist {
   private readonly dynamicHosts = new Set<string>();
   private readonly dynamicUrls = new Set<string>();
   private readonly entries: BlockedEntry[] = [];
+  private readonly listeners = new Set<() => void>();
 
   constructor(options: DenylistOptions = {}) {
     this.staticHosts = (options.staticHosts ?? []).map((h) => stripWww(h.toLowerCase()));
     this.filePath = options.filePath;
+    if (options.onUpdate) this.listeners.add(options.onUpdate);
     this.load();
+  }
+
+  onUpdate(listener: () => void): void {
+    this.listeners.add(listener);
+  }
+
+  private notify(): void {
+    for (const listener of this.listeners) {
+      listener();
+    }
   }
 
   isBlocked(target: string | URL): { readonly blocked: boolean; readonly reason?: string } {
@@ -100,6 +113,7 @@ export class Denylist {
     };
     this.entries.push(entry);
     this.save();
+    this.notify();
     return entry;
   }
 
@@ -124,6 +138,7 @@ export class Denylist {
     };
     this.entries.push(entry);
     this.save();
+    this.notify();
     return entry;
   }
 
@@ -139,6 +154,7 @@ export class Denylist {
       }
     }
     this.save();
+    this.notify();
     return true;
   }
 

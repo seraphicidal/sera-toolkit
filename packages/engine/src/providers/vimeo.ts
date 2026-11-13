@@ -12,7 +12,8 @@ export class VimeoProvider extends YtdlpProvider {
     gallery: true,
   });
 
-  private static readonly ID = /(?:^|\/)(\d{6,})(?:\/([0-9a-z]+))?\/?$/i;
+  private static readonly ID =
+    /^\/(?:video\/|channels\/[^/]+\/|groups\/[^/]+\/videos\/)?(\d{6,})(?:\/([0-9a-z]+))?\/?$/i;
 
   override normalize(url: URL): URL {
     const out = new URL(url.toString());

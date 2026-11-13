@@ -59,6 +59,9 @@ export class JobService {
     const { config, resolver, backend } = this.deps;
 
     const info = resolver.verifyInfoId(request.infoId);
+    if (resolver.isBlocked(info.u)) {
+      throw seraError('UNSUPPORTED_SOURCE', { detail: 'This URL has been blocked' });
+    }
     const expectedHash = resolver.resolutionHash(info.u, info.p, info.m);
     const selections: JobSelection[] = [];
     const options = [];
@@ -183,6 +186,14 @@ export class JobService {
     if (!record) return undefined;
     if (clientKey && record.clientKey !== clientKey) return undefined;
     return toPublicJob(record);
+  }
+
+  async markExpired(id: string): Promise<Job | undefined> {
+    const updated = await this.deps.backend.patch(id, {
+      state: 'expired',
+      step: 'Expired',
+    });
+    return updated ? toPublicJob(updated) : undefined;
   }
 
   private async abortAndWait(id: string): Promise<void> {

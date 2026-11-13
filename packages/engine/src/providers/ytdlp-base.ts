@@ -97,6 +97,7 @@ export abstract class YtdlpProvider implements MediaProvider {
       playlist: this.wantsPlaylist(url),
       extractorArgs: this.extractorArgs(url, context),
       timeoutMs: context.config.resolveTimeoutMsFor(this.id),
+      maxEntries: context.config.maxItemsPerJob,
       ...(useExtractors ? { useExtractors } : {}),
       ...(proxy ? { proxy } : {}),
     });
@@ -109,7 +110,7 @@ export abstract class YtdlpProvider implements MediaProvider {
       maxFilesizeBytes: context.config.maxFilesizeBytes,
     };
 
-    const entries = collectEntries(info);
+    const entries = collectEntries(info).slice(0, context.config.maxItemsPerJob);
     const items: ResolvedItem[] = [];
 
     entries.forEach((entry, index) => {
@@ -283,7 +284,9 @@ export function pickThumbnail(info: YtdlpInfo): string | undefined {
 
 export function parseTimestamp(info: YtdlpInfo): string | undefined {
   const epoch = num(info.timestamp) ?? num(info.release_timestamp);
-  if (epoch) return new Date(epoch * 1000).toISOString();
+  if (epoch !== undefined && Number.isFinite(epoch) && epoch > 0 && epoch < 8_640_000_000_000) {
+    return new Date(epoch * 1000).toISOString();
+  }
   const uploadDate = str(info.upload_date);
   if (uploadDate && /^\d{8}$/.test(uploadDate)) {
     return `${uploadDate.slice(0, 4)}-${uploadDate.slice(4, 6)}-${uploadDate.slice(6, 8)}T00:00:00.000Z`;

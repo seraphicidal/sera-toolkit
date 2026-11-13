@@ -34,6 +34,10 @@ export function ItemPicker({
   const [rangeEnd, setRangeEnd] = useState(() => String(info.items.length));
   const [lastClickedIndex, setLastClickedIndex] = useState<number | undefined>(undefined);
 
+  useEffect(() => {
+    setRangeEnd(String(info.items.length));
+  }, [info.items.length]);
+
   const visibleItems = useMemo(
     () => filterMediaItems(info.items, filterQuery),
     [info.items, filterQuery],
@@ -225,10 +229,16 @@ const ItemTile = memo(function ItemTile({
   const displayTitle = item.title ?? KIND_LABELS[item.kind === 'unknown' ? 'video' : item.kind];
 
   useEffect(() => {
+    setRetries(0);
+    setThumbnailFailed(false);
+    if (retryTimerRef.current) {
+      clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = undefined;
+    }
     return () => {
       if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
     };
-  }, []);
+  }, [item.thumbnail]);
 
   return (
     <label

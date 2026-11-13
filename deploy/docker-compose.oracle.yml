@@ -37,10 +37,10 @@ services:
       SERA_API_URL: http://api:4000
       NEXT_PUBLIC_OPERATOR_NAME: ${NEXT_PUBLIC_OPERATOR_NAME:-${OPERATOR_NAME:-SERA.toolkit Operator}}
       NEXT_PUBLIC_OPERATOR_ADDRESS: ${NEXT_PUBLIC_OPERATOR_ADDRESS:-${OPERATOR_ADDRESS:-Online Service Provider, EU / Global}}
-      NEXT_PUBLIC_OPERATOR_EMAIL: ${NEXT_PUBLIC_OPERATOR_EMAIL:-${OPERATOR_EMAIL:-taniervlak@gmail.com}}
+      NEXT_PUBLIC_OPERATOR_EMAIL: ${NEXT_PUBLIC_OPERATOR_EMAIL:-${OPERATOR_EMAIL:-}}
       NEXT_PUBLIC_OPERATOR_REGISTRATION_ID: ${NEXT_PUBLIC_OPERATOR_REGISTRATION_ID:-${OPERATOR_REGISTRATION_ID:-}}
-      NEXT_PUBLIC_CONTACT_EMAIL_AUTHORITIES: ${NEXT_PUBLIC_CONTACT_EMAIL_AUTHORITIES:-${CONTACT_EMAIL_AUTHORITIES:-taniervlak@gmail.com}}
-      NEXT_PUBLIC_CONTACT_EMAIL_LEGAL: ${NEXT_PUBLIC_CONTACT_EMAIL_LEGAL:-${CONTACT_EMAIL_LEGAL:-taniervlak@gmail.com}}
+      NEXT_PUBLIC_CONTACT_EMAIL_AUTHORITIES: ${NEXT_PUBLIC_CONTACT_EMAIL_AUTHORITIES:-${CONTACT_EMAIL_AUTHORITIES:-}}
+      NEXT_PUBLIC_CONTACT_EMAIL_LEGAL: ${NEXT_PUBLIC_CONTACT_EMAIL_LEGAL:-${CONTACT_EMAIL_LEGAL:-}}
     expose:
       - '3000'
     depends_on:
@@ -205,10 +205,12 @@ services:
       --maxmemory 256mb
       --maxmemory-policy noeviction
       --requirepass ${SERA_REDIS_PASSWORD:-sera_secure_redis}
+    environment:
+      REDISCLI_AUTH: ${SERA_REDIS_PASSWORD:-sera_secure_redis}
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ['CMD', 'redis-cli', '-a', '${SERA_REDIS_PASSWORD:-sera_secure_redis}', 'ping']
+      test: ['CMD', 'redis-cli', 'ping']
       interval: 10s
       timeout: 3s
       retries: 5

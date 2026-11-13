@@ -19,6 +19,8 @@ export function useJob(jobId: string | undefined, initial?: Job): UseJobResult {
   );
   const [following, setFollowing] = useState(false);
   const activeId = useRef<string | undefined>(undefined);
+  const initialRef = useRef(initial);
+  initialRef.current = initial;
 
   const apply = useCallback((next: Job) => {
     if (next.id !== activeId.current) return;
@@ -40,7 +42,9 @@ export function useJob(jobId: string | undefined, initial?: Job): UseJobResult {
     }
 
     activeId.current = jobId;
-    setJob((prev) => (prev?.id === jobId ? prev : initial?.id === jobId ? initial : undefined));
+    setJob((prev) =>
+      prev?.id === jobId ? prev : initialRef.current?.id === jobId ? initialRef.current : undefined,
+    );
     setFollowing(true);
 
     let stopped = false;
@@ -151,7 +155,7 @@ export function useJob(jobId: string | undefined, initial?: Job): UseJobResult {
       if (graceTimer) clearTimeout(graceTimer);
       controller.abort();
     };
-  }, [jobId, initial, apply]);
+  }, [jobId, apply]);
 
   const currentJob = jobId
     ? job?.id === jobId

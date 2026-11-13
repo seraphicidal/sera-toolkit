@@ -104,7 +104,7 @@ export class WorkspaceManager {
 
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
-      if (!/^[a-f0-9]{16,64}$/i.test(entry.name)) continue;
+      if (!/^(?:remote-)?[a-f0-9]{16,64}$/i.test(entry.name)) continue;
       if (this.activeJobs.has(entry.name)) continue;
 
       const path = join(this.rootDir, entry.name);

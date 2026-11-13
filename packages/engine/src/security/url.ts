@@ -111,8 +111,11 @@ export function parseUserUrl(input: string, options: ParseUrlOptions = {}): Pars
     if (!isPublicAddress(bare)) throw seraError('BLOCKED_ADDRESS');
   }
 
-  url.hash = '';
-  return { url, host: stripWww(rawHost), rawHost };
+  const cleanHost = stripWww(rawHost);
+  if (cleanHost !== 'mega.nz' && cleanHost !== 'mega.co.nz') {
+    url.hash = '';
+  }
+  return { url, host: cleanHost, rawHost };
 }
 
 export function stripWww(host: string): string {
@@ -122,8 +125,11 @@ export function stripWww(host: string): string {
 
 export function normalizeUrl(url: URL): URL {
   const out = new URL(url.toString());
-  out.hash = '';
   out.hostname = out.hostname.toLowerCase();
+  const cleanHost = stripWww(out.hostname);
+  if (cleanHost !== 'mega.nz' && cleanHost !== 'mega.co.nz') {
+    out.hash = '';
+  }
 
   const isSocial = hostMatchesAny(out.hostname, KNOWN_SOCIAL_DOMAINS);
   const params = [...out.searchParams.entries()].filter(([key]) => {

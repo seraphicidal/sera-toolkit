@@ -222,8 +222,10 @@ export function buildArgs(request: ConvertRequest, source: ProbeResult): string[
       const fps = request.spec.fps ?? 15;
       const width = request.spec.maxWidth ?? 480;
       args.push(
+        '-t',
+        '30',
         '-filter_complex',
-        `fps=${fps},scale=${width}:-1:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle`,
+        `fps=${fps},scale='min(${width},iw)':-1:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle`,
         '-loop',
         '0',
       );
@@ -287,7 +289,10 @@ export function buildArgs(request: ConvertRequest, source: ProbeResult): string[
 }
 
 export async function convert(request: ConvertRequest): Promise<void> {
-  const source = await probe(request.input, request);
+  const source: ProbeResult =
+    request.spec.kind === 'remux' && request.durationSeconds !== undefined
+      ? { durationSeconds: request.durationSeconds }
+      : await probe(request.input, request);
   const duration = request.durationSeconds ?? source.durationSeconds;
 
   if (request.spec.kind === 'audio' && !source.audio) {

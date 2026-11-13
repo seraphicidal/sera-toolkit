@@ -128,4 +128,15 @@ describe('keepCookies', () => {
     expect(seen[1]!.authorization).toBeUndefined();
     expect(seen[1]!.xApiKey).toBeUndefined();
   });
+
+  it('aborts redirects when allowUrl rejects the redirect target', async () => {
+    seen.length = 0;
+    await expect(
+      safeFetch(new URL(`http://127.0.0.1:${String(port)}/away`), {
+        dispatcher,
+        allowUrl: (candidate) => candidate.pathname !== '/landed',
+      }),
+    ).rejects.toMatchObject({ code: 'BLOCKED_ADDRESS' });
+    expect(seen.map((hop) => hop.path)).toEqual(['/away']);
+  });
 });

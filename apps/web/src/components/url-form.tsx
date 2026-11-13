@@ -47,8 +47,6 @@ export function UrlForm({
     if (!trimmed || busy || disabled) return;
     const batch = parseBatchUrls(trimmed);
     if (batch.length > 1) {
-      const normalized = batch.join('\n');
-      if (normalized !== value) onChange(normalized);
       if (onSubmitBatch) {
         onSubmitBatch(batch);
       } else {

@@ -176,6 +176,15 @@ export function buildVideoPlans(
     }
   }
 
+  if (!plans.length && (progressive.length > 0 || videoOnly.length > 0)) {
+    const best = [...progressive, ...videoOnly].sort((a, b) => rankVideo(b) - rankVideo(a))[0];
+    if (best) {
+      const preferred = nativeContainer(best.vcodec);
+      const audio = best.hasAudio ? undefined : bestAudio(audioOnly, preferred);
+      emit(best, audio);
+    }
+  }
+
   return plans;
 }
 

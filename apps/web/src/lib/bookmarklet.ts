@@ -11,9 +11,10 @@ export function bookmarkletSource(seraOrigin: string): string {
 
   return `(function(){
   var SERA=${origin};
-  var m=location.pathname.match(/^\\/(?:[^/]+\\/)?(?:p|reel|reels|tv)\\/([A-Za-z0-9_-]+)/);
+  var m=location.pathname.match(/^\\/(?:[^/]+\\/)?((?:p|reel|reels|tv))\\/([A-Za-z0-9_-]+)/);
   if(!m){alert('Open a single Instagram post, reel or video first.');return;}
-  var code=m[1];
+  var kind=m[1];
+  var code=m[2].slice(0,11);
   var A='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
   var pk=0n;for(var i=0;i<code.length;i++){pk=pk*64n+BigInt(A.indexOf(code[i]));}
   function clip(s,n){return typeof s==='string'?s.slice(0,n):undefined;}
@@ -42,7 +43,7 @@ export function bookmarkletSource(seraOrigin: string): string {
       if(!j){alert("SERA: you're not signed in to instagram.com in this browser. The Instagram app's login doesn't count. Sign in on the website, then try again.");return;}
       var it=j.items&&j.items[0];
       if(!it){alert('SERA: Instagram returned no media for this post.');return;}
-      var payload={url:'https://www.instagram.com/p/'+code+'/',node:keep(it)};
+      var payload={url:'https://www.instagram.com/'+kind+'/'+code+'/',node:keep(it)};
       var href=SERA+'/import#v='+${version}+'&p='+encodeURIComponent(JSON.stringify(payload));
       if(href.length>${MAX_IMPORT_URL}){alert('SERA: this post is too large to send ('+Math.round(href.length/1024)+' KB).');return;}
       location.href=href;

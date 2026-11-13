@@ -95,8 +95,16 @@ export async function downloadDirect(
   } catch (cause) {
     await rm(request.destination, { force: true }).catch(() => undefined);
     if (cause instanceof SeraError) throw cause;
-    if (cause instanceof Error && cause.name === 'AbortError')
+    if (request.signal?.aborted) {
+      const reason: unknown = request.signal.reason;
+      if (reason instanceof Error && reason.name === 'TimeoutError') {
+        throw seraError('TIMEOUT', { cause });
+      }
       throw seraError('CANCELLED', { cause });
+    }
+    if (cause instanceof Error && (cause.name === 'TimeoutError' || cause.name === 'AbortError')) {
+      throw seraError('TIMEOUT', { cause });
+    }
     throw seraError('NETWORK_ERROR', { cause, detail: 'stream to disk failed' });
   }
 

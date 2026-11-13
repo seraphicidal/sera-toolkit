@@ -126,6 +126,14 @@ export class JobRunner {
       });
     }
 
+    if (
+      (resolver as Partial<{ isBlocked: (target: string | URL) => boolean }>).isBlocked?.(
+        new URL(spec.url),
+      ) === true
+    ) {
+      throw seraError('UNSUPPORTED_SOURCE', { detail: 'This URL has been blocked' });
+    }
+
     report({ state: 'resolving', step: 'Reading the link', progress: { percent: 0 } });
 
     const isResolvedFresh =
@@ -155,48 +163,55 @@ export class JobRunner {
     const remoteBackend = resolved.remoteBackend;
     if (remoteBackend && this.deps.remote) {
       report({ state: 'downloading', step: 'Downloading', progress: { percent: 0 } });
-      const files = await this.deps.remote.dispatchJob(
-        {
-          kind: 'job',
-          url: spec.url,
-          providerId: spec.provider,
-          planKeys: matched.map(({ plan }) => planKey(plan)),
-          items: matched.map(({ item }) => ({
-            index: item.index,
-            ...(item.sourceId ? { sourceId: item.sourceId } : {}),
-          })),
-          ...(spec.filename ? { filename: spec.filename } : {}),
-          ...(spec.trim ? { trim: spec.trim } : {}),
-          ...(spec.subtitles ? { subtitles: spec.subtitles } : {}),
-        },
-        {
-          onProgress: (progress) =>
-            report({
-              state: 'downloading',
-              step: progress.step,
-              progress: {
-                percent: Math.min(99, progress.percent),
-                ...(progress.bytesDownloaded !== undefined
-                  ? { bytesDownloaded: progress.bytesDownloaded }
-                  : {}),
-                ...(progress.bytesTotal !== undefined ? { bytesTotal: progress.bytesTotal } : {}),
-              },
-            }),
-          ...(signal ? { signal } : {}),
-        },
-      );
+      let files: readonly { name: string; mimeType: string; path: string }[] = [];
+      try {
+        files = await this.deps.remote.dispatchJob(
+          {
+            kind: 'job',
+            url: spec.url,
+            providerId: spec.provider,
+            planKeys: matched.map(({ plan }) => planKey(plan)),
+            items: matched.map(({ item }) => ({
+              index: item.index,
+              ...(item.sourceId ? { sourceId: item.sourceId } : {}),
+            })),
+            ...(spec.filename ? { filename: spec.filename } : {}),
+            ...(spec.trim ? { trim: spec.trim } : {}),
+            ...(spec.subtitles ? { subtitles: spec.subtitles } : {}),
+          },
+          {
+            onProgress: (progress) =>
+              report({
+                state: 'downloading',
+                step: progress.step,
+                progress: {
+                  percent: Math.min(99, progress.percent),
+                  ...(progress.bytesDownloaded !== undefined
+                    ? { bytesDownloaded: progress.bytesDownloaded }
+                    : {}),
+                  ...(progress.bytesTotal !== undefined ? { bytesTotal: progress.bytesTotal } : {}),
+                },
+              }),
+            ...(signal ? { signal } : {}),
+          },
+        );
 
-      for (const file of files) {
-        const name = dedupeFilename(file.name, taken);
-        const destination = workspace.outputPath(name);
-        await rename(file.path, destination);
-        produced.push({ path: destination, name });
-      }
-      const uploads = [...new Set(files.map((file) => dirname(file.path)))].filter((directory) =>
-        basename(directory).startsWith('remote-'),
-      );
-      for (const directory of uploads) {
-        await rm(directory, { recursive: true, force: true }).catch(() => undefined);
+        for (const file of files) {
+          const name = dedupeFilename(file.name, taken);
+          const destination = workspace.outputPath(name);
+          await rename(file.path, destination);
+          produced.push({ path: destination, name });
+        }
+      } finally {
+        const uploads = new Set(
+          files
+            .map((file) => dirname(file.path))
+            .filter((directory) => basename(directory).startsWith('remote-')),
+        );
+        uploads.add(join(config.dataDir, `remote-${spec.jobId}`));
+        for (const directory of uploads) {
+          await rm(directory, { recursive: true, force: true }).catch(() => undefined);
+        }
       }
 
       logger.info(
@@ -541,6 +556,7 @@ export class JobRunner {
         maxBytes: config.maxFilesizeBytes,
         timeoutMs: config.jobTimeoutSeconds * 1000,
         allowUrl: (url: URL) =>
+          !this.deps.resolver.isBlocked(url) &&
           !hostMatchesAny(url.hostname, config.blockedHosts) &&
           (!importHosts || isAllowedMediaUrl(url, importHosts)),
         ...(signal ? { signal } : {}),

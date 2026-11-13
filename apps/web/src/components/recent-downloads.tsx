@@ -26,15 +26,19 @@ export function RecentDownloads({ onAgain }: { readonly onAgain: (url: string) =
       if (event.key === null || event.key === HISTORY_KEY) refresh();
     };
     refresh();
-    const timer = setInterval(() => setNow(Date.now()), TICK_MS);
     window.addEventListener(HISTORY_EVENT, refresh);
     window.addEventListener('storage', onStorage);
     return () => {
-      clearInterval(timer);
       window.removeEventListener(HISTORY_EVENT, refresh);
       window.removeEventListener('storage', onStorage);
     };
   }, []);
+
+  useEffect(() => {
+    if (!entries.length) return undefined;
+    const timer = setInterval(() => setNow(Date.now()), TICK_MS);
+    return () => clearInterval(timer);
+  }, [entries.length]);
 
   if (!entries.length) return null;
 

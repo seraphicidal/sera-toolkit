@@ -7,7 +7,7 @@ CANARY=/var/lib/sera/canary.json
 REPO="${SERA_ALERT_REPO:-seraphicidal/sera-toolkit}"
 mkdir -p "$STATE_DIR"
 
-env_value() { sed -n "s/^$1=//p" "$DIR/.env" | tail -n 1 | tr -d '"'"'"' '; }
+env_value() { sed -n "s/^$1=//p" "$DIR/.env" | tail -n 1 | tr -d '"'"'"' \r'; }
 topic=$(env_value SERA_ALERT_NTFY_TOPIC)
 domain=$(env_value SERA_DOMAIN)
 if [ -z "$topic" ]; then

@@ -257,4 +257,59 @@ describe('JobService timeout and cancellation', () => {
       await rm(dir, { recursive: true, force: true }).catch(() => undefined);
     }
   });
+
+  it('transitions ready jobs to expired without affecting cancelled jobs', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'sera-srv-test-'));
+    try {
+      const config = loadConfig({
+        NODE_ENV: 'test',
+        LOG_LEVEL: 'silent',
+        SERA_SECRET: 'srv-test-secret',
+        SERA_DATA_DIR: dir,
+      });
+      const backend = new MemoryJobBackend(silentLogger());
+      const workspaces = new WorkspaceManager(dir, 3600, silentLogger());
+      const service = new JobService({
+        config,
+        logger: silentLogger(),
+        resolver: {} as unknown as MediaResolver,
+        workspaces,
+        backend,
+      });
+
+      const now = new Date().toISOString();
+      const readyId = '5'.repeat(32);
+      const cancelledId = '6'.repeat(32);
+      const makeRecord = (id: string, state: JobRecord['state']): JobRecord => ({
+        id,
+        state,
+        step: state === 'ready' ? 'Complete' : 'Cancelled',
+        progress: { percent: state === 'ready' ? 100 : 0 },
+        provider: 'youtube',
+        createdAt: now,
+        updatedAt: now,
+        spec: {
+          jobId: id,
+          provider: 'youtube',
+          url: 'https://youtube.com/watch?v=abc',
+          selections: [{ itemIndex: 0, planKey: '1080p' }],
+          packaging: 'auto',
+        },
+        clientKey: 'client-test',
+      });
+
+      await backend.submit(makeRecord(readyId, 'ready'));
+      await backend.submit(makeRecord(cancelledId, 'cancelled'));
+
+      const expired = await service.markExpired(readyId);
+      expect(expired?.state).toBe('expired');
+      expect((await backend.get(readyId))?.state).toBe('expired');
+
+      const stillCancelled = await service.markExpired(cancelledId);
+      expect(stillCancelled?.state).toBe('cancelled');
+      expect((await backend.get(cancelledId))?.state).toBe('cancelled');
+    } finally {
+      await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+    }
+  });
 });

@@ -65,7 +65,7 @@ function isRedundantTwin(format: YtdlpFormat): boolean {
   const id = str(format.format_id) ?? '';
   if (id.endsWith('-drc')) return true;
   const note = (str(format.format_note) ?? '').toLowerCase();
-  return note.includes('drc') || note.includes('premium');
+  return note.includes('drc');
 }
 
 export function entryFormats(info: YtdlpInfo): readonly YtdlpFormat[] | undefined {
@@ -97,19 +97,26 @@ export function toUsableFormats(formats: readonly YtdlpFormat[] | undefined): Us
 
   for (const format of formats) {
     const id = str(format.format_id);
-    if (!id) continue;
+    if (!id || !/^[A-Za-z0-9_.-]+$/.test(id)) continue;
     if (isStoryboard(format) || isRedundantTwin(format)) continue;
 
     const protocol = str(format.protocol) ?? 'https';
     if (!SUPPORTED_PROTOCOLS.has(protocol)) continue;
 
+    const rawVcodec =
+      typeof format.vcodec === 'string' ? format.vcodec.trim().toLowerCase() : undefined;
+    const rawAcodec =
+      typeof format.acodec === 'string' ? format.acodec.trim().toLowerCase() : undefined;
+    const vExplicitNone = rawVcodec === 'none';
+    const aExplicitNone = rawAcodec === 'none';
     const vcodec = str(format.vcodec);
     const acodec = str(format.acodec);
     const ext = (str(format.ext) ?? '').toLowerCase();
-    const codecsUnknown = format.vcodec == null && format.acodec == null;
-    if (codecsUnknown && IMAGE_EXTENSIONS.has(ext)) continue;
-    const hasVideo = codecsUnknown ? !AUDIO_EXTENSIONS.has(ext) : Boolean(vcodec);
-    const hasAudio = codecsUnknown || Boolean(acodec);
+    if (!vcodec && !acodec && IMAGE_EXTENSIONS.has(ext)) continue;
+    const hasVideo = vExplicitNone ? false : Boolean(vcodec) || !AUDIO_EXTENSIONS.has(ext);
+    const hasAudio = aExplicitNone
+      ? false
+      : Boolean(acodec) || (!vExplicitNone && format.acodec == null && !IMAGE_EXTENSIONS.has(ext));
     if (!hasVideo && !hasAudio) continue;
 
     const exact = num(format.filesize);
@@ -137,7 +144,17 @@ export function toUsableFormats(formats: readonly YtdlpFormat[] | undefined): Us
     };
     out.push(usable);
   }
-  return out;
+  const nonPremiumHeights = new Set(
+    out
+      .filter((f) => f.hasVideo && f.height && !(f.note ?? '').toLowerCase().includes('premium'))
+      .map((f) => f.height!),
+  );
+  return out.filter(
+    (f) =>
+      !f.height ||
+      !(f.note ?? '').toLowerCase().includes('premium') ||
+      !nonPremiumHeights.has(f.height),
+  );
 }
 
 export function estimateSize(format: UsableFormat, durationSeconds?: number): number | undefined {
@@ -261,7 +278,14 @@ export function rankVideo(format: UsableFormat): number {
   else if (codec.startsWith('av01')) codecScore = 2;
   else if (codec.startsWith('vp9') || codec.startsWith('vp09')) codecScore = 1;
   const fpsScore = (format.fps ?? 30) >= 50 ? 1 : 0;
-  return proto * 100_000_000 + fpsScore * 10_000_000 + codecScore * 1_000_000 + (format.tbr ?? 0);
+  const premiumPenalty = (format.note ?? '').toLowerCase().includes('premium') ? 50_000 : 0;
+  return (
+    proto * 100_000_000 +
+    fpsScore * 10_000_000 +
+    codecScore * 1_000_000 +
+    (format.tbr ?? 0) -
+    premiumPenalty
+  );
 }
 
 export function audioBitrateChoices(sourceAbr: number | undefined): number[] {

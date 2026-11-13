@@ -191,7 +191,6 @@ async function fetchYtdlp() {
       launcher,
       [
         `#!${TERMUX_PREFIX}/bin/sh`,
-        "# Written by scripts/fetch-tools.mjs: the yt-dlp zipapp, run by Termux's Python.",
         `exec "${TERMUX_PREFIX}/bin/python3" "\${0%/*}/yt-dlp.pyz" "$@"`,
         '',
       ].join('\n'),

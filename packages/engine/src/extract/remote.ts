@@ -44,7 +44,7 @@ export function requiredFeatures(
   const required: NodeFeature[] = [...(task.requires ?? [])];
   if (task.trim) required.push('trim');
   if (task.subtitles) required.push('subtitles');
-  if (task.items?.some((item, position) => item.index !== position)) required.push('items');
+  if (task.items?.length) required.push('items');
   return required;
 }
 
@@ -403,6 +403,7 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
         }): void => {
           const id = pending.task.id;
           if (this.pending.get(id) !== pending) return;
+          options.signal?.removeEventListener('abort', onAbort);
           clearTimeout(pending.timer);
           clearTimeout(pending.leaseTimer);
           this.pending.delete(id);
@@ -444,12 +445,13 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
         };
         this.pending.set(full.id, pending);
 
-        options.signal?.addEventListener('abort', () => {
+        const onAbort = () => {
           pending.cancelled = true;
           const queued = this.queue.indexOf(pending.task);
           if (queued !== -1) this.queue.splice(queued, 1);
           finish({ error: seraError('CANCELLED') });
-        });
+        };
+        options.signal?.addEventListener('abort', onAbort, { once: true });
 
         this.queue.push(full);
         this.wakeOne();
@@ -512,12 +514,15 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
     this.pending.delete(previous.id);
 
     cleanupFiles(pending.files);
+    const needed = requiredFeatures(previous);
     const hasAlternativeNode =
       silentNode !== undefined &&
       this.live(previous.networkClass).some(
         (node) =>
           node.id !== silentNode &&
-          (!node.providers.length || node.providers.includes(previous.providerId)),
+          !previous.avoid?.includes(node.id) &&
+          (!node.providers.length || node.providers.includes(previous.providerId)) &&
+          needed.every((feature) => node.features.includes(feature)),
       );
     const avoid = hasAlternativeNode
       ? [...new Set([...(previous.avoid ?? []), silentNode])]

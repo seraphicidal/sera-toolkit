@@ -50,7 +50,7 @@ fi
 
 if [ ! -f "$ENV_FILE" ]; then
   cat >"$ENV_FILE" <<'EOF'
-SERA_API_URL=https://130-61-188-184.sslip.io
+SERA_API_URL=https://your-sera-domain.example
 SERA_EXTRACTION_NODE_TOKEN=
 SERA_NODE_ID=phone
 SERA_NODE_PROVIDERS=youtube

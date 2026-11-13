@@ -79,6 +79,8 @@ if [ ! -f .env ]; then
 
   PUBLIC_IP="${SERA_PUBLIC_IP:-$(curl -fsS --max-time 10 https://api.ipify.org || true)}"
   [ -n "$PUBLIC_IP" ] || die "could not determine the public IP; set SERA_PUBLIC_IP and re-run"
+  ip_re='^[0-9]{1,3}(\.[0-9]{1,3}){3}$'
+  [[ "$PUBLIC_IP" =~ $ip_re ]] || die "invalid public IP '${PUBLIC_IP}'; set SERA_PUBLIC_IP and re-run"
   DOMAIN="${SERA_DOMAIN:-${PUBLIC_IP//./-}.sslip.io}"
 
   SECRET="$(openssl rand -hex 32)"
@@ -117,6 +119,8 @@ SERA_TLS_EMAIL="$(read_env_var SERA_TLS_EMAIL)"
 
 mkdir -p deploy/caddy.globals
 if [ -n "${SERA_TLS_EMAIL:-}" ]; then
+  email_re='^[^[:space:]"{};]+@[^[:space:]"{};]+$'
+  [[ "$SERA_TLS_EMAIL" =~ $email_re ]] || die "invalid SERA_TLS_EMAIL in .env"
   printf 'email %s\n' "$SERA_TLS_EMAIL" > deploy/caddy.globals/email.caddy
 else
   rm -f deploy/caddy.globals/email.caddy

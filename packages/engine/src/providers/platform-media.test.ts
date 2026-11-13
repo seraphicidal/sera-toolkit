@@ -148,7 +148,17 @@ describe('TwitterProvider', () => {
   });
 
   it('says a post has no media rather than blaming the source', async () => {
-    const context = contextWith({ json: { id_str: '20', text: 'just setting up my twttr' } });
+    const context = contextWith({
+      fetchText: (fetchUrl: URL) =>
+        Promise.resolve({
+          body: JSON.stringify(
+            fetchUrl.hostname === 'cdn.syndication.twimg.com'
+              ? { id_str: '20', text: 'just setting up my twttr' }
+              : { code: 200, tweet: { text: 'just setting up my twttr' } },
+          ),
+          url: fetchUrl.toString(),
+        }),
+    });
     const error = await provider.resolve(url, context).then(
       () => undefined,
       (caught: unknown) => SeraError.from(caught),
@@ -315,8 +325,9 @@ describe('RedditProvider', () => {
     };
     expect(itemsFrom(withManifest, 50)[0]?.plans[0]?.fetch).toEqual({
       via: 'ytdlp',
-      selector: 'best',
+      selector: 'bestvideo*+bestaudio/best',
       merge: 'mp4',
+      target: 'https://v.redd.it/a/HLSPlaylist.m3u8',
       useExtractors: 'generic',
     });
     expect(manifestUrlFor(withManifest)).toBe('https://v.redd.it/a/HLSPlaylist.m3u8');
@@ -337,8 +348,9 @@ describe('RedditProvider', () => {
     };
     expect(itemsFrom(elsewhere, 50)[0]?.plans[0]?.fetch).toEqual({
       via: 'ytdlp',
-      selector: 'best',
+      selector: 'bestvideo*+bestaudio/best',
       merge: 'mp4',
+      target: 'https://cdn.example.com/a/HLSPlaylist.m3u8',
     });
   });
 

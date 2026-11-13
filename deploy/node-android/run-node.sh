@@ -20,7 +20,6 @@ echo $$ >"$PIDFILE"
 
 ONLY_ON_WIFI=0
 ONLY_WHILE_CHARGING=0
-# shellcheck disable=SC1091
 [ -f "$STATE/node.conf" ] && . "$STATE/node.conf"
 
 child=''

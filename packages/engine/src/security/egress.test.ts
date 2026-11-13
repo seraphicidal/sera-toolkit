@@ -360,17 +360,20 @@ describe.skipIf(!hasYtdlp)('yt-dlp behind the egress proxy', () => {
 describe('confineToHttp', () => {
   const HTTP = "[protocol~='^(https?|m3u8(_native)?|http_dash_segments)$']";
 
-  it('filters the atoms yt-dlp chooses for itself', () => {
+  it('confines every selector atom lacking a protocol filter', () => {
     expect(confineToHttp('best')).toBe(`best${HTTP}`);
     expect(confineToHttp('bestvideo+bestaudio/best')).toBe(
       `bestvideo${HTTP}+bestaudio${HTTP}/best${HTTP}`,
     );
-    expect(confineToHttp('bestaudio[acodec^=mp4a]/140')).toBe(`bestaudio[acodec^=mp4a]${HTTP}/140`);
+    expect(confineToHttp('bestaudio[acodec^=mp4a]/140')).toBe(
+      `bestaudio[acodec^=mp4a]${HTTP}/140${HTTP}`,
+    );
+    expect(confineToHttp('137+140')).toBe(`137${HTTP}+140${HTTP}`);
+    expect(confineToHttp('hls-720p')).toBe(`hls-720p${HTTP}`);
   });
 
-  it('leaves formats chosen by id alone, since they were filtered when listed', () => {
-    expect(confineToHttp('137+140')).toBe('137+140');
-    expect(confineToHttp('hls-720p')).toBe('hls-720p');
+  it('preserves atoms that already specify a protocol filter', () => {
+    expect(confineToHttp(`137${HTTP}+140`)).toBe(`137${HTTP}+140${HTTP}`);
   });
 
   it.skipIf(!hasYtdlp)('keeps yt-dlp off a format it would reach outside the proxy', async () => {
@@ -422,6 +425,8 @@ describe('confineToHttp', () => {
 
       expect(pick('best')).toBe('stream');
       expect(pick(confineToHttp('best'))).toBe('web');
+      expect(pick(confineToHttp('web'))).toBe('web');
+      expect(pick(confineToHttp('stream'))).toBe('');
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

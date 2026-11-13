@@ -89,6 +89,19 @@ describe('MemoryJobBackend', () => {
     await backend.close();
   });
 
+  it('allows ready jobs to transition to expired while keeping expired terminal', async () => {
+    const backend = new MemoryJobBackend(silentLogger());
+    await backend.submit(record('a-expire'));
+
+    await backend.patch('a-expire', { state: 'ready', step: 'Ready', progress: { percent: 100 } });
+    const expired = await backend.patch('a-expire', { state: 'expired', step: 'Expired' });
+    expect(expired?.state).toBe('expired');
+
+    const after = await backend.patch('a-expire', { state: 'ready', step: 'Ready' });
+    expect(after?.state).toBe('expired');
+    await backend.close();
+  });
+
   it('never lets progress move backwards', async () => {
     const backend = new MemoryJobBackend(silentLogger());
     await backend.submit(record('a3'));

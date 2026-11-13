@@ -214,11 +214,17 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
       if (entry.settledAt && now - entry.settledAt > DISPATCH_KEEP_MS) {
         dispatched.delete(id);
         taskUploads.delete(id);
+        void rm(join(config.dataDir, `remote-${id}`), { recursive: true, force: true }).catch(
+          () => undefined,
+        );
       }
     }
     for (const [id, upload] of taskUploads) {
       if (now - upload.updatedAt > TASK_UPLOAD_IDLE_MS) {
         taskUploads.delete(id);
+        void rm(join(config.dataDir, `remote-${id}`), { recursive: true, force: true }).catch(
+          () => undefined,
+        );
       }
     }
   }, 30_000);
@@ -389,6 +395,10 @@ export function registerExtractionNodeRoutes(rootApp: FastifyInstance, engine: S
             })
           : seraError('PROVIDER_UNAVAILABLE', { detail: 'node: malformed failure report' });
 
+        await rm(join(config.dataDir, `remote-${request.params.taskId}`), {
+          recursive: true,
+          force: true,
+        }).catch(() => undefined);
         taskUploads.delete(request.params.taskId);
         const accepted = extractionNodes.fail(request.params.taskId, error);
         return reply.send({ accepted });

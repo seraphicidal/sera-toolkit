@@ -14,6 +14,7 @@ import {
   WorkspaceManager,
   type ResolvedMedia,
 } from '@sera/engine';
+import { probe } from '../packages/engine/src/convert/ffmpeg.js';
 import { pictureBlock, squareCover, tagAudio } from '../packages/engine/src/convert/tags.js';
 import { ensureFixtures, ffmpegPath, ffprobePath, type Fixtures } from './helpers/fixtures.js';
 import { MediaServer } from './helpers/media-server.js';
@@ -111,8 +112,11 @@ describe('tagAudio', () => {
   const tags = { title: 'Flickermood = test; #1', artist: 'Forss', album: 'Soulhack' };
 
   it('makes the cover square, from a 4:3 picture', async () => {
-    const { size } = await squareCover(fixtures.image, join(dir, 'cover.jpg'), tools);
-    expect(size).toBe(600);
+    const coverPath = join(dir, 'cover.jpg');
+    await squareCover(fixtures.image, coverPath, tools);
+    const probed = await probe(coverPath, tools);
+    expect(probed.video?.width).toBe(600);
+    expect(probed.video?.height).toBe(600);
   });
 
   for (const ext of ['mp3', 'm4a', 'opus']) {

@@ -1,4 +1,3 @@
-import { existsSync } from 'node:fs';
 import type { MediaKind } from '@sera/contracts/types';
 import { locateTool } from '../config.js';
 import { seraError, SeraError } from '../errors.js';
@@ -17,6 +16,7 @@ import { run } from '../util/spawn.js';
 export interface GalleryDlOptions {
   readonly binary?: string;
   readonly proxy?: string;
+  readonly providerId?: string;
   readonly timeoutMs?: number;
   readonly signal?: AbortSignal;
 }
@@ -60,10 +60,8 @@ export function parseGalleryDlJson(
     if (seen.has(normalized)) return;
     seen.add(normalized);
 
-    const ext =
-      (typeof meta?.extension === 'string' ? meta.extension.toLowerCase() : undefined) ??
-      urlExtension(validUrl) ??
-      'jpg';
+    const rawExt = typeof meta?.extension === 'string' ? meta.extension.trim().toLowerCase() : '';
+    const ext = (rawExt || undefined) ?? urlExtension(validUrl) ?? 'jpg';
     const kind: MediaKind =
       ext === 'gif'
         ? 'gif'
@@ -134,12 +132,18 @@ export async function extractWithGalleryDl(
   options: GalleryDlOptions = {},
 ): Promise<ResolvedMedia> {
   const binary = options.binary ?? locateTool('gallery-dl', process.env.SERA_GALLERYDL_PATH ?? '');
-  if (binary === 'gallery-dl' && !existsSync(binary)) {
-    throw seraError('UNSUPPORTED_SOURCE', { detail: 'gallery-dl binary not installed' });
-  }
+  const provider = options.providerId ?? 'generic';
+  const upstream = options.proxy ?? context.config.proxyFor(provider);
+  const proxy =
+    options.proxy ?? (context.egressProxy ? await context.egressProxy(url, upstream) : upstream);
 
-  const args = ['--dump-json', '--no-download'];
-  const proxy = options.proxy ?? context.config.proxyFor('generic');
+  const args = [
+    '--ignore-config',
+    '--dump-json',
+    '--no-download',
+    '--range',
+    `1-${context.config.maxItemsPerJob}`,
+  ];
   if (proxy) args.push('--proxy', proxy);
   args.push('--', url.toString());
 
@@ -147,7 +151,7 @@ export async function extractWithGalleryDl(
   try {
     const result = await run(binary, {
       args,
-      timeoutMs: options.timeoutMs ?? context.config.resolveTimeoutMsFor('generic'),
+      timeoutMs: options.timeoutMs ?? context.config.resolveTimeoutMsFor(provider),
       captureStdout: true,
       maxStdoutBytes: 16 * 1024 * 1024,
       ...(options.signal
@@ -164,6 +168,12 @@ export async function extractWithGalleryDl(
     stdout = result.stdout;
   } catch (error) {
     if (error instanceof SeraError) throw error;
+    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
+      throw seraError('UNSUPPORTED_SOURCE', {
+        detail: 'gallery-dl binary not installed',
+        cause: error,
+      });
+    }
     throw seraError('UNSUPPORTED_SOURCE', { detail: 'gallery-dl execution failed', cause: error });
   }
 
@@ -172,7 +182,16 @@ export async function extractWithGalleryDl(
     context.config.allowPrivateAddresses,
     context.config.blockedHosts,
   );
-  const selected = parsed.entries.slice(0, context.config.maxItemsPerJob);
+  const filtered = parsed.entries.filter((entry) => {
+    if (!context.allowUrl) return true;
+    try {
+      context.allowUrl(entry.url);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  const selected = filtered.slice(0, context.config.maxItemsPerJob);
   if (!selected.length) {
     throw seraError('UNSUPPORTED_SOURCE', {
       detail: `gallery-dl: no media found on ${url.hostname}`,

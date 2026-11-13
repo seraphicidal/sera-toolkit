@@ -3,7 +3,7 @@ import { lstat, rm, stat } from 'node:fs/promises';
 import { once } from 'node:events';
 import { ZipFile } from 'yazl';
 import { seraError } from '../errors.js';
-import { assertSafeFilename } from '../util/filename.js';
+import { assertSafeFilename, dedupeFilename } from '../util/filename.js';
 
 export interface ZipEntry {
   readonly path: string;
@@ -45,7 +45,7 @@ export async function createZip(request: CreateZipRequest): Promise<{ sizeBytes:
       if (request.signal?.aborted) throw seraError('CANCELLED');
 
       const name = assertSafeFilename(entry.name);
-      const unique = dedupe(name, taken);
+      const unique = dedupeFilename(name, taken);
 
       const info = await lstat(entry.path).catch(() => undefined);
       if (!info?.isFile()) {
@@ -97,25 +97,4 @@ function shouldCompress(name: string): boolean {
     'gif',
   ]);
   return !alreadyCompressed.has(extension);
-}
-
-function dedupe(name: string, taken: Set<string>): string {
-  const key = name.toLowerCase();
-  if (!taken.has(key)) {
-    taken.add(key);
-    return name;
-  }
-  const dot = name.lastIndexOf('.');
-  const stem = dot > 0 ? name.slice(0, dot) : name;
-  const extension = dot > 0 ? name.slice(dot) : '';
-  for (let n = 2; n < 10_000; n += 1) {
-    const candidate = `${stem} (${n})${extension}`;
-    if (!taken.has(candidate.toLowerCase())) {
-      taken.add(candidate.toLowerCase());
-      return candidate;
-    }
-  }
-  const fallback = `${stem} (${Date.now()})${extension}`;
-  taken.add(fallback.toLowerCase());
-  return fallback;
 }

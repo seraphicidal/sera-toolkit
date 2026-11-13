@@ -49,7 +49,7 @@ export async function squareCover(
   input: string,
   output: string,
   options: FfmpegOptions,
-): Promise<{ readonly size: number }> {
+): Promise<void> {
   const result = await run(options.ffmpegPath, {
     args: [
       '-hide_banner',
@@ -60,7 +60,7 @@ export async function squareCover(
       '-i',
       input,
       '-vf',
-      "crop='min(iw,ih)':'min(iw,ih)',scale='min(1000,iw)':-2",
+      "crop='min(iw,ih)':'min(iw,ih)',scale='min(1000,iw)':'min(1000,ih)'",
       '-frames:v',
       '1',
       '-q:v',
@@ -75,8 +75,6 @@ export async function squareCover(
       detail: `cover crop exit ${result.code}: ${result.stderrTail.slice(-300)}`,
     });
   }
-  const cover = await probe(output, options);
-  return { size: cover.video?.width ?? 0 };
 }
 
 export async function tagAudio(request: TagAudioRequest): Promise<void> {

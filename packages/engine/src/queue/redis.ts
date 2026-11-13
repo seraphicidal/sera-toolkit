@@ -20,10 +20,12 @@ const PATCH_LUA = `
 local raw = redis.call('get', KEYS[1])
 if not raw then return nil end
 local current = cjson.decode(raw)
-if current.state == 'ready' or current.state == 'failed' or current.state == 'cancelled' or current.state == 'expired' then
+local patch = cjson.decode(ARGV[1])
+local st = current.state
+local allowingExpiration = (st == 'ready' and patch.state == 'expired')
+if (st == 'ready' or st == 'failed' or st == 'cancelled' or st == 'expired') and not allowingExpiration then
   return raw
 end
-local patch = cjson.decode(ARGV[1])
 for k, v in pairs(patch) do
   if k ~= 'progress' then current[k] = v end
 end

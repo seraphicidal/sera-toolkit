@@ -106,3 +106,4 @@ jobs:
           done
           test -n "$run" || { echo 'CI did not start'; exit 1; }
           gh run watch "$run" --exit-status --interval 30
+          gh pr merge "$BRANCH" --squash --delete-branch

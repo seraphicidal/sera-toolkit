@@ -20,7 +20,7 @@ if [ -e "$DIR/.auto-update-paused" ]; then
   exit 0
 fi
 
-domain=$(sed -n 's/^SERA_DOMAIN=//p' "$DIR/.env" | tail -n 1 | tr -d '"'"'"' ')
+domain=$(sed -n 's/^SERA_DOMAIN=//p' "$DIR/.env" | tail -n 1 | tr -d '"'"'"' \r')
 if [ -z "$domain" ]; then
   log "SERA_DOMAIN is not set in $DIR/.env"
   status failed no-domain
@@ -29,8 +29,8 @@ fi
 
 healthy() {
   local admin_token canary_token
-  admin_token=$(sed -n 's/^SERA_ADMIN_TOKEN=//p' "$DIR/.env" | tail -n 1 | tr -d '"'"'"' ')
-  canary_token=$(sed -n 's/^SERA_CANARY_TOKEN=//p' "$DIR/.env" | tail -n 1 | tr -d '"'"'"' ')
+  admin_token=$(sed -n 's/^SERA_ADMIN_TOKEN=//p' "$DIR/.env" | tail -n 1 | tr -d '"'"'"' \r')
+  canary_token=$(sed -n 's/^SERA_CANARY_TOKEN=//p' "$DIR/.env" | tail -n 1 | tr -d '"'"'"' \r')
   local auth_headers=()
   if [ -n "$admin_token" ]; then
     auth_headers=(-H "Authorization: Bearer $admin_token")

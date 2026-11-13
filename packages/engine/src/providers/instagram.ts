@@ -4,7 +4,9 @@ import type { EngineConfig } from '../config.js';
 import { SeraError, seraError } from '../errors.js';
 import type { ExtractionStrategy } from '../extract/strategy.js';
 import {
+  assertCdnHosts,
   coverItemFrom,
+  INSTAGRAM_MEDIA_HOSTS,
   itemsFrom,
   mediaIdFromShortcode,
   oembedFor,
@@ -63,13 +65,31 @@ export class InstagramProvider extends YtdlpProvider {
       keepCookies: true,
     });
 
-    const node = (JSON.parse(body) as { items?: readonly InstagramNode[] }).items?.[0];
+    let parsed: { items?: readonly InstagramNode[] };
+    try {
+      parsed = JSON.parse(body) as { items?: readonly InstagramNode[] };
+    } catch (cause) {
+      throw seraError('PROVIDER_AUTH_REQUIRED', {
+        detail: 'instagram: session endpoint did not return JSON',
+        cause,
+      });
+    }
+    const node = parsed.items?.[0];
     if (!node) throw seraError('UNSUPPORTED_SOURCE', { detail: 'instagram: no media in response' });
 
     const items = itemsFrom(node, context.config.maxItemsPerJob);
     if (!items.length) {
       throw seraError('UNSUPPORTED_SOURCE', { detail: 'instagram: post had no usable media' });
     }
+
+    const mediaUrls: string[] = [];
+    for (const item of items) {
+      if (item.thumbnailUrl) mediaUrls.push(item.thumbnailUrl);
+      for (const plan of item.plans) {
+        if (plan.fetch.via === 'direct') mediaUrls.push(plan.fetch.url);
+      }
+    }
+    assertCdnHosts(mediaUrls, INSTAGRAM_MEDIA_HOSTS);
 
     const { title, author } = titleFor(node);
     return {

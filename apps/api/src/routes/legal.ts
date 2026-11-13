@@ -5,7 +5,7 @@ import type { FastifyInstance } from 'fastify';
 import { legalReportRequestSchema } from '@sera/contracts';
 import type { LegalReportResponse } from '@sera/contracts/types';
 import type { SeraEngine } from '@sera/engine';
-import { computeClientKey, matchesToken } from '../plugins/client.js';
+import { computeClientKey, matchesToken, normalizeClientAddress } from '../plugins/client.js';
 
 function checkAdminAuth(header: string | undefined, adminToken: string): boolean {
   if (!adminToken) return false;
@@ -75,7 +75,10 @@ export function registerLegalRoutes(app: FastifyInstance, engine: SeraEngine): v
                 receivedAt,
                 ...report,
                 mitigated,
-                clientIp: computeClientKey(request.ip, engine.config.secret),
+                clientIp: computeClientKey(
+                  normalizeClientAddress(request.ip),
+                  engine.config.secret,
+                ),
               },
               null,
               2,
@@ -129,6 +132,7 @@ export function registerLegalRoutes(app: FastifyInstance, engine: SeraEngine): v
           method: 'POST',
           headers,
           body,
+          signal: AbortSignal.timeout(5_000),
         }).catch((err: unknown) => {
           engine.logger.warn({ err, reportId }, 'failed to send ntfy legal report notification');
         });

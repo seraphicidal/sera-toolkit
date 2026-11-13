@@ -106,10 +106,9 @@ export function FormatPicker({
           >
             Quality
           </label>
-          <div className="relative sm:hidden" aria-hidden="true">
+          <div className="relative sm:hidden">
             <select
               id="sera-quality"
-              tabIndex={-1}
               value={activeLabel}
               onChange={(event) => onLabelChange(event.target.value)}
               className="w-full cursor-pointer appearance-none rounded-xl border border-[var(--color-line)] bg-[var(--color-surface)] py-3 pr-10 pl-3.5 text-[0.9375rem] text-[var(--color-ink)] transition-colors hover:border-[var(--color-line-strong)] focus:border-[var(--color-accent)] focus:outline-none focus-visible:shadow-[var(--shadow-focus)]"
@@ -129,7 +128,7 @@ export function FormatPicker({
           <div
             role="radiogroup"
             aria-label="Quality options"
-            className="mt-2.5 grid grid-cols-1 gap-2 sm:grid-cols-2"
+            className="mt-2.5 hidden grid-cols-1 gap-2 sm:grid sm:grid-cols-2"
           >
             {labels.map((candidate, index) => {
               const option = matchingOptions.find((item) => item.label === candidate);

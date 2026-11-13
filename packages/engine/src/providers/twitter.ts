@@ -116,7 +116,7 @@ export class TwitterProvider extends YtdlpProvider {
       'fixvx.com',
       'twittpr.com',
     ].some((h) => host === h || host.endsWith(`.${h}`));
-    const isStatus = /^\/[^/]+\/status\/\d+/i.test(target.pathname);
+    const isStatus = /^\/(?:i\/(?:web\/)?|[^/]+\/)status\/\d+/i.test(target.pathname);
     if (!isTwitterHost || !isStatus) {
       throw seraError('UNSUPPORTED_SOURCE', {
         message: 'That short link does not point to an X post.',
@@ -159,7 +159,10 @@ export class TwitterProvider extends YtdlpProvider {
   }
 
   private async viaSyndication(url: URL, context: ProviderContext): Promise<ResolvedMedia> {
-    const tweet = await this.readTweet(url, context).catch(() => undefined);
+    const tweet = await this.readTweet(url, context).catch((error: unknown) => {
+      if (context.signal?.aborted) throw error;
+      return undefined;
+    });
     const source = usableMedia(tweet).length ? tweet : (tweet?.quoted_tweet ?? tweet);
     const media = usableMedia(source);
 
@@ -171,9 +174,8 @@ export class TwitterProvider extends YtdlpProvider {
           detail: 'twitter: sensitive post attachments not served by syndication',
         });
       }
-      throw seraError('MEDIA_UNAVAILABLE', {
-        message: 'That post has no media to download.',
-        detail: 'twitter: embed endpoint reported no attachments',
+      throw seraError('UNSUPPORTED_SOURCE', {
+        detail: 'Syndication returned no media details',
       });
     }
     throw seraError('UNSUPPORTED_SOURCE', {
@@ -239,7 +241,12 @@ export class TwitterProvider extends YtdlpProvider {
 
     const endpoint = new URL(`https://api.fxtwitter.com/status/${id}`);
     const { body } = await context.fetchText(endpoint, 4 * 1024 * 1024);
-    const parsed = JSON.parse(body) as FxTweetResponse;
+    let parsed: FxTweetResponse;
+    try {
+      parsed = JSON.parse(body) as FxTweetResponse;
+    } catch {
+      throw seraError('UNSUPPORTED_SOURCE', { detail: 'fxtwitter: invalid json' });
+    }
     if (parsed.code === 404) {
       throw seraError('MEDIA_UNAVAILABLE', {
         message: 'That post is no longer available.',
@@ -252,9 +259,16 @@ export class TwitterProvider extends YtdlpProvider {
     }
 
     const rawList = tweet.media?.all ?? tweet.media?.photos ?? tweet.media?.videos ?? [];
-    const media = rawList.filter(
-      (item) => typeof item.url === 'string' && item.url.startsWith('https://'),
-    );
+    const media = rawList.filter((item) => {
+      if (typeof item.url !== 'string' || !item.url.startsWith('https://')) return false;
+      try {
+        if (context.allowUrl) context.allowUrl(item.url);
+        else new URL(item.url);
+        return true;
+      } catch {
+        return false;
+      }
+    });
 
     if (!media.length) {
       throw seraError('MEDIA_UNAVAILABLE', {
@@ -290,7 +304,7 @@ export class TwitterProvider extends YtdlpProvider {
   }
 
   private async viaGalleryDl(url: URL, context: ProviderContext): Promise<ResolvedMedia> {
-    const media = await extractWithGalleryDl(url, context);
+    const media = await extractWithGalleryDl(url, context, { providerId: 'twitter' });
     return {
       ...media,
       provider: this.id,
@@ -402,15 +416,20 @@ function toFxItem(media: FxTweetMediaItem, index: number): ResolvedItem | undefi
         }))
       : [{ url: source, width, height }];
 
-  const plans: DownloadPlan[] = variants.map((variant, position) => {
+  const seenLabels = new Set<string>();
+  const plans: DownloadPlan[] = [];
+  for (const variant of variants) {
     const itemWidth = variant.width ?? width;
     const itemHeight = variant.height ?? height;
+    const label = isGif ? 'Original' : qualityLabel(itemHeight, itemWidth);
+    if (seenLabels.has(label)) continue;
+    seenLabels.add(label);
     const approximateBytes =
       variant.bitrate && durationSeconds ? (variant.bitrate / 8) * durationSeconds : undefined;
-    return {
+    plans.push({
       kind: isGif ? 'gif' : 'video',
       container: 'mp4',
-      label: isGif ? 'Original' : qualityLabel(itemHeight, itemWidth),
+      label,
       detail: ['MP4 · H.264', approximateBytes ? `~${formatBytes(approximateBytes)}` : undefined]
         .filter(Boolean)
         .join(' · '),
@@ -420,23 +439,25 @@ function toFxItem(media: FxTweetMediaItem, index: number): ResolvedItem | undefi
         ? { filesizeBytes: Math.round(approximateBytes), filesizeIsApproximate: true }
         : {}),
       requiresConversion: false,
-      recommended: position === 0,
+      recommended: plans.length === 0,
       fetch: { via: 'direct' as const, url: variant.url },
-    };
-  });
+    });
+  }
 
   const best = variants[0]!.url;
   if (isGif) {
-    plans.push({
-      kind: 'gif',
-      container: 'gif',
-      label: 'GIF',
-      detail: 'Converted from the silent video X stores',
-      requiresConversion: true,
-      recommended: false,
-      fetch: { via: 'direct', url: best },
-      convert: { kind: 'gif' },
-    });
+    if (!durationSeconds || durationSeconds <= 30) {
+      plans.push({
+        kind: 'gif',
+        container: 'gif',
+        label: 'GIF',
+        detail: 'Converted from the silent video X stores',
+        requiresConversion: true,
+        recommended: false,
+        fetch: { via: 'direct', url: best },
+        convert: { kind: 'gif' },
+      });
+    }
   } else {
     plans.push(
       {
@@ -591,14 +612,19 @@ function toItem(media: TweetMedia, index: number): ResolvedItem | undefined {
     ? media.video_info.duration_millis / 1000
     : undefined;
 
-  const plans: DownloadPlan[] = variants.map((variant, position) => {
+  const seenLabels = new Set<string>();
+  const plans: DownloadPlan[] = [];
+  for (const variant of variants) {
     const size = sizeFromVariantUrl(variant.url!);
+    const label = isGif ? 'Original' : qualityLabel(size.height, size.width);
+    if (seenLabels.has(label)) continue;
+    seenLabels.add(label);
     const approximateBytes =
       variant.bitrate && durationSeconds ? (variant.bitrate / 8) * durationSeconds : undefined;
-    return {
+    plans.push({
       kind: isGif ? 'gif' : 'video',
       container: 'mp4',
-      label: isGif ? 'Original' : qualityLabel(size.height, size.width),
+      label,
       detail: ['MP4 · H.264', approximateBytes ? `~${formatBytes(approximateBytes)}` : undefined]
         .filter(Boolean)
         .join(' · '),
@@ -608,23 +634,25 @@ function toItem(media: TweetMedia, index: number): ResolvedItem | undefined {
         ? { filesizeBytes: Math.round(approximateBytes), filesizeIsApproximate: true }
         : {}),
       requiresConversion: false,
-      recommended: position === 0,
+      recommended: plans.length === 0,
       fetch: { via: 'direct' as const, url: variant.url! },
-    };
-  });
+    });
+  }
 
   const best = variants[0]!.url!;
   if (isGif) {
-    plans.push({
-      kind: 'gif',
-      container: 'gif',
-      label: 'GIF',
-      detail: 'Converted from the silent video X stores',
-      requiresConversion: true,
-      recommended: false,
-      fetch: { via: 'direct', url: best },
-      convert: { kind: 'gif' },
-    });
+    if (!durationSeconds || durationSeconds <= 30) {
+      plans.push({
+        kind: 'gif',
+        container: 'gif',
+        label: 'GIF',
+        detail: 'Converted from the silent video X stores',
+        requiresConversion: true,
+        recommended: false,
+        fetch: { via: 'direct', url: best },
+        convert: { kind: 'gif' },
+      });
+    }
   } else {
     plans.push(
       {
