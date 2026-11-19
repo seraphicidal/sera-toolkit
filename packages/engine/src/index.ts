@@ -1,0 +1,173 @@
+export { loadConfig, locateTool, ConfigError, VERSION, type EngineConfig } from './config.js';
+export { SeraEngine, type EngineOptions } from './engine.js';
+export { SeraError, seraError, MESSAGES, HINTS } from './errors.js';
+export { createLogger, silentLogger, logSafeUrl, maskSecrets, type Logger } from './logging.js';
+
+export { MediaResolver, type ResolverDependencies } from './resolver.js';
+
+export {
+  ProviderRegistry,
+  createProviders,
+  normalizeForProvider,
+  YtdlpProvider,
+  GoogleDriveProvider,
+  DropboxProvider,
+  MediaFireProvider,
+  MegaProvider,
+  extractGoogleDriveId,
+  extractGoogleDriveConfirmUrl,
+  extractMediaFireDirectUrl,
+  planKey,
+  type MediaProvider,
+  type ProviderContext,
+  type DownloadPlan,
+  type FetchPlan,
+  type ResolvedItem,
+  type ResolvedMedia,
+} from './providers/index.js';
+export {
+  INSTAGRAM_MEDIA_HOSTS,
+  isAllowedMediaUrl,
+  mediaFromImport,
+  type ImportedEntry,
+  type ImportedPost,
+  type MediaHostPolicy,
+} from './providers/instagram-media.js';
+
+export { JobService, type JobServiceDependencies } from './jobs/service.js';
+export {
+  JobRunner,
+  matchSelection,
+  type ImportedJob,
+  type JobSelection,
+  type JobSpec,
+  type JobUpdate,
+} from './jobs/runner.js';
+export { createZip, type ZipEntry } from './jobs/zip.js';
+
+export { MemoryJobBackend } from './queue/memory.js';
+export {
+  MemoryUsageCounter,
+  RedisUsageCounter,
+  totalUsage,
+  USAGE_RETENTION_DAYS,
+  type SourceUsage,
+  type UsageCounter,
+  type UsageDay,
+  type UsageEvent,
+} from './usage/counts.js';
+export {
+  toPublicJob,
+  isActive,
+  ACTIVE_STATES,
+  type JobBackend,
+  type JobRecord,
+  type JobPatch,
+  type WorkerHandle,
+} from './queue/types.js';
+
+export {
+  WorkspaceManager,
+  Workspace,
+  mimeTypeFor,
+  MIME_TYPES,
+  type JobManifest,
+} from './storage/workspace.js';
+
+export {
+  createSafeDispatcher,
+  safeFetch,
+  safeOpen,
+  header,
+  type SafeResponse,
+  type OpenResponse,
+  type ResponseHeaders,
+} from './security/http.js';
+export { AbuseGuard, type AbuseGuardOptions } from './security/abuse.js';
+export { Denylist, type BlockedEntry, type DenylistOptions } from './security/denylist.js';
+export { EgressGuard, confineToHttp, type EgressGuardOptions } from './security/egress.js';
+export { isPublicAddress, isIpLiteral, unwrapIpv4Mapped } from './security/ip.js';
+export { parseRobots, isAllowed, isPathAllowed } from './security/robots.js';
+export {
+  parseUserUrl,
+  normalizeUrl,
+  hostMatches,
+  hostMatchesAny,
+  stripWww,
+  urlExtension,
+  MEDIA_EXTENSIONS,
+} from './security/url.js';
+
+export {
+  convert,
+  probe,
+  buildArgs,
+  ffmpegVersion,
+  type ConversionSpec,
+  type ConvertRequest,
+  type ProbeResult,
+} from './convert/ffmpeg.js';
+export {
+  dumpInfo,
+  download,
+  classifyYtdlpFailure,
+  assertNotDrmProtected,
+  version as ytdlpVersion,
+} from './extract/ytdlp.js';
+export {
+  extractWithGalleryDl,
+  parseGalleryDlJson,
+  type GalleryDlEntry,
+  type GalleryDlOptions,
+} from './extract/gallerydl.js';
+export { downloadDirect } from './extract/direct-download.js';
+export { discoverMedia, type PageMedia, type DiscoveredMedia } from './extract/html.js';
+export type { YtdlpInfo, YtdlpFormat } from './extract/ytdlp-types.js';
+
+export { kindOf } from './normalize/plans.js';
+export {
+  toUsableFormats,
+  splitFormats,
+  bestAudio,
+  bestVideoPerHeight,
+  nativeContainer,
+  fitsInMp4,
+  estimateSize,
+  audioBitrateChoices,
+  type UsableFormat,
+} from './normalize/formats.js';
+
+export {
+  sanitizeStem,
+  sanitizeExtension,
+  buildFilename,
+  mediaFilename,
+  dedupeFilename,
+  assertSafeFilename,
+  contentDispositionValue,
+} from './util/filename.js';
+export { formatBytes, formatDuration, qualityLabel, codecLabel, truncate } from './util/format.js';
+export { readToken, signToken, verifyToken, newJobId } from './util/tokens.js';
+export {
+  ExtractionRouter,
+  type ExtractionBackend,
+  type ExtractionOutcome,
+} from './extract/router.js';
+export { classifyFailure, isEgressProblem, type FailureClass } from './extract/failure.js';
+export {
+  ExtractionNodeRegistry,
+  remoteBackend,
+  requiredFeatures,
+  sessionBackend,
+  type NodeFeature,
+  type NodeStatus,
+  type RemoteProgress,
+  type RemoteTask,
+} from './extract/remote.js';
+export { RemoteOverHttp } from './extract/remote-http.js';
+export { resetVersionCache } from './extract/ytdlp.js';
+export { resetFfmpegVersionCache } from './convert/ffmpeg.js';
+export { TtlCache } from './util/cache.js';
+export { InFlightCoalescer } from './util/coalesce.js';
+export { isExecutableHeader, sniffTextImposter } from './util/sniff.js';
+export { run, type RunOptions, type RunResult } from './util/spawn.js';

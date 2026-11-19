@@ -1,0 +1,115 @@
+import type { Metadata, Viewport } from 'next';
+import { headers } from 'next/headers';
+import Link from 'next/link';
+import { SERA_VERSION } from '@sera/contracts/types';
+import { HeaderHomeLink } from '@/components/header-home-link';
+import { HealthIndicator } from '@/components/health-indicator';
+import { ThemeToggle, themeScript } from '@/components/theme-toggle';
+import '@/styles/globals.css';
+
+export const metadata: Metadata = {
+  title: {
+    default: 'SERA.toolkit — universal media toolkit',
+    template: '%s · SERA.toolkit',
+  },
+  description:
+    'Paste a link and get the media. A universal downloader and converter for publicly accessible video, audio, images and GIFs.',
+  applicationName: 'SERA.toolkit',
+  icons: {
+    icon: [{ url: '/icon.svg', type: 'image/svg+xml' }],
+    apple: '/icons/apple-touch-icon.png',
+  },
+  appleWebApp: { capable: true, title: 'SERA', statusBarStyle: 'default' },
+  robots: { index: true, follow: true },
+  other: { referrer: 'no-referrer' },
+};
+
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  themeColor: [
+    { media: '(prefers-color-scheme: light)', color: '#fbfbfa' },
+    { media: '(prefers-color-scheme: dark)', color: '#0f0f12' },
+  ],
+};
+
+export default async function RootLayout({
+  children,
+}: {
+  readonly children: React.ReactNode;
+}) {
+  const nonce = (await headers()).get('x-nonce') ?? undefined;
+
+  return (
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        <script nonce={nonce} dangerouslySetInnerHTML={{ __html: themeScript }} />
+      </head>
+      <body className="min-h-dvh antialiased">
+        <a
+          href="#main"
+          className="sr-only-focusable absolute top-3 left-3 z-50 rounded-lg bg-[var(--color-accent)] px-3 py-2 text-sm font-medium text-[var(--color-accent-ink)]"
+        >
+          Skip to content
+        </a>
+
+        <div className="mx-auto flex min-h-dvh w-full max-w-[46rem] flex-col px-5 sm:px-6">
+          <header className="relative flex items-center justify-between gap-4 py-5">
+            <HeaderHomeLink />
+            <div className="ml-auto flex items-center gap-2 sm:gap-3">
+              <HealthIndicator />
+              <ThemeToggle />
+            </div>
+          </header>
+
+          <main id="main" className="flex flex-1 flex-col">
+            {children}
+          </main>
+
+          <footer className="flex flex-col gap-3 border-t border-[var(--color-line)] py-5 text-xs text-[var(--color-ink-faint)]">
+            <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
+              <p>You are responsible for having the rights to the media you download.</p>
+              <span className="tabular text-[var(--color-ink-faint)]/70">v{SERA_VERSION}</span>
+            </div>
+            <nav
+              aria-label="Legal and general navigation"
+              className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5"
+            >
+              <Link
+                href="/legal/terms"
+                className="rounded-md transition-colors hover:text-[var(--color-ink-muted)]"
+              >
+                Terms
+              </Link>
+              <Link
+                href="/legal/privacy"
+                className="rounded-md transition-colors hover:text-[var(--color-ink-muted)]"
+              >
+                Privacy
+              </Link>
+              <Link
+                href="/legal/notice"
+                className="rounded-md transition-colors hover:text-[var(--color-ink-muted)]"
+              >
+                Legal Notice
+              </Link>
+              <Link
+                href="/legal/report"
+                className="rounded-md transition-colors hover:text-[var(--color-ink-muted)]"
+              >
+                Report Abuse
+              </Link>
+              <span className="text-[var(--color-line-strong)]">·</span>
+              <Link
+                href="/about"
+                className="rounded-md transition-colors hover:text-[var(--color-ink-muted)]"
+              >
+                About
+              </Link>
+            </nav>
+          </footer>
+        </div>
+      </body>
+    </html>
+  );
+}

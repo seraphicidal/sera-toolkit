@@ -1,0 +1,334 @@
+import type { ContainerFormat } from '@sera/contracts/types';
+import type { YtdlpFormat, YtdlpInfo } from '../extract/ytdlp-types.js';
+import { num, str } from '../extract/ytdlp-types.js';
+
+const KNOWN_CONTAINERS: ReadonlySet<string> = new Set([
+  'mp4',
+  'webm',
+  'mov',
+  'mkv',
+  'mp3',
+  'm4a',
+  'aac',
+  'opus',
+  'ogg',
+  'wav',
+  'flac',
+  'gif',
+  'jpg',
+  'png',
+  'webp',
+  'avif',
+  'pdf',
+  'iso',
+  'zip',
+  'tar',
+  '7z',
+  'apk',
+  'dmg',
+  'exe',
+  'epub',
+]);
+
+export function normalizeContainer(
+  ext: string | undefined,
+  fallback: ContainerFormat = 'bin',
+): ContainerFormat {
+  const raw = (ext ?? '').trim().toLowerCase().replace(/^\./, '');
+  const mapped = raw === 'jpeg' ? 'jpg' : raw === 'm4v' ? 'mp4' : raw === 'oga' ? 'ogg' : raw;
+  return KNOWN_CONTAINERS.has(mapped) ? (mapped as ContainerFormat) : fallback;
+}
+
+export const IMAGE_EXTENSIONS: ReadonlySet<string> = new Set([
+  'jpg',
+  'jpeg',
+  'png',
+  'webp',
+  'avif',
+  'bmp',
+  'heic',
+  'tif',
+  'tiff',
+]);
+export const AUDIO_EXTENSIONS: ReadonlySet<string> = new Set([
+  'mp3',
+  'm4a',
+  'aac',
+  'opus',
+  'ogg',
+  'oga',
+  'wav',
+  'flac',
+  'wma',
+]);
+
+export interface UsableFormat {
+  readonly id: string;
+  readonly ext: string;
+  readonly protocol: string;
+  readonly vcodec?: string;
+  readonly acodec?: string;
+  readonly width?: number;
+  readonly height?: number;
+  readonly fps?: number;
+  readonly tbr?: number;
+  readonly abr?: number;
+  readonly asr?: number;
+  readonly filesize?: number;
+  readonly filesizeIsApproximate: boolean;
+  readonly hasVideo: boolean;
+  readonly hasAudio: boolean;
+  readonly languagePreference?: number;
+  readonly note?: string;
+}
+
+const SUPPORTED_PROTOCOLS = new Set([
+  'https',
+  'http',
+  'm3u8_native',
+  'm3u8',
+  'http_dash_segments',
+  'mhtml_ignored',
+]);
+
+function isStoryboard(format: YtdlpFormat): boolean {
+  return (
+    format.ext === 'mhtml' ||
+    format.protocol === 'mhtml' ||
+    (str(format.format_note) ?? '').toLowerCase().includes('storyboard')
+  );
+}
+
+function isRedundantTwin(format: YtdlpFormat): boolean {
+  const id = str(format.format_id) ?? '';
+  if (id.endsWith('-drc')) return true;
+  const note = (str(format.format_note) ?? '').toLowerCase();
+  return note.includes('drc');
+}
+
+export function entryFormats(info: YtdlpInfo): readonly YtdlpFormat[] | undefined {
+  if (info.formats?.length) return info.formats;
+  const id = str(info.format_id);
+  const url = str(info.url);
+  if (!id || !url) return undefined;
+  const ext = str(info.ext);
+  const protocol = str(info.protocol);
+  return [
+    {
+      format_id: id,
+      url,
+      ...(ext ? { ext } : {}),
+      ...(protocol ? { protocol } : {}),
+      vcodec: info.vcodec ?? null,
+      acodec: info.acodec ?? null,
+      width: info.width ?? null,
+      height: info.height ?? null,
+      filesize: info.filesize ?? null,
+      filesize_approx: info.filesize_approx ?? null,
+    },
+  ];
+}
+
+export function toUsableFormats(formats: readonly YtdlpFormat[] | undefined): UsableFormat[] {
+  if (!formats?.length) return [];
+  const out: UsableFormat[] = [];
+
+  for (const format of formats) {
+    const id = str(format.format_id);
+    if (!id || !/^[A-Za-z0-9_.-]+$/.test(id)) continue;
+    if (isStoryboard(format) || isRedundantTwin(format)) continue;
+
+    const protocol = str(format.protocol) ?? 'https';
+    if (!SUPPORTED_PROTOCOLS.has(protocol)) continue;
+
+    const rawVcodec =
+      typeof format.vcodec === 'string' ? format.vcodec.trim().toLowerCase() : undefined;
+    const rawAcodec =
+      typeof format.acodec === 'string' ? format.acodec.trim().toLowerCase() : undefined;
+    const vExplicitNone = rawVcodec === 'none';
+    const aExplicitNone = rawAcodec === 'none';
+    const vcodec = str(format.vcodec);
+    const acodec = str(format.acodec);
+    const ext = (str(format.ext) ?? '').toLowerCase();
+    if (!vcodec && !acodec && IMAGE_EXTENSIONS.has(ext)) continue;
+    const hasVideo = vExplicitNone ? false : Boolean(vcodec) || !AUDIO_EXTENSIONS.has(ext);
+    const hasAudio = aExplicitNone
+      ? false
+      : Boolean(acodec) || (!vExplicitNone && format.acodec == null && !IMAGE_EXTENSIONS.has(ext));
+    if (!hasVideo && !hasAudio) continue;
+
+    const exact = num(format.filesize);
+    const approx = num(format.filesize_approx);
+    const languagePreference = num(format.language_preference);
+
+    const usable: UsableFormat = {
+      id,
+      ext: str(format.ext) ?? 'bin',
+      protocol,
+      ...(vcodec ? { vcodec } : {}),
+      ...(acodec ? { acodec } : {}),
+      ...(num(format.width) ? { width: num(format.width)! } : {}),
+      ...(num(format.height) ? { height: num(format.height)! } : {}),
+      ...(num(format.fps) ? { fps: Math.round(num(format.fps)!) } : {}),
+      ...(num(format.tbr) ? { tbr: num(format.tbr)! } : {}),
+      ...(num(format.abr) ? { abr: num(format.abr)! } : {}),
+      ...(num(format.asr) ? { asr: num(format.asr)! } : {}),
+      ...((exact ?? approx) ? { filesize: exact ?? approx! } : {}),
+      filesizeIsApproximate: exact === undefined,
+      hasVideo,
+      hasAudio,
+      ...(languagePreference !== undefined ? { languagePreference } : {}),
+      ...(str(format.format_note) ? { note: str(format.format_note)! } : {}),
+    };
+    out.push(usable);
+  }
+  const nonPremiumHeights = new Set(
+    out
+      .filter((f) => f.hasVideo && f.height && !(f.note ?? '').toLowerCase().includes('premium'))
+      .map((f) => f.height!),
+  );
+  return out.filter(
+    (f) =>
+      !f.height ||
+      !(f.note ?? '').toLowerCase().includes('premium') ||
+      !nonPremiumHeights.has(f.height),
+  );
+}
+
+export function estimateSize(format: UsableFormat, durationSeconds?: number): number | undefined {
+  if (format.filesize) return format.filesize;
+  const bitrate = format.tbr ?? format.abr;
+  if (!bitrate || !durationSeconds) return undefined;
+  return Math.round((bitrate * 1000 * durationSeconds) / 8);
+}
+
+export function nativeContainer(vcodec: string | undefined): 'mp4' | 'webm' {
+  const codec = (vcodec ?? '').toLowerCase();
+  if (codec.startsWith('vp9') || codec.startsWith('vp09') || codec.startsWith('vp8')) return 'webm';
+  return 'mp4';
+}
+
+export function fitsInMp4(vcodec: string | undefined, acodec: string | undefined): boolean {
+  const v = (vcodec ?? '').toLowerCase();
+  const a = (acodec ?? '').toLowerCase();
+  const videoOk =
+    !v ||
+    v === 'none' ||
+    v.startsWith('avc') ||
+    v.startsWith('h264') ||
+    v.startsWith('av01') ||
+    v.startsWith('vp09') ||
+    v.startsWith('vp9') ||
+    v.startsWith('hev') ||
+    v.startsWith('hvc');
+  const audioOk =
+    !a ||
+    a === 'none' ||
+    a.startsWith('mp4a') ||
+    a.startsWith('aac') ||
+    a.startsWith('ac-3') ||
+    a.startsWith('ec-3');
+  return videoOk && audioOk;
+}
+
+export function fitsInMov(vcodec: string | undefined, acodec: string | undefined): boolean {
+  const v = (vcodec ?? '').toLowerCase();
+  const videoOk =
+    v.startsWith('avc') || v.startsWith('h264') || v.startsWith('hev') || v.startsWith('hvc');
+  return videoOk && fitsInMp4(vcodec, acodec);
+}
+
+export interface FormatSplit {
+  readonly videoOnly: readonly UsableFormat[];
+  readonly audioOnly: readonly UsableFormat[];
+  readonly progressive: readonly UsableFormat[];
+}
+
+export function splitFormats(formats: readonly UsableFormat[]): FormatSplit {
+  const videoOnly: UsableFormat[] = [];
+  const audioOnly: UsableFormat[] = [];
+  const progressive: UsableFormat[] = [];
+  for (const format of formats) {
+    if (format.hasVideo && format.hasAudio) progressive.push(format);
+    else if (format.hasVideo) videoOnly.push(format);
+    else audioOnly.push(format);
+  }
+  return { videoOnly, audioOnly, progressive };
+}
+
+export function protocolScore(protocol: string, note?: string): number {
+  const normalized = protocol.toLowerCase();
+  const base =
+    normalized === 'https' || normalized === 'http'
+      ? 2
+      : normalized === 'http_dash_segments'
+        ? 1
+        : 0;
+  return (note ?? '').toLowerCase().includes('untested') ? Math.min(base, 0) - 1 : base;
+}
+
+export function bestAudio(
+  audio: readonly UsableFormat[],
+  prefer: 'mp4' | 'webm' | 'any' = 'any',
+): UsableFormat | undefined {
+  if (!audio.length) return undefined;
+  const score = (format: UsableFormat): number => {
+    const proto = protocolScore(format.protocol, format.note);
+    const codec = (format.acodec ?? '').toLowerCase();
+    let containerBonus = 0;
+    if (prefer === 'mp4' && (codec.startsWith('mp4a') || codec.startsWith('aac'))) {
+      containerBonus = 1;
+    } else if (prefer === 'webm' && codec.startsWith('opus')) {
+      containerBonus = 1;
+    }
+    const langScore =
+      format.languagePreference !== undefined
+        ? Math.max(-10, Math.min(20, format.languagePreference))
+        : (format.note ?? '').toLowerCase().includes('original')
+          ? 5
+          : 0;
+    return (
+      proto * 100_000_000 +
+      containerBonus * 1_000_000 +
+      langScore * 10_000 +
+      (format.abr ?? format.tbr ?? 0)
+    );
+  };
+  return [...audio].sort((a, b) => score(b) - score(a))[0];
+}
+
+export function bestVideoPerHeight(video: readonly UsableFormat[]): UsableFormat[] {
+  const byHeight = new Map<number, UsableFormat>();
+  for (const format of video) {
+    const height = format.height;
+    if (!height) continue;
+    const current = byHeight.get(height);
+    if (!current || rankVideo(format) > rankVideo(current)) byHeight.set(height, format);
+  }
+  return [...byHeight.values()].sort((a, b) => (b.height ?? 0) - (a.height ?? 0));
+}
+
+export function rankVideo(format: UsableFormat): number {
+  const proto = protocolScore(format.protocol, format.note);
+  const codec = (format.vcodec ?? '').toLowerCase();
+  let codecScore = 0;
+  if (codec.startsWith('avc') || codec.startsWith('h264')) codecScore = 3;
+  else if (codec.startsWith('av01')) codecScore = 2;
+  else if (codec.startsWith('vp9') || codec.startsWith('vp09')) codecScore = 1;
+  const fpsScore = (format.fps ?? 30) >= 50 ? 1 : 0;
+  const premiumPenalty = (format.note ?? '').toLowerCase().includes('premium') ? 50_000 : 0;
+  return (
+    proto * 100_000_000 +
+    fpsScore * 10_000_000 +
+    codecScore * 1_000_000 +
+    (format.tbr ?? 0) -
+    premiumPenalty
+  );
+}
+
+export function audioBitrateChoices(sourceAbr: number | undefined): number[] {
+  const source = sourceAbr ?? 0;
+  const candidates = [320, 192, 128];
+  const usable = candidates.filter((rate) => source === 0 || rate <= Math.max(source * 1.1, 128));
+  return usable.length ? usable : [Math.round(Math.max(source, 64))];
+}

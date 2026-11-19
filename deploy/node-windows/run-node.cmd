@@ -1,0 +1,24 @@
+@echo off
+
+for %%I in ("%~dp0..\..") do set "REPO=%%~fI"
+if not defined NODE for /f "delims=" %%N in ('where node.exe 2^>nul') do if not defined NODE set "NODE=%%N"
+if not defined NODE set "NODE=C:\Program Files\nodejs\node.exe"
+set "HERE=%~dp0"
+set "LOG=%HERE%node.log"
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%HERE%kill-orphans.ps1" >nul 2>&1
+
+if exist "%LOG%" move /y "%LOG%" "%LOG%.old" >nul
+if exist "%HERE%ytdlp-update.log" move /y "%HERE%ytdlp-update.log" "%HERE%ytdlp-update.log.old" >nul
+
+cd /d "%REPO%" || exit /b 1
+
+call "%HERE%refresh-ytdlp.cmd" once
+start "" /b cmd /d /c ""%HERE%refresh-ytdlp.cmd" daily"
+
+:loop
+echo [%date% %time%] starting extraction node>> "%LOG%"
+"%NODE%" --env-file=.env.node.local apps\extractor\dist\index.js >> "%LOG%" 2>&1
+echo [%date% %time%] node exited with code %errorlevel%; restarting in 15 seconds>> "%LOG%"
+ping -n 16 127.0.0.1 >nul
+goto loop

@@ -1,0 +1,64 @@
+{
+  "$schema": "https://raw.githubusercontent.com/devcontainers/spec/main/schemas/devContainer.schema.json",
+  "name": "SERA.toolkit",
+
+  // Node 24 to match the engines field and the container images.
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:1-24-bookworm",
+
+  "features": {
+    // Lets `docker compose up` run the real four-service stack, Redis included, inside
+    // the Codespace. Not needed for the single-process path below, but it is the
+    // difference between demonstrating the app and demonstrating the architecture.
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+  },
+
+  // FFmpeg is a hard dependency of both the service and its test suite, so it is
+  // installed at build time rather than left to a postCreate step that might be skipped.
+  "onCreateCommand": "sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg && ffmpeg -version | head -n 1",
+
+  // `npm run tools:fetch` pulls the pinned, checksum-verified yt-dlp. FFmpeg is already
+  // on PATH from the step above, so only yt-dlp is fetched here.
+  "postCreateCommand": "npm ci && npm run tools:fetch -- --only=ytdlp && npm run build",
+
+  "forwardPorts": [3200, 4000],
+  "portsAttributes": {
+    "3200": {
+      "label": "SERA.toolkit (web)",
+      "onAutoForward": "openPreview",
+      // Anyone with the link can reach it. Codespaces may still require confirming this
+      // in the Ports panel the first time; see the README if the URL asks for a login.
+      "visibility": "public"
+    },
+    "4000": {
+      "label": "SERA API (internal)",
+      "onAutoForward": "silent",
+      // The browser never talks to the API directly — the web app proxies /api — so
+      // there is no reason to publish it.
+      "visibility": "private"
+    }
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "bradlc.vscode-tailwindcss"
+      ],
+      "settings": {
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "esbenp.prettier-vscode"
+      }
+    }
+  },
+
+  // A 2-core machine is enough for one or two concurrent conversions and is the cheapest
+  // option against the monthly Codespaces allowance.
+  "hostRequirements": {
+    "cpus": 2,
+    "memory": "8gb",
+    "storage": "32gb"
+  },
+
+  "remoteUser": "node"
+}

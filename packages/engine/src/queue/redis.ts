@@ -1,0 +1,284 @@
+import { Queue, Worker, type Job as BullJob } from 'bullmq';
+import { Redis } from 'ioredis';
+import type { Logger } from '../logging.js';
+import {
+  isActive,
+  type JobBackend,
+  type JobHandler,
+  type JobPatch,
+  type JobRecord,
+  type WorkerHandle,
+} from './types.js';
+
+export const QUEUE_NAME = 'sera-jobs';
+
+const RECORD_PREFIX = 'sera:job:';
+const CLIENT_PREFIX = 'sera:client:';
+const UPDATE_CHANNEL = 'sera:job-updates';
+
+const PATCH_LUA = `
+local raw = redis.call('get', KEYS[1])
+if not raw then return nil end
+local current = cjson.decode(raw)
+local patch = cjson.decode(ARGV[1])
+local st = current.state
+local allowingExpiration = (st == 'ready' and patch.state == 'expired')
+if (st == 'ready' or st == 'failed' or st == 'cancelled' or st == 'expired') and not allowingExpiration then
+  return raw
+end
+for k, v in pairs(patch) do
+  if k ~= 'progress' then current[k] = v end
+end
+if patch.progress then
+  local maxPercent = (current.progress and current.progress.percent) or 0
+  if patch.progress.percent and patch.progress.percent > maxPercent then
+    maxPercent = patch.progress.percent
+  end
+  current.progress = patch.progress
+  current.progress.percent = maxPercent
+end
+current.updatedAt = ARGV[4]
+if current.spec then
+  current.spec.resolvedMedia = nil
+  current.spec.rawInfoJson = nil
+end
+local encoded = cjson.encode(current)
+redis.call('set', KEYS[1], encoded, 'EX', ARGV[2])
+redis.call('publish', ARGV[3], encoded)
+return encoded
+`;
+
+export class RedisJobBackend implements JobBackend {
+  readonly driver = 'redis' as const;
+
+  private readonly connection: Redis;
+  private readonly subscriber: Redis;
+  private readonly queue: Queue<{ jobId: string }>;
+  private readonly listeners = new Map<string, Set<(record: JobRecord) => void>>();
+  private worker: Worker<{ jobId: string }> | undefined;
+  private workerConnection: Redis | undefined;
+  private readonly subscribed: Promise<void>;
+
+  constructor(
+    redisUrl: string,
+    private readonly logger: Logger,
+    private readonly recordTtlSeconds = 24 * 60 * 60,
+  ) {
+    this.connection = new Redis(redisUrl, { maxRetriesPerRequest: null });
+    this.subscriber = new Redis(redisUrl, { maxRetriesPerRequest: null });
+    this.connection.on('error', (error: unknown) => {
+      this.logger.warn({ err: error }, 'redis connection error');
+    });
+    this.subscriber.on('error', (error: unknown) => {
+      this.logger.warn({ err: error }, 'redis subscriber error');
+    });
+    this.queue = new Queue(QUEUE_NAME, { connection: this.connection });
+
+    this.subscribed = this.subscriber.subscribe(UPDATE_CHANNEL).then(
+      () => undefined,
+      (error: unknown) => {
+        this.logger.error({ err: error }, 'failed to subscribe to job updates');
+      },
+    );
+    this.subscriber.on('message', (_channel, payload) => {
+      const record = parseRedisRecord(payload);
+      if (!record) return;
+      for (const listener of this.listeners.get(record.id) ?? []) listener(record);
+    });
+  }
+
+  async submit(record: JobRecord): Promise<void> {
+    await this.ready();
+    await this.connection
+      .multi()
+      .set(RECORD_PREFIX + record.id, JSON.stringify(record), 'EX', this.recordTtlSeconds)
+      .sadd(CLIENT_PREFIX + record.clientKey, record.id)
+      .expire(CLIENT_PREFIX + record.clientKey, this.recordTtlSeconds)
+      .exec();
+    try {
+      await this.queue.add(
+        'download',
+        { jobId: record.id },
+        {
+          jobId: record.id,
+          attempts: 1,
+          removeOnComplete: { age: 3600, count: 1000 },
+          removeOnFail: { age: 86_400 },
+        },
+      );
+    } catch (error) {
+      await Promise.allSettled([
+        this.connection.del(RECORD_PREFIX + record.id),
+        this.connection.srem(CLIENT_PREFIX + record.clientKey, record.id),
+      ]);
+      throw error;
+    }
+  }
+
+  async get(id: string): Promise<JobRecord | undefined> {
+    const raw = await this.connection.get(RECORD_PREFIX + id);
+    if (!raw) return undefined;
+    return parseRedisRecord(raw);
+  }
+
+  async patch(id: string, patch: JobPatch): Promise<JobRecord | undefined> {
+    const key = RECORD_PREFIX + id;
+    const res = await this.connection.eval(
+      PATCH_LUA,
+      1,
+      key,
+      JSON.stringify(patch),
+      this.recordTtlSeconds,
+      UPDATE_CHANNEL,
+      new Date().toISOString(),
+    );
+    if (typeof res !== 'string') return undefined;
+    const updated = parseRedisRecord(res);
+    if (!updated) return undefined;
+    if (!isActive(updated.state)) {
+      await this.connection.srem(CLIENT_PREFIX + updated.clientKey, updated.id);
+    }
+    return updated;
+  }
+
+  ready(): Promise<void> {
+    return this.subscribed;
+  }
+
+  subscribe(id: string, listener: (record: JobRecord) => void): () => void {
+    const set = this.listeners.get(id) ?? new Set();
+    set.add(listener);
+    this.listeners.set(id, set);
+    return () => {
+      const current = this.listeners.get(id);
+      current?.delete(listener);
+      if (current?.size === 0) this.listeners.delete(id);
+    };
+  }
+
+  async waitingCount(): Promise<number> {
+    return this.queue.getWaitingCount();
+  }
+
+  async activeCountFor(clientKey: string): Promise<number> {
+    const ids = await this.connection.smembers(CLIENT_PREFIX + clientKey);
+    if (!ids.length) return 0;
+
+    const rawRecords = await this.connection.mget(...ids.map((id) => RECORD_PREFIX + id));
+    const records = rawRecords.map((raw) => (raw ? parseRedisRecord(raw) : undefined));
+    let count = 0;
+    const stale: string[] = [];
+    for (const [index, record] of records.entries()) {
+      if (record && isActive(record.state)) count += 1;
+      else stale.push(ids[index]!);
+    }
+    if (stale.length) await this.connection.srem(CLIENT_PREFIX + clientKey, ...stale);
+    return count;
+  }
+
+  startWorker(handler: JobHandler, concurrency: number): WorkerHandle {
+    const workerConnection = new Redis(this.connection.options);
+    workerConnection.on('error', (error: unknown) => {
+      this.logger.warn({ err: error }, 'redis worker connection error');
+    });
+    this.workerConnection = workerConnection;
+    this.worker = new Worker<{ jobId: string }>(
+      QUEUE_NAME,
+      async (job: BullJob<{ jobId: string }>) => {
+        const record = await this.get(job.data.jobId);
+        if (!record) {
+          this.logger.warn({ jobId: job.data.jobId }, 'queued job has no record; skipping');
+          return;
+        }
+        await handler(record);
+      },
+      { connection: workerConnection, concurrency: Math.max(1, concurrency) },
+    );
+
+    this.worker.on('failed', (job, error) => {
+      this.logger.error({ err: error, jobId: job?.data.jobId }, 'worker reported failure');
+      if (job?.data.jobId) {
+        void this.patch(job.data.jobId, {
+          state: 'failed',
+          step: 'Failed',
+          progress: { percent: 0 },
+          error: {
+            code: 'INTERNAL',
+            message: error?.message || 'Worker terminated unexpectedly',
+            retryable: true,
+          },
+        }).catch((err: unknown) => {
+          this.logger.warn({ err, jobId: job.data.jobId }, 'failed to transition failed job');
+        });
+      }
+    });
+
+    return {
+      close: async () => {
+        await this.worker?.close();
+        this.workerConnection?.disconnect();
+        this.workerConnection = undefined;
+      },
+    };
+  }
+
+  async close(): Promise<void> {
+    await this.worker?.close().catch(() => undefined);
+    this.workerConnection?.disconnect();
+    this.workerConnection = undefined;
+    await this.queue.close().catch(() => undefined);
+    this.subscriber.disconnect();
+    this.connection.disconnect();
+  }
+}
+
+function isArrayValue<T>(value: readonly T[] | undefined): value is readonly T[] {
+  return Array.isArray(value);
+}
+
+function asArray<T>(value: readonly T[] | undefined): T[] {
+  return isArrayValue(value) ? [...value] : [];
+}
+
+export function parseRedisRecord(raw: string): JobRecord | undefined {
+  let parsed: JobRecord;
+  try {
+    parsed = JSON.parse(raw) as JobRecord;
+  } catch {
+    return undefined;
+  }
+  if (!parsed || typeof parsed !== 'object') return undefined;
+  const spec = parsed.spec
+    ? {
+        ...parsed.spec,
+        selections: asArray(parsed.spec.selections),
+        ...(parsed.spec.imported
+          ? {
+              imported: {
+                ...parsed.spec.imported,
+                entries: asArray(parsed.spec.imported.entries),
+              },
+            }
+          : {}),
+      }
+    : parsed.spec;
+  const result = parsed.result
+    ? {
+        ...parsed.result,
+        ...(parsed.result.files !== undefined ? { files: asArray(parsed.result.files) } : {}),
+        ...(parsed.result.delivery?.substituted !== undefined
+          ? {
+              delivery: {
+                ...parsed.result.delivery,
+                substituted: asArray(parsed.result.delivery.substituted),
+              },
+            }
+          : {}),
+      }
+    : parsed.result;
+  return {
+    ...parsed,
+    ...(spec ? { spec } : {}),
+    ...(result ? { result } : {}),
+  };
+}

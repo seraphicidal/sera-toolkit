@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">SERA.toolkit</string>
+    <string name="share_action_label">Download with SERA</string>
+    <string name="process_text_label">Analyze with SERA</string>
+</resources>
