@@ -76,7 +76,7 @@ jobs:
             const fs = require("node:fs");
             const { execFileSync } = require("node:child_process");
 
-            const gradle = fs.readFileSync("apps/android-node/app/build.gradle.kts", "utf8");
+            const gradle = fs.readFileSync("app/build.gradle.kts", "utf8");
             const defaultConfigSection = (/defaultConfig\s*\{([\s\S]*?)\n\s*\}/.exec(gradle) || ["", gradle])[1];
             const codeMatch = /versionCode\s*=[\s\S]*?\?\:\s*(\d+)/.exec(defaultConfigSection);
             const nameMatch = /versionName\s*=[\s\S]*?\?\:\s*"([^"]+)"/.exec(defaultConfigSection);
