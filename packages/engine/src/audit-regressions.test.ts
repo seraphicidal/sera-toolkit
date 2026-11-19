@@ -458,21 +458,21 @@ describe('audit pass 2 regressions', () => {
     const dir = await mkdtemp(join(tmpdir(), 'sera-runner-sec-'));
     const srv = createServer((req, res) => {
       if (req.url === '/exe.mp4') {
-        res.writeHead(200, { 'content-type': 'video/mp4' }).end(
-          Buffer.concat([Buffer.from([0x4d, 0x5a, 0x90, 0x00]), Buffer.alloc(64)]),
-        );
+        res
+          .writeHead(200, { 'content-type': 'video/mp4' })
+          .end(Buffer.concat([Buffer.from([0x4d, 0x5a, 0x90, 0x00]), Buffer.alloc(64)]));
         return;
       }
       if (req.url === '/img1.jpg' || req.url === '/img2.jpg') {
-        res.writeHead(200, { 'content-type': 'image/jpeg' }).end(
-          Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(600)]),
-        );
+        res
+          .writeHead(200, { 'content-type': 'image/jpeg' })
+          .end(Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(600)]));
         return;
       }
       if (req.url === '/small.jpg') {
-        res.writeHead(200, { 'content-type': 'image/jpeg' }).end(
-          Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(64)]),
-        );
+        res
+          .writeHead(200, { 'content-type': 'image/jpeg' })
+          .end(Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(64)]));
         return;
       }
       res.writeHead(404).end();
@@ -720,11 +720,13 @@ describe('audit pass 2 regressions', () => {
 
   it('prioritizes definitive ErrorCodes over bot phrases in classifyFailure and retains failures in runStrategies', async () => {
     expect(
-      classifyFailure(seraError('DRM_PROTECTED', { detail: "Sign in to confirm you're not a bot" })),
+      classifyFailure(
+        seraError('DRM_PROTECTED', { detail: "Sign in to confirm you're not a bot" }),
+      ),
     ).toBe('PRIVATE_CONTENT');
-    expect(
-      classifyFailure(seraError('UNSUPPORTED_SOURCE', { detail: 'HTTP Error 403' })),
-    ).toBe('UNSUPPORTED_MEDIA');
+    expect(classifyFailure(seraError('UNSUPPORTED_SOURCE', { detail: 'HTTP Error 403' }))).toBe(
+      'UNSUPPORTED_MEDIA',
+    );
 
     await expect(
       runStrategies(

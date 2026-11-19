@@ -33,11 +33,7 @@ export const viewport: Viewport = {
   ],
 };
 
-export default async function RootLayout({
-  children,
-}: {
-  readonly children: React.ReactNode;
-}) {
+export default async function RootLayout({ children }: { readonly children: React.ReactNode }) {
   const nonce = (await headers()).get('x-nonce') ?? undefined;
 
   return (

@@ -44,7 +44,9 @@ export async function createZip(request: CreateZipRequest): Promise<{ sizeBytes:
     for (const [index, entry] of request.entries.entries()) {
       if (request.signal?.aborted) throw seraError('CANCELLED');
       if (output.destroyed || output.errored) {
-        throw output.errored ?? seraError('CONVERSION_FAILED', { detail: 'zip output closed early' });
+        throw (
+          output.errored ?? seraError('CONVERSION_FAILED', { detail: 'zip output closed early' })
+        );
       }
 
       const name = assertSafeFilename(entry.name);

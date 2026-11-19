@@ -8,10 +8,20 @@ describe('web api client', () => {
 
   it('omits content-type on GET requests and URI-encodes job ids', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ id: 'job/1', state: 'queued', step: 'Waiting', progress: { percent: 0 }, createdAt: '', updatedAt: '' }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      }),
+      new Response(
+        JSON.stringify({
+          id: 'job/1',
+          state: 'queued',
+          step: 'Waiting',
+          progress: { percent: 0 },
+          createdAt: '',
+          updatedAt: '',
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
     );
     vi.stubGlobal('fetch', fetchMock);
 

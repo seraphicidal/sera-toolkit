@@ -496,10 +496,7 @@ export class JobService {
   }
 }
 
-function matchesClientKey(
-  recordKey: string,
-  expected?: string | readonly string[],
-): boolean {
+function matchesClientKey(recordKey: string, expected?: string | readonly string[]): boolean {
   if (!expected) return true;
   if (typeof expected === 'string') return recordKey === expected;
   return expected.includes(recordKey);

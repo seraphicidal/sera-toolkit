@@ -38,11 +38,46 @@ object EnvConfigParser {
 
         val imported = mutableListOf<String>()
 
-        val apiBaseUrl = values["SERA_API_URL"]?.trim()?.trimEnd('/')?.takeIf { it.isNotEmpty() }
-            ?.also { imported += "Server URL" }
-        val nodeToken = values["SERA_EXTRACTION_NODE_TOKEN"]?.trim()?.takeIf { it.isNotEmpty() }
+        val rawApiUrl = values["SERA_API_URL"]?.trim()?.trimEnd('/')?.takeIf { it.isNotEmpty() }
+        val rawDomain = values["SERA_DOMAIN"]?.trim()?.trimEnd('/')?.takeIf { it.isNotEmpty() }
+        val isInternalApiUrl = rawApiUrl != null && (
+            rawApiUrl.equals("http://127.0.0.1:4000", ignoreCase = true) ||
+                rawApiUrl.equals("http://localhost:4000", ignoreCase = true) ||
+                rawApiUrl.equals("http://api:4000", ignoreCase = true)
+            )
+        val apiBaseUrl = when {
+            rawDomain != null && (rawApiUrl == null || isInternalApiUrl) ->
+                NodeSettings.normalizeBaseUrl(rawDomain).also { imported += "Server URL" }
+            rawApiUrl != null ->
+                NodeSettings.normalizeBaseUrl(rawApiUrl).also { imported += "Server URL" }
+            else -> null
+        }
+
+        val explicitNodeId = values["SERA_NODE_ID"]?.trim()?.takeIf { it.isNotEmpty() }
+        val explicitToken = values["SERA_EXTRACTION_NODE_TOKEN"]?.trim()?.takeIf { it.isNotEmpty() }
+        val multiTokens = values["SERA_EXTRACTION_NODE_TOKENS"]?.trim()?.takeIf { it.isNotEmpty() }
+            ?.split(',')
+            ?.mapNotNull { entry ->
+                val colon = entry.indexOf(':')
+                if (colon > 0) {
+                    val id = entry.substring(0, colon).trim()
+                    val tok = entry.substring(colon + 1).trim()
+                    if (id.isNotEmpty() && tok.isNotEmpty()) id to tok else null
+                } else {
+                    null
+                }
+            }
+            .orEmpty()
+
+        val matchedPair = if (explicitNodeId != null) {
+            multiTokens.firstOrNull { it.first == explicitNodeId } ?: multiTokens.firstOrNull()
+        } else {
+            multiTokens.firstOrNull()
+        }
+
+        val nodeToken = (explicitToken ?: matchedPair?.second)
             ?.also { imported += "Node Token" }
-        val nodeId = values["SERA_NODE_ID"]?.trim()?.takeIf { it.isNotEmpty() }
+        val nodeId = (explicitNodeId ?: matchedPair?.first)
             ?.also { imported += "Node ID" }
 
         var enableYoutube: Boolean? = null

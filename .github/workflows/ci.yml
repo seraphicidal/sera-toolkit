@@ -358,6 +358,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
+    defaults:
+      run:
+        working-directory: apps/android-node
+
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
 
@@ -367,15 +371,11 @@ jobs:
           java-version: '17'
 
       - uses: gradle/actions/setup-gradle@v4
-        with:
-          build-root-directory: apps/android-node
 
       - name: Run Android unit tests
-        working-directory: apps/android-node
         run: |
           chmod +x gradlew
           ./gradlew :app:testDebugUnitTest --stacktrace
 
       - name: Build Android debug APK
-        working-directory: apps/android-node
         run: ./gradlew :app:assembleDebug --stacktrace

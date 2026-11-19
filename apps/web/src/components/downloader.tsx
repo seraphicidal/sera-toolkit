@@ -231,9 +231,7 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
     () => (info ? availableKinds(info, selectedIds) : []),
     [info, selectedIds],
   );
-  const pickerKind: SelectableKind = activeKinds.includes(kind)
-    ? kind
-    : (activeKinds[0] ?? kind);
+  const pickerKind: SelectableKind = activeKinds.includes(kind) ? kind : (activeKinds[0] ?? kind);
   const activeLabels = useMemo(
     () => (info ? qualityLabels(info, pickerKind, selectedIds) : []),
     [info, pickerKind, selectedIds],
@@ -254,9 +252,7 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
 
   const handleSelectAllItems = useCallback(
     (all: boolean) => {
-      setSelectedIds(
-        all && info ? selectItemsUpToMax(info.items, MAX_SELECTED_ITEMS) : new Set(),
-      );
+      setSelectedIds(all && info ? selectItemsUpToMax(info.items, MAX_SELECTED_ITEMS) : new Set());
     },
     [info],
   );

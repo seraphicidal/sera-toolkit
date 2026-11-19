@@ -3,6 +3,7 @@
 SERA.toolkit is a universal media toolkit for resolving, downloading, trimming, subtitle-extracting, tagging, and converting publicly accessible video, audio, images, and GIFs across 23 built-in providers and generic web pages. It prioritizes SSRF defense, zero tracking, ephemeral workspaces, and optional residential extraction-node fallback for datacenter-blocked platforms.
 
 ## Tech Stack
+
 - **Runtime & Tooling**: Node.js `>=22.12.0` (`24.18.1` in CI/Docker), npm workspaces, TypeScript `6.0.3`, Vitest `5.0.0`, ESLint `10.12.0`, Prettier `3.9.6` (`prettier-plugin-tailwindcss` `0.8.1`).
 - **Backend (`@sera/api`, `@sera/worker`, `@sera/extractor`, `@sera/engine`, `@sera/contracts`)**: Fastify `^5.12.8`, BullMQ `6.3.11`, `ioredis` `6.0.0`, Zod `^4.6.7`, `undici` `^8.12.4`, `cheerio` `1.2.0`, `yazl` `3.3.1`, `pino` `10.4.0`.
 - **Web (`@sera/web`)**: Next.js `16.4.5` (App Router, `output: 'standalone'`), React `19.3.0`, Tailwind CSS `4.3.3`.
@@ -10,6 +11,7 @@ SERA.toolkit is a universal media toolkit for resolving, downloading, trimming, 
 - **Android (`apps/android`, untracked WIP)**: Kotlin `2.0.21`, AGP `8.7.3`, Jetpack Compose BOM `2024.12.01`, OkHttp `4.12.0`, DataStore `1.1.1`, Media3 `1.5.1`.
 
 ## Commands (unverified — inspect `package.json` / `.github/workflows/ci.yml`)
+
 - **Install & fetch media tools**: `npm ci --ignore-scripts && npm run tools:fetch` (or `npm install`)
 - **Run locally (dev)**: `npm run dev` (runs `tsc --watch`, API on `:4000`, web on `:3200`; pass `-- --worker` for external worker), or individually `npm run dev:api`, `npm run dev:web`, `npm run dev:worker`
 - **Run production-like locally**: `npm run serve:local` (or `npm run serve:public` with `.tools/cloudflared`), `npm run serve:node` (remote extractor via `.env.node.local`)
@@ -20,6 +22,7 @@ SERA.toolkit is a universal media toolkit for resolving, downloading, trimming, 
 - **Deploy**: `docker compose up -d` (`docker-compose.yml` or `docker-compose.standalone.yml`), or on a fresh Linux VPS `sudo bash deploy/provision.sh` (`deploy/docker-compose.oracle.yml` + `deploy/Caddyfile` + systemd timers)
 
 ## Directory Map
+
 - `packages/contracts/`: Shared TypeScript interfaces (`src/types.ts`), Zod schemas, and compile-time shape assertions (`src/schemas.ts`).
 - `packages/engine/`: Core resolver, 23 media providers, `yt-dlp`/`gallery-dl`/HTML extractors, FFmpeg converter/trimmer/tagger, BullMQ/memory queues, workspace reaper, SSRF/denylist/abuse security.
 - `apps/api/`: Fastify API server, middleware plugins (`client`, `admin-auth`, `errors`, `disconnect`), REST/SSE/internal routes, and `apps/api/src/{canary,reports,stats}-cli.ts`.
@@ -33,6 +36,7 @@ SERA.toolkit is a universal media toolkit for resolving, downloading, trimming, 
 - `.github/workflows/`: CI verification/image build (`ci.yml`) and daily `yt-dlp` auto-pin PR workflow (`update-ytdlp.yml`).
 
 ## How Apps Relate
+
 - `@sera/contracts` is shared by all TypeScript workspaces (`apps/android/app/src/main/java/dev/sera/toolkit/model/Contracts.kt` mirrors it manually in Kotlin).
 - `@sera/engine` is shared by `apps/api`, `apps/worker`, and `apps/extractor`.
 - `apps/web` never talks to Redis or `yt-dlp`; its Next.js Route Handlers (`apps/web/src/app/api/[...path]/route.ts`, `health/route.ts`, `ready/route.ts`) proxy requests at runtime to `SERA_API_URL` (`@sera/api`).
@@ -41,6 +45,7 @@ SERA.toolkit is a universal media toolkit for resolving, downloading, trimming, 
 - `apps/android` (when completed) connects directly to `apps/api` endpoints (`/health`, `/api/info`, `/api/media/*`, `/api/jobs/*`, `/api/legal/report`).
 
 ## Entry Points & Where to Start
+
 - **Entry points**: `apps/api/src/index.ts`, `apps/worker/src/index.ts`, `apps/extractor/src/index.ts`, `apps/web/src/app/layout.tsx` + `page.tsx`, `packages/engine/src/engine.ts`.
 - **Add a web page**: Create `apps/web/src/app/<route>/page.tsx`; link from `apps/web/src/app/layout.tsx` if needed.
 - **Add an API endpoint**: Add handler in `apps/api/src/routes/`, register in `apps/api/src/server.ts`, add shared types/schemas in `packages/contracts/src/{types,schemas}.ts`, and mirror client call in `apps/web/src/lib/api.ts` (and `apps/android/app/src/main/java/dev/sera/toolkit/data/SeraApiClient.kt` if keeping parity).
@@ -49,6 +54,7 @@ SERA.toolkit is a universal media toolkit for resolving, downloading, trimming, 
 - **Add static/legal content**: Edit `apps/web/src/app/about/page.tsx` or `apps/web/src/app/legal/{notice,privacy,report,terms}/page.tsx`.
 
 ## Conventions
+
 - **TypeScript & ESM**: `NodeNext` resolution (`.js` extensions in TS imports across Node packages; omit in `apps/web` which uses `bundler`), `strict`, `noUncheckedIndexedAccess`, `verbatimModuleSyntax`, `consistent-type-imports` (inline `type`).
 - **Subprocess safety**: ESLint `no-restricted-syntax` bans `child_process.exec`/`execSync`; always use `spawn` via `packages/engine/src/util/spawn.ts` (`shell: false`). `no-console` allows only `warn`/`error` outside tests/scripts.
 - **Error handling**: Throw `seraError(code, options)` from `packages/engine/src/errors.ts`; Fastify's `errorHandlerPlugin` maps `SeraError`, `ZodError`, and `AbortError` to `ApiErrorBody`.
@@ -56,6 +62,7 @@ SERA.toolkit is a universal media toolkit for resolving, downloading, trimming, 
 - **Privacy**: Client IPs are `/64`-masked and daily-HMAC-hashed in `apps/api/src/plugins/client.ts`; logs use `logSafeUrl()` and `maskSecrets()`.
 
 ## Gotchas
+
 - **Shell/CI drift in `docker/web.Dockerfile`**: Working-tree changes moved `SERA_API_URL` from build `ARG` to runtime `ENV` + Route Handlers, so `.github/workflows/ci.yml` (`Check the API URL is the same at build time and run time` grepping `ARG SERA_API_URL=`) will fail unless updated or reconciled.
 - **Redis Lua empty-array quirk**: `PATCH_LUA` in `packages/engine/src/queue/redis.ts` uses `cjson`, which encodes empty Lua tables as `{}`; always decode Redis job records through `parseRedisRecord()` and strip `resolvedMedia`/`rawInfoJson` in patches to keep Redis memory small.
 - **Redis `noeviction` invariant**: CI enforces `--maxmemory-policy noeviction` on all compose files so BullMQ job keys are never evicted.
@@ -66,10 +73,12 @@ SERA.toolkit is a universal media toolkit for resolving, downloading, trimming, 
 - **Missing doc ref**: `apps/api/src/{reports,stats}-cli.ts` and `deploy/canary.sh` reference `deploy/ORACLE.md`, which does not exist.
 
 ## Detailed Docs & Per-App Guides
+
 - Full architecture, routing, data flows, endpoints, env vars, and deploy details: [docs/architecture.md](docs/architecture.md)
 - App-specific guides: [apps/web/AGENTS.md](apps/web/AGENTS.md), [apps/api/AGENTS.md](apps/api/AGENTS.md), [apps/worker/AGENTS.md](apps/worker/AGENTS.md), [apps/extractor/AGENTS.md](apps/extractor/AGENTS.md), [apps/android/AGENTS.md](apps/android/AGENTS.md)
 
 ## Maintaining this map
+
 Update `AGENTS.md`, `docs/architecture.md`, and the affected `apps/*/AGENTS.md` whenever you add/rename routes, API endpoints, providers, env vars, build/deploy commands, or architectural patterns.
 
 Last verified: 2026-11-18 · commit `967c04465bd47ba60a5d5a1fd649ec92c203a512` (dirty working tree with uncommitted edits and untracked `apps/android/`).

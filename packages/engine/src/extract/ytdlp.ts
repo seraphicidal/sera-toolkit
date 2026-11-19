@@ -133,8 +133,7 @@ export async function dumpInfo(
   if (options.playlist) {
     const index = args.indexOf('--no-playlist');
     if (index >= 0) args.splice(index, 1);
-    const playlistEnd =
-      options.maxEntries !== undefined ? Math.min(100, options.maxEntries) : 100;
+    const playlistEnd = options.maxEntries !== undefined ? Math.min(100, options.maxEntries) : 100;
     args.push('--yes-playlist', '--playlist-end', String(playlistEnd));
   }
   if (options.flatPlaylist) args.push('--flat-playlist');

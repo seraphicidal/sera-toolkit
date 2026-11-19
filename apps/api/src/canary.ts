@@ -138,7 +138,10 @@ async function download(
     throw new CanaryFailure(job.error?.code ?? job.state.toUpperCase());
   }
 
-  const response = await call(`${base}${job.result.downloadPath}`, { headers: baseHeaders, signal });
+  const response = await call(`${base}${job.result.downloadPath}`, {
+    headers: baseHeaders,
+    signal,
+  });
   if (!response.ok || !response.body) {
     throw new CanaryFailure(`HTTP_${String(response.status)}`);
   }

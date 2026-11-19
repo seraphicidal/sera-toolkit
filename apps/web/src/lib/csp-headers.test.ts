@@ -64,7 +64,9 @@ describe('the installable app under the site-wide policy', () => {
     expect(csp).not.toMatch(/https?:\/\//);
 
     const nonceCsp = buildCspHeader({ nonce: 'abc123', forceHttps: true });
-    expect(directive(nonceCsp, 'script-src')).toBe("script-src 'self' 'nonce-abc123' 'strict-dynamic'");
+    expect(directive(nonceCsp, 'script-src')).toBe(
+      "script-src 'self' 'nonce-abc123' 'strict-dynamic'",
+    );
     expect(nonceCsp).toContain('upgrade-insecure-requests');
     expect(buildCspHeader({ nonce: 'abc123', forceHttps: false })).not.toContain(
       'upgrade-insecure-requests',

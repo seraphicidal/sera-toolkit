@@ -42,11 +42,11 @@ android {
         versionCode = buildConfigOption(
             listOf("SERA_VERSION_CODE", "SERA_ANDROID_VERSION_CODE"),
             listOf("SERA_ANDROID_VERSION_CODE", "SERA_VERSION_CODE"),
-        )?.toIntOrNull() ?: 1
+        )?.toIntOrNull() ?: 12
         versionName = buildConfigOption(
             listOf("SERA_VERSION_NAME", "SERA_ANDROID_VERSION_NAME"),
             listOf("SERA_ANDROID_VERSION_NAME", "SERA_VERSION_NAME"),
-        ) ?: "1.8.0"
+        ) ?: "1.8.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -100,12 +100,14 @@ android {
     packaging {
         jniLibs {
             useLegacyPackaging = true
-            pickFirst("lib/**/libavdevice.so*")
-            pickFirst("lib/**/libavcodec.so*")
-            pickFirst("lib/**/libavformat.so*")
-            pickFirst("lib/**/libavutil.so*")
-            pickFirst("lib/**/libswresample.so*")
-            pickFirst("lib/**/libswscale.so*")
+            pickFirsts += setOf(
+                "lib/**/libavdevice.so*",
+                "lib/**/libavcodec.so*",
+                "lib/**/libavformat.so*",
+                "lib/**/libavutil.so*",
+                "lib/**/libswresample.so*",
+                "lib/**/libswscale.so*",
+            )
         }
         resources {
             excludes += setOf(

@@ -417,8 +417,7 @@ export class EgressGuard {
     res.off('close', onEarlyAbort);
     if (reqGone || res.destroyed) return;
 
-    const address =
-      addresses.find((a) => a.family === 4) ?? addresses[0]!;
+    const address = addresses.find((a) => a.family === 4) ?? addresses[0]!;
 
     if (!upstreamProxy) {
       const upstream = httpRequest({

@@ -68,4 +68,21 @@ class EnvConfigParserTest {
         assertNull(parsed.nodeToken)
         assertFalse(parsed.importedFields.contains("Server URL"))
     }
+
+    @Test
+    fun parsesServerEnvWithDomainAndNodeTokensList() {
+        val raw = """
+            SERA_API_URL=http://api:4000
+            SERA_DOMAIN=1-2-3-4.sslip.io
+            SERA_EXTRACTION_NODE_TOKENS=phone-1:secret_alpha,phone-2:secret_beta
+            SERA_NODE_ID=phone-2
+        """.trimIndent()
+
+        val parsed = EnvConfigParser.parse(raw)
+
+        assertEquals("https://1-2-3-4.sslip.io", parsed.apiBaseUrl)
+        assertEquals("secret_beta", parsed.nodeToken)
+        assertEquals("phone-2", parsed.nodeId)
+        assertEquals("https://sera.example.com", NodeSettings.normalizeBaseUrl("https://sera.example.com/api/"))
+    }
 }

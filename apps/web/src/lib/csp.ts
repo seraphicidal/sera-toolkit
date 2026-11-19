@@ -10,11 +10,7 @@ export interface CspOptions {
 }
 
 export function buildCspHeader(options: CspOptions = {}): string {
-  const {
-    nonce,
-    isDev = false,
-    forceHttps = process.env.SERA_FORCE_HTTPS === 'true',
-  } = options;
+  const { nonce, isDev = false, forceHttps = process.env.SERA_FORCE_HTTPS === 'true' } = options;
 
   const scriptSrc = nonce
     ? `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${isDev ? " 'unsafe-eval'" : ''}`

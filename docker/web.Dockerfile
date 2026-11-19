@@ -26,11 +26,13 @@ RUN npm run build --workspace @sera/web
 
 FROM node:24.18.1-bookworm-slim AS runtime
 
+ARG SERA_API_URL=http://api:4000
+
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     PORT=3000 \
     HOSTNAME=0.0.0.0 \
-    SERA_API_URL=http://api:4000
+    SERA_API_URL=${SERA_API_URL}
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends tini ca-certificates \

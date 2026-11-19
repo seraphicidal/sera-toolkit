@@ -1,14 +1,6 @@
 'use client';
 
-import {
-  memo,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type MouseEvent,
-} from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import type { MediaInfo, MediaItem } from '@sera/contracts/types';
 import { AudioIcon, CheckIcon, CloseIcon, GifIcon, ImageIcon, VideoIcon } from './icons';
 import { cx, formatDuration, isSafeDownloadPath, KIND_LABELS, pluralize } from '@/lib/format';

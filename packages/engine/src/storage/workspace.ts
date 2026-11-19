@@ -1,4 +1,14 @@
-import { lstat, mkdir, readdir, readFile, rm, stat, unlink, utimes, writeFile } from 'node:fs/promises';
+import {
+  lstat,
+  mkdir,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  unlink,
+  utimes,
+  writeFile,
+} from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 import type { Logger } from '../logging.js';
 import { seraError } from '../errors.js';
@@ -191,7 +201,9 @@ export class WorkspaceManager {
   private async computeUsage(): Promise<{ workspaces: number; bytes: number }> {
     const entries = await readdir(this.rootDir, { withFileTypes: true }).catch(() => []);
     const dirs = entries.filter((entry) => entry.isDirectory());
-    const sizes = await Promise.all(dirs.map((entry) => directorySize(join(this.rootDir, entry.name))));
+    const sizes = await Promise.all(
+      dirs.map((entry) => directorySize(join(this.rootDir, entry.name))),
+    );
     return {
       workspaces: dirs.length,
       bytes: sizes.reduce((sum, size) => sum + size, 0),

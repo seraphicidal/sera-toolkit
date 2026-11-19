@@ -298,12 +298,7 @@ export class ExtractionNode {
       if (heartbeatInFlight || abort.signal.aborted) return;
       heartbeatInFlight = true;
       lastSentAt = Date.now();
-      enqueueProgress(
-        currentPercent,
-        currentStep,
-        currentBytesDownloaded,
-        currentBytesTotal,
-      );
+      enqueueProgress(currentPercent, currentStep, currentBytesDownloaded, currentBytesTotal);
       void progressChain.finally(() => {
         heartbeatInFlight = false;
       });
@@ -324,12 +319,7 @@ export class ExtractionNode {
       const now = Date.now();
       if (stepChanged || now - lastSentAt >= PROGRESS_THROTTLE_MS) {
         lastSentAt = now;
-        enqueueProgress(
-          currentPercent,
-          currentStep,
-          bytesDownloaded,
-          bytesTotal,
-        );
+        enqueueProgress(currentPercent, currentStep, bytesDownloaded, bytesTotal);
       }
     };
 

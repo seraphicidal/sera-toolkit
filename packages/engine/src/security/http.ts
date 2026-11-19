@@ -381,7 +381,8 @@ export async function readBoundedJson<T>(
     throw seraError(errorCode, { detail: `${errorDetail}: payload exceeds ${maxBytes} bytes` });
   }
   try {
-    const reader = response.body?.getReader() as ReadableStreamDefaultReader<Uint8Array> | undefined;
+    const reader = response.body?.getReader() as
+      ReadableStreamDefaultReader<Uint8Array> | undefined;
     if (!reader) {
       const text = await response.text();
       if (Buffer.byteLength(text, 'utf8') > maxBytes) {

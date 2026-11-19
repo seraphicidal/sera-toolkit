@@ -83,7 +83,19 @@ data class NodeSettings(
         const val DEFAULT_GITHUB_REPO = "seraphicidal/sera-toolkit"
 
         fun normalizeBaseUrl(raw: String): String {
-            return raw.trim().trimEnd('/')
+            var cleaned = raw.trim().trimEnd('/')
+            if (cleaned.isEmpty()) return ""
+            if (!cleaned.startsWith("http://", ignoreCase = true) &&
+                !cleaned.startsWith("https://", ignoreCase = true)
+            ) {
+                val lower = cleaned.lowercase()
+                val isLocal = lower.startsWith("localhost") || lower.startsWith("127.0.0.1") || lower.startsWith("[::1]")
+                cleaned = if (isLocal) "http://$cleaned" else "https://$cleaned"
+            }
+            if (cleaned.endsWith("/api", ignoreCase = true)) {
+                cleaned = cleaned.dropLast(4).trimEnd('/')
+            }
+            return cleaned
         }
     }
 }

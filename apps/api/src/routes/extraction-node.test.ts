@@ -753,7 +753,7 @@ describe('multi-node authentication and isolation', () => {
       url: '/internal/extraction/dispatch/missing-id?wait=1&wait=2',
       headers: { authorization: `Bearer ${WORKER_TOKEN}` },
     });
-  const badName = await multiApp.inject({
+    const badName = await multiApp.inject({
       method: 'POST',
       url: '/internal/extraction/11112222333344445555666677778888/file?name=a&name=b',
       headers: {

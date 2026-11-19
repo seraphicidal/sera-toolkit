@@ -29,6 +29,7 @@ class SeraToolsManager(
     private val appContext = context.applicationContext
     private val initMutex = Mutex()
     private val updateMutex = Mutex()
+    private val versionMutex = Mutex()
     private val archiveUpdater = YtdlpArchiveUpdater(httpClient)
 
     @Volatile
@@ -103,22 +104,69 @@ class SeraToolsManager(
             if (ready) return
             withContext(Dispatchers.IO) {
                 try {
+                    repairCorruptedRuntimeDirectories()
                     YoutubeDL.getInstance().init(appContext)
                     FFmpeg.getInstance().init(appContext)
+                    if (ytdlpBinaryFile.isFile) {
+                        ytdlpBinaryFile.setExecutable(true, false)
+                    }
                     ejsCacheDir.mkdirs()
                     initError = null
                     ready = true
                 } catch (error: Throwable) {
-                    initError = error.message ?: error.javaClass.simpleName
+                    val causeDetail = formatInitFailure(error)
+                    initError = causeDetail
                     throw seraError(
                         SeraErrorCode.INTERNAL,
-                        message = "Failed to initialize embedded extraction runtime.",
-                        detail = initError,
+                        message = "Failed to initialize embedded extraction runtime: $causeDetail",
+                        detail = causeDetail,
                         cause = error,
                     )
                 }
             }
         }
+    }
+
+    private fun repairCorruptedRuntimeDirectories() {
+        val pythonPkgDir = File(youtubedlBaseDir, "packages/python")
+        if (pythonPkgDir.exists()) {
+            val hasPythonLib = File(pythonLibDir, "libpython3.12.so.1.0").exists()
+            if (!hasPythonLib || !sslCertFile.isFile) {
+                runCatching { pythonPkgDir.deleteRecursively() }
+            }
+        }
+        val ffmpegPkgDir = File(youtubedlBaseDir, "packages/ffmpeg")
+        if (ffmpegPkgDir.exists()) {
+            val hasFfmpegLibs = ffmpegLibDir.isDirectory && !(ffmpegLibDir.list().isNullOrEmpty())
+            if (!hasFfmpegLibs) {
+                runCatching { ffmpegPkgDir.deleteRecursively() }
+            }
+        }
+        if (ytdlpBinaryFile.exists() && (!ytdlpBinaryFile.isFile || ytdlpBinaryFile.length() < 100_000L)) {
+            runCatching { ytdlpBinaryFile.delete() }
+        }
+    }
+
+    private fun formatInitFailure(error: Throwable): String {
+        val parts = ArrayList<String>()
+        var current: Throwable? = error
+        var depth = 0
+        while (current != null && depth < 6) {
+            val msg = current.message?.trim()?.takeIf {
+                it.isNotEmpty() && !it.equals("failed to initialize", ignoreCase = true)
+            }
+            val label = if (msg != null) {
+                "${current.javaClass.simpleName}: $msg"
+            } else {
+                current.javaClass.simpleName
+            }
+            if (parts.lastOrNull() != label) {
+                parts.add(label)
+            }
+            current = current.cause
+            depth += 1
+        }
+        return parts.joinToString(" <- ").ifEmpty { error.javaClass.simpleName }
     }
 
     override suspend fun getToolsVersions(): ToolsVersionInfo {
@@ -268,19 +316,25 @@ class SeraToolsManager(
             if (now < expiresAt) return ver
         }
         if (!ready) return null
-        return withContext(Dispatchers.IO) {
-            val probed = runCatching {
-                val req = YoutubeDLRequest(emptyList()).addOption("--version")
-                val res = YoutubeDL.getInstance().execute(req, "ver-${UUID.randomUUID()}", false, null)
-                res.out.trim().lineSequence().firstOrNull()?.trim()?.takeIf { it.isNotEmpty() }
-            }.getOrNull()
-            val resolved = probed
-                ?: ytdlpVersionMarkerFile.takeIf { it.isFile }?.readText()?.trim()?.ifEmpty { null }
-                ?: runCatching { YoutubeDL.getInstance().version(appContext) }.getOrNull()?.trim()?.ifEmpty { null }
-            if (resolved != null) {
-                cachedYtdlpVersion = resolved to (System.currentTimeMillis() + VERSION_CACHE_TTL_MS)
+        return versionMutex.withLock {
+            val checkNow = System.currentTimeMillis()
+            cachedYtdlpVersion?.let { (ver, expiresAt) ->
+                if (checkNow < expiresAt) return@withLock ver
             }
-            resolved
+            withContext(Dispatchers.IO) {
+                val probed = runCatching {
+                    val req = YoutubeDLRequest(emptyList()).addOption("--version")
+                    val res = YoutubeDL.getInstance().execute(req, "ver-${UUID.randomUUID()}", false, null)
+                    res.out.trim().lineSequence().firstOrNull()?.trim()?.takeIf { it.isNotEmpty() }
+                }.getOrNull()
+                val resolved = probed
+                    ?: ytdlpVersionMarkerFile.takeIf { it.isFile }?.readText()?.trim()?.ifEmpty { null }
+                    ?: runCatching { YoutubeDL.getInstance().version(appContext) }.getOrNull()?.trim()?.ifEmpty { null }
+                if (resolved != null) {
+                    cachedYtdlpVersion = resolved to (System.currentTimeMillis() + VERSION_CACHE_TTL_MS)
+                }
+                resolved
+            }
         }
     }
 
@@ -290,15 +344,21 @@ class SeraToolsManager(
             if (now < expiresAt) return ver
         }
         val bin = libFfmpegFile.takeIf { it.isFile } ?: return null
-        return withContext(Dispatchers.IO) {
-            val output = runQuickVersionCommand(bin, listOf("-hide_banner", "-version"))
-            val firstLine = output?.lineSequence()?.firstOrNull().orEmpty()
-            val match = Regex("""ffmpeg version (\S+)""").find(firstLine)?.groupValues?.get(1)
-            val resolved = match ?: firstLine.trim().takeIf { it.isNotEmpty() }
-            if (resolved != null) {
-                cachedFfmpegVersion = resolved to (System.currentTimeMillis() + VERSION_CACHE_TTL_MS)
+        return versionMutex.withLock {
+            val checkNow = System.currentTimeMillis()
+            cachedFfmpegVersion?.let { (ver, expiresAt) ->
+                if (checkNow < expiresAt) return@withLock ver
             }
-            resolved
+            withContext(Dispatchers.IO) {
+                val output = runQuickVersionCommand(bin, listOf("-hide_banner", "-version"))
+                val firstLine = output?.lineSequence()?.firstOrNull().orEmpty()
+                val match = Regex("""ffmpeg version (\S+)""").find(firstLine)?.groupValues?.get(1)
+                val resolved = match ?: firstLine.trim().takeIf { it.isNotEmpty() }
+                if (resolved != null) {
+                    cachedFfmpegVersion = resolved to (System.currentTimeMillis() + VERSION_CACHE_TTL_MS)
+                }
+                resolved
+            }
         }
     }
 
@@ -308,15 +368,21 @@ class SeraToolsManager(
             if (now < expiresAt) return ver
         }
         val bin = libFfprobeFile.takeIf { it.isFile } ?: return null
-        return withContext(Dispatchers.IO) {
-            val output = runQuickVersionCommand(bin, listOf("-hide_banner", "-version"))
-            val firstLine = output?.lineSequence()?.firstOrNull().orEmpty()
-            val match = Regex("""ffprobe version (\S+)""").find(firstLine)?.groupValues?.get(1)
-            val resolved = match ?: firstLine.trim().takeIf { it.isNotEmpty() }
-            if (resolved != null) {
-                cachedFfprobeVersion = resolved to (System.currentTimeMillis() + VERSION_CACHE_TTL_MS)
+        return versionMutex.withLock {
+            val checkNow = System.currentTimeMillis()
+            cachedFfprobeVersion?.let { (ver, expiresAt) ->
+                if (checkNow < expiresAt) return@withLock ver
             }
-            resolved
+            withContext(Dispatchers.IO) {
+                val output = runQuickVersionCommand(bin, listOf("-hide_banner", "-version"))
+                val firstLine = output?.lineSequence()?.firstOrNull().orEmpty()
+                val match = Regex("""ffprobe version (\S+)""").find(firstLine)?.groupValues?.get(1)
+                val resolved = match ?: firstLine.trim().takeIf { it.isNotEmpty() }
+                if (resolved != null) {
+                    cachedFfprobeVersion = resolved to (System.currentTimeMillis() + VERSION_CACHE_TTL_MS)
+                }
+                resolved
+            }
         }
     }
 
