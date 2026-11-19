@@ -104,7 +104,7 @@ services:
       - media:/data
     read_only: true
     tmpfs:
-      - /tmp
+      - /tmp:exec
     depends_on:
       redis:
         condition: service_healthy
@@ -172,7 +172,7 @@ services:
       - media:/data
     read_only: true
     tmpfs:
-      - /tmp
+      - /tmp:exec
     depends_on:
       redis:
         condition: service_healthy

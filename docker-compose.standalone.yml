@@ -92,7 +92,7 @@ services:
       - media:/data
     read_only: true
     tmpfs:
-      - /tmp
+      - /tmp:exec
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
