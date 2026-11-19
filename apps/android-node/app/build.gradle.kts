@@ -100,6 +100,12 @@ android {
     packaging {
         jniLibs {
             useLegacyPackaging = true
+            pickFirst("lib/**/libavdevice.so")
+            pickFirst("lib/**/libavcodec.so")
+            pickFirst("lib/**/libavformat.so")
+            pickFirst("lib/**/libavutil.so")
+            pickFirst("lib/**/libswresample.so")
+            pickFirst("lib/**/libswscale.so")
         }
         resources {
             excludes += setOf(
