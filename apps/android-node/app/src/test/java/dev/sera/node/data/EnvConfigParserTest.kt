@@ -85,4 +85,22 @@ class EnvConfigParserTest {
         assertEquals("phone-2", parsed.nodeId)
         assertEquals("https://sera.example.com", NodeSettings.normalizeBaseUrl("https://sera.example.com/api/"))
     }
+
+    @Test
+    fun parsesAllProvidersAndRedditCredentials() {
+        val raw = """
+            SERA_NODE_PROVIDERS=all
+            SERA_REDDIT_CLIENT_ID=reddit_id_123
+            SERA_REDDIT_CLIENT_SECRET=reddit_sec_456
+        """.trimIndent()
+
+        val parsed = EnvConfigParser.parse(raw)
+
+        assertEquals(true, parsed.enableYoutube)
+        assertEquals(true, parsed.enableInstagram)
+        assertEquals(true, parsed.enableAllProviders)
+        assertEquals("reddit_id_123", parsed.redditClientId)
+        assertEquals("reddit_sec_456", parsed.redditClientSecret)
+        assertEquals(23, NodeSettings().activeProviders().size)
+    }
 }

@@ -139,6 +139,15 @@ interface MediaCommandExecutor {
 data class HttpTextResponse(
     val body: String,
     val url: String,
+    val status: Int = 200,
+    val headers: Map<String, String> = emptyMap(),
+)
+
+data class HttpHeadResponse(
+    val status: Int,
+    val contentType: String? = null,
+    val contentLength: Long? = null,
+    val url: String,
 )
 
 data class DirectDownloadProgress(
@@ -165,6 +174,55 @@ interface HttpFetcher {
         userAgent: String = DEFAULT_INSTAGRAM_USER_AGENT,
         isCancelled: () -> Boolean = { false },
     ): HttpTextResponse
+
+    suspend fun head(
+        url: HttpUrl,
+        headers: Map<String, String> = emptyMap(),
+        allowPrivateAddresses: Boolean = false,
+        timeoutMs: Long = 30_000L,
+        userAgent: String = DEFAULT_INSTAGRAM_USER_AGENT,
+        isCancelled: () -> Boolean = { false },
+    ): HttpHeadResponse {
+        val resp = fetchText(
+            url = url,
+            maxBytes = 1024L,
+            headers = headers,
+            allowPrivateAddresses = allowPrivateAddresses,
+            timeoutMs = timeoutMs,
+            userAgent = userAgent,
+            isCancelled = isCancelled,
+        )
+        return HttpHeadResponse(status = resp.status, url = resp.url)
+    }
+
+    suspend fun fetchNoFollow(
+        url: HttpUrl,
+        maxBytes: Long = 64L * 1024L,
+        headers: Map<String, String> = emptyMap(),
+        allowPrivateAddresses: Boolean = false,
+        timeoutMs: Long = 15_000L,
+        userAgent: String = "curl/8.7.1",
+        isCancelled: () -> Boolean = { false },
+    ): HttpTextResponse = fetchText(
+        url = url,
+        maxBytes = maxBytes,
+        headers = headers,
+        allowPrivateAddresses = allowPrivateAddresses,
+        timeoutMs = timeoutMs,
+        userAgent = userAgent,
+        isCancelled = isCancelled,
+    )
+
+    suspend fun postForm(
+        url: HttpUrl,
+        formBody: String,
+        headers: Map<String, String> = emptyMap(),
+        maxBytes: Long = 2L * 1024L * 1024L,
+        allowPrivateAddresses: Boolean = false,
+        timeoutMs: Long = 15_000L,
+        userAgent: String = DEFAULT_INSTAGRAM_USER_AGENT,
+        isCancelled: () -> Boolean = { false },
+    ): HttpTextResponse = throw UnsupportedOperationException("postForm not implemented")
 
     suspend fun downloadDirect(
         url: String,

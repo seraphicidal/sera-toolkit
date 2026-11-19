@@ -183,4 +183,34 @@ class UrlAndInstagramParserTest {
             assertCdnHosts(listOf("https://evil.example/a.jpg"))
         }
     }
+
+    @Test
+    fun detectsAllTwentyTwoNamedProvidersAndFallsBackToNullForGeneric() {
+        assertEquals("youtube", detectProvider("https://www.youtube.com/watch?v=abc".toHttpUrl()))
+        assertEquals("twitter", detectProvider("https://x.com/user/status/123".toHttpUrl()))
+        assertEquals("twitter", detectProvider("https://t.co/short".toHttpUrl()))
+        assertEquals("tiktok", detectProvider("https://www.tiktok.com/@user/video/123".toHttpUrl()))
+        assertEquals("instagram", detectProvider("https://www.instagram.com/reel/abc/".toHttpUrl()))
+        assertEquals("reddit", detectProvider("https://www.reddit.com/r/pics/comments/abc/title/".toHttpUrl()))
+        assertEquals("reddit", detectProvider("https://v.redd.it/vid123".toHttpUrl()))
+        assertEquals("twitch", detectProvider("https://clips.twitch.tv/ClipSlug".toHttpUrl()))
+        assertEquals("vimeo", detectProvider("https://vimeo.com/12345678".toHttpUrl()))
+        assertEquals("soundcloud", detectProvider("https://soundcloud.com/artist/track".toHttpUrl()))
+        assertEquals("facebook", detectProvider("https://www.facebook.com/watch/?v=123".toHttpUrl()))
+        assertEquals("pinterest", detectProvider("https://www.pinterest.com/pin/123/".toHttpUrl()))
+        assertEquals("bandcamp", detectProvider("https://artist.bandcamp.com/track/song".toHttpUrl()))
+        assertEquals("dailymotion", detectProvider("https://dai.ly/x8abc".toHttpUrl()))
+        assertEquals("tumblr", detectProvider("https://blog.tumblr.com/post/123".toHttpUrl()))
+        assertEquals("threads", detectProvider("https://www.threads.com/@user/post/Cxyz".toHttpUrl()))
+        assertEquals("bluesky", detectProvider("https://bsky.app/profile/user.bsky.social/post/3kxyz".toHttpUrl()))
+        assertEquals("mastodon", detectProvider("https://mastodon.social/@user/112233".toHttpUrl()))
+        assertEquals("mastodon", detectProvider("https://custom.instance/@user/998877".toHttpUrl()))
+        assertEquals("snapchat", detectProvider("https://www.snapchat.com/spotlight/W7_abc".toHttpUrl()))
+        assertEquals("gdrive", detectProvider("https://drive.google.com/file/d/1AbCdEfGhIjKlMn/view".toHttpUrl()))
+        assertEquals("dropbox", detectProvider("https://www.dropbox.com/s/abc/video.mp4?dl=0".toHttpUrl()))
+        assertEquals("mediafire", detectProvider("https://www.mediafire.com/file/abc/song.mp3/file".toHttpUrl()))
+        assertEquals("mega", detectProvider("https://mega.nz/file/abc#key".toHttpUrl()))
+        assertEquals("direct", detectProvider("https://cdn.example.com/clip.mp4".toHttpUrl()))
+        assertNull(detectProvider("https://example.com/article/hello-world".toHttpUrl()))
+    }
 }

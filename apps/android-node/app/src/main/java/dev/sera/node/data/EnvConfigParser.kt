@@ -6,9 +6,12 @@ data class ParsedEnvConfig(
     val nodeId: String? = null,
     val enableYoutube: Boolean? = null,
     val enableInstagram: Boolean? = null,
+    val enableAllProviders: Boolean? = null,
     val instagramSessionId: String? = null,
     val youtubePlayerClients: String? = null,
     val youtubePotProviderUrl: String? = null,
+    val redditClientId: String? = null,
+    val redditClientSecret: String? = null,
     val preferredCapacity: Int? = null,
     val allowCellular: Boolean? = null,
     val allowWifi: Boolean? = null,
@@ -82,14 +85,17 @@ object EnvConfigParser {
 
         var enableYoutube: Boolean? = null
         var enableInstagram: Boolean? = null
+        var enableAllProviders: Boolean? = null
         if (values.containsKey("SERA_NODE_PROVIDERS")) {
             val rawProviders = values["SERA_NODE_PROVIDERS"].orEmpty()
                 .split(',')
                 .map { it.trim().lowercase() }
                 .filter { it.isNotEmpty() }
             if (rawProviders.isNotEmpty()) {
-                enableYoutube = rawProviders.contains("youtube")
-                enableInstagram = rawProviders.contains("instagram")
+                val wildcard = rawProviders.contains("all") || rawProviders.contains("*")
+                enableYoutube = wildcard || rawProviders.contains("youtube")
+                enableInstagram = wildcard || rawProviders.contains("instagram")
+                enableAllProviders = wildcard || rawProviders.any { it != "youtube" && it != "instagram" }
                 imported += "Providers"
             }
         }
@@ -118,6 +124,22 @@ object EnvConfigParser {
             null
         }
 
+        val redditClientId = if (values.containsKey("SERA_REDDIT_CLIENT_ID")) {
+            val v = values["SERA_REDDIT_CLIENT_ID"].orEmpty().trim()
+            if (v.isNotEmpty()) imported += "Reddit Client ID"
+            v
+        } else {
+            null
+        }
+
+        val redditClientSecret = if (values.containsKey("SERA_REDDIT_CLIENT_SECRET")) {
+            val v = values["SERA_REDDIT_CLIENT_SECRET"].orEmpty().trim()
+            if (v.isNotEmpty()) imported += "Reddit Client Secret"
+            v
+        } else {
+            null
+        }
+
         val preferredCapacity = values["SERA_NODE_CAPACITY"]?.trim()?.toIntOrNull()?.coerceIn(1, 8)
             ?.also { imported += "Capacity" }
 
@@ -136,9 +158,12 @@ object EnvConfigParser {
             nodeId = nodeId,
             enableYoutube = enableYoutube,
             enableInstagram = enableInstagram,
+            enableAllProviders = enableAllProviders,
             instagramSessionId = instagramSessionId,
             youtubePlayerClients = youtubePlayerClients,
             youtubePotProviderUrl = youtubePotProviderUrl,
+            redditClientId = redditClientId,
+            redditClientSecret = redditClientSecret,
             preferredCapacity = preferredCapacity,
             allowCellular = allowCellular,
             allowWifi = allowWifi,

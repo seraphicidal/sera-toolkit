@@ -62,9 +62,12 @@ fun SettingsScreen(
         nodeId: String,
         enableYoutube: Boolean,
         enableInstagram: Boolean,
+        enableAllProviders: Boolean,
         instagramSessionId: String,
         youtubePlayerClients: String,
         youtubePotProviderUrl: String,
+        redditClientId: String,
+        redditClientSecret: String,
         allowCellular: Boolean,
         allowWifi: Boolean,
         onlyWhileCharging: Boolean,
@@ -84,9 +87,12 @@ fun SettingsScreen(
     var nodeId by remember { mutableStateOf(settings.nodeId) }
     var enableYoutube by remember { mutableStateOf(settings.enableYoutube) }
     var enableInstagram by remember { mutableStateOf(settings.enableInstagram) }
+    var enableAllProviders by remember { mutableStateOf(settings.enableAllProviders) }
     var instagramSessionId by remember { mutableStateOf(settings.instagramSessionId) }
     var youtubePlayerClients by remember { mutableStateOf(settings.youtubePlayerClients) }
     var youtubePotProviderUrl by remember { mutableStateOf(settings.youtubePotProviderUrl) }
+    var redditClientId by remember { mutableStateOf(settings.redditClientId) }
+    var redditClientSecret by remember { mutableStateOf(settings.redditClientSecret) }
     var allowCellular by remember { mutableStateOf(settings.allowCellular) }
     var allowWifi by remember { mutableStateOf(settings.allowWifi) }
     var onlyWhileCharging by remember { mutableStateOf(settings.onlyWhileCharging) }
@@ -99,6 +105,7 @@ fun SettingsScreen(
 
     var showToken by remember { mutableStateOf(false) }
     var showSessionId by remember { mutableStateOf(false) }
+    var showRedditSecret by remember { mutableStateOf(false) }
     var showImportDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(settings) {
@@ -107,9 +114,12 @@ fun SettingsScreen(
         nodeId = settings.nodeId
         enableYoutube = settings.enableYoutube
         enableInstagram = settings.enableInstagram
+        enableAllProviders = settings.enableAllProviders
         instagramSessionId = settings.instagramSessionId
         youtubePlayerClients = settings.youtubePlayerClients
         youtubePotProviderUrl = settings.youtubePotProviderUrl
+        redditClientId = settings.redditClientId
+        redditClientSecret = settings.redditClientSecret
         allowCellular = settings.allowCellular
         allowWifi = settings.allowWifi
         onlyWhileCharging = settings.onlyWhileCharging
@@ -131,9 +141,12 @@ fun SettingsScreen(
                 parsed.nodeId?.let { nodeId = it }
                 parsed.enableYoutube?.let { enableYoutube = it }
                 parsed.enableInstagram?.let { enableInstagram = it }
+                parsed.enableAllProviders?.let { enableAllProviders = it }
                 parsed.instagramSessionId?.let { instagramSessionId = it }
                 parsed.youtubePlayerClients?.let { youtubePlayerClients = it }
                 parsed.youtubePotProviderUrl?.let { youtubePotProviderUrl = it }
+                parsed.redditClientId?.let { redditClientId = it }
+                parsed.redditClientSecret?.let { redditClientSecret = it }
                 parsed.preferredCapacity?.let { preferredCapacity = it }
                 parsed.allowCellular?.let { allowCellular = it }
                 parsed.allowWifi?.let { allowWifi = it }
@@ -225,6 +238,12 @@ fun SettingsScreen(
                 checked = enableInstagram,
                 onCheckedChange = { enableInstagram = it },
             )
+            ToggleRow(
+                title = "All Other Websites & Providers",
+                subtitle = "Serve TikTok, X, Reddit, Twitch, SoundCloud, Vimeo, cloud links, and 1,000+ yt-dlp sites",
+                checked = enableAllProviders,
+                onCheckedChange = { enableAllProviders = it },
+            )
             OutlinedTextField(
                 value = instagramSessionId,
                 onValueChange = { instagramSessionId = it },
@@ -256,6 +275,31 @@ fun SettingsScreen(
                 label = { Text("YouTube PO Token URL (optional)") },
                 placeholder = { Text("http://127.0.0.1:4416") },
                 singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedTextField(
+                value = redditClientId,
+                onValueChange = { redditClientId = it },
+                label = { Text("Reddit Client ID (optional)") },
+                placeholder = { Text("SERA_REDDIT_CLIENT_ID") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedTextField(
+                value = redditClientSecret,
+                onValueChange = { redditClientSecret = it },
+                label = { Text("Reddit Client Secret (optional)") },
+                placeholder = { Text("SERA_REDDIT_CLIENT_SECRET") },
+                singleLine = true,
+                visualTransformation = if (showRedditSecret) VisualTransformation.None else PasswordVisualTransformation(),
+                trailingIcon = {
+                    IconButton(onClick = { showRedditSecret = !showRedditSecret }) {
+                        Icon(
+                            imageVector = if (showRedditSecret) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
+                            contentDescription = "Toggle Reddit secret visibility",
+                        )
+                    }
+                },
                 modifier = Modifier.fillMaxWidth(),
             )
         }
@@ -332,9 +376,12 @@ fun SettingsScreen(
                     nodeId,
                     enableYoutube,
                     enableInstagram,
+                    enableAllProviders,
                     instagramSessionId,
                     youtubePlayerClients,
                     youtubePotProviderUrl,
+                    redditClientId,
+                    redditClientSecret,
                     allowCellular,
                     allowWifi,
                     onlyWhileCharging,

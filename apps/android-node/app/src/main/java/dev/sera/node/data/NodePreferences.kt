@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import dev.sera.node.extractor.ALL_OTHER_PROVIDER_IDS
 import dev.sera.node.model.NodeRuntimeConfig
 import dev.sera.node.model.ProviderHotConfig
 import dev.sera.node.model.SeraJson
@@ -35,9 +36,12 @@ data class NodeSettings(
     val nodeId: String = "android-node",
     val enableYoutube: Boolean = true,
     val enableInstagram: Boolean = true,
+    val enableAllProviders: Boolean = true,
     val instagramSessionId: String = "",
     val youtubePlayerClients: String = "",
     val youtubePotProviderUrl: String = "",
+    val redditClientId: String = "",
+    val redditClientSecret: String = "",
     val allowCellular: Boolean = true,
     val allowWifi: Boolean = true,
     val onlyWhileCharging: Boolean = false,
@@ -62,6 +66,7 @@ data class NodeSettings(
     fun activeProviders(): List<String> = buildList {
         if (enableYoutube) add("youtube")
         if (enableInstagram) add("instagram")
+        if (enableAllProviders) addAll(ALL_OTHER_PROVIDER_IDS)
     }
 
     fun toRuntimeConfig(workDirPath: String): NodeRuntimeConfig {
@@ -74,6 +79,8 @@ data class NodeSettings(
             instagramSessionId = instagramSessionId.trim().ifEmpty { null },
             youtubePlayerClients = youtubePlayerClients.trim().ifEmpty { null },
             youtubePotProviderUrl = youtubePotProviderUrl.trim().ifEmpty { null },
+            redditClientId = redditClientId.trim().ifEmpty { null },
+            redditClientSecret = redditClientSecret.trim().ifEmpty { null },
             preferredCapacity = preferredCapacity.coerceIn(1, 8),
             workDirPath = workDirPath,
         )
@@ -109,9 +116,12 @@ class NodePreferences(private val context: Context) {
         val NODE_ID = stringPreferencesKey("node_id")
         val ENABLE_YOUTUBE = booleanPreferencesKey("enable_youtube")
         val ENABLE_INSTAGRAM = booleanPreferencesKey("enable_instagram")
+        val ENABLE_ALL_PROVIDERS = booleanPreferencesKey("enable_all_providers")
         val INSTAGRAM_SESSION_ID = stringPreferencesKey("instagram_session_id")
         val YOUTUBE_PLAYER_CLIENTS = stringPreferencesKey("youtube_player_clients")
         val YOUTUBE_POT_PROVIDER_URL = stringPreferencesKey("youtube_pot_provider_url")
+        val REDDIT_CLIENT_ID = stringPreferencesKey("reddit_client_id")
+        val REDDIT_CLIENT_SECRET = stringPreferencesKey("reddit_client_secret")
         val ALLOW_CELLULAR = booleanPreferencesKey("allow_cellular")
         val ALLOW_WIFI = booleanPreferencesKey("allow_wifi")
         val ONLY_WHILE_CHARGING = booleanPreferencesKey("only_while_charging")
@@ -144,9 +154,12 @@ class NodePreferences(private val context: Context) {
             nodeId = prefs[Keys.NODE_ID]?.trim()?.ifEmpty { "android-node" } ?: "android-node",
             enableYoutube = prefs[Keys.ENABLE_YOUTUBE] ?: true,
             enableInstagram = prefs[Keys.ENABLE_INSTAGRAM] ?: true,
+            enableAllProviders = prefs[Keys.ENABLE_ALL_PROVIDERS] ?: true,
             instagramSessionId = prefs[Keys.INSTAGRAM_SESSION_ID].orEmpty().trim(),
             youtubePlayerClients = prefs[Keys.YOUTUBE_PLAYER_CLIENTS].orEmpty().trim(),
             youtubePotProviderUrl = prefs[Keys.YOUTUBE_POT_PROVIDER_URL].orEmpty().trim(),
+            redditClientId = prefs[Keys.REDDIT_CLIENT_ID].orEmpty().trim(),
+            redditClientSecret = prefs[Keys.REDDIT_CLIENT_SECRET].orEmpty().trim(),
             allowCellular = prefs[Keys.ALLOW_CELLULAR] ?: true,
             allowWifi = prefs[Keys.ALLOW_WIFI] ?: true,
             onlyWhileCharging = prefs[Keys.ONLY_WHILE_CHARGING] ?: false,
@@ -176,9 +189,12 @@ class NodePreferences(private val context: Context) {
         nodeId: String,
         enableYoutube: Boolean,
         enableInstagram: Boolean,
+        enableAllProviders: Boolean = true,
         instagramSessionId: String,
         youtubePlayerClients: String,
         youtubePotProviderUrl: String,
+        redditClientId: String = "",
+        redditClientSecret: String = "",
         allowCellular: Boolean,
         allowWifi: Boolean,
         onlyWhileCharging: Boolean,
@@ -195,9 +211,12 @@ class NodePreferences(private val context: Context) {
             prefs[Keys.NODE_ID] = nodeId.trim().ifEmpty { "android-node" }
             prefs[Keys.ENABLE_YOUTUBE] = enableYoutube
             prefs[Keys.ENABLE_INSTAGRAM] = enableInstagram
+            prefs[Keys.ENABLE_ALL_PROVIDERS] = enableAllProviders
             prefs[Keys.INSTAGRAM_SESSION_ID] = instagramSessionId.trim()
             prefs[Keys.YOUTUBE_PLAYER_CLIENTS] = youtubePlayerClients.trim()
             prefs[Keys.YOUTUBE_POT_PROVIDER_URL] = NodeSettings.normalizeBaseUrl(youtubePotProviderUrl)
+            prefs[Keys.REDDIT_CLIENT_ID] = redditClientId.trim()
+            prefs[Keys.REDDIT_CLIENT_SECRET] = redditClientSecret.trim()
             prefs[Keys.ALLOW_CELLULAR] = allowCellular
             prefs[Keys.ALLOW_WIFI] = allowWifi
             prefs[Keys.ONLY_WHILE_CHARGING] = onlyWhileCharging
@@ -217,11 +236,14 @@ class NodePreferences(private val context: Context) {
             parsed.nodeId?.let { prefs[Keys.NODE_ID] = it.trim().ifEmpty { "android-node" } }
             parsed.enableYoutube?.let { prefs[Keys.ENABLE_YOUTUBE] = it }
             parsed.enableInstagram?.let { prefs[Keys.ENABLE_INSTAGRAM] = it }
+            parsed.enableAllProviders?.let { prefs[Keys.ENABLE_ALL_PROVIDERS] = it }
             parsed.instagramSessionId?.let { prefs[Keys.INSTAGRAM_SESSION_ID] = it.trim() }
             parsed.youtubePlayerClients?.let { prefs[Keys.YOUTUBE_PLAYER_CLIENTS] = it.trim() }
             parsed.youtubePotProviderUrl?.let {
                 prefs[Keys.YOUTUBE_POT_PROVIDER_URL] = NodeSettings.normalizeBaseUrl(it)
             }
+            parsed.redditClientId?.let { prefs[Keys.REDDIT_CLIENT_ID] = it.trim() }
+            parsed.redditClientSecret?.let { prefs[Keys.REDDIT_CLIENT_SECRET] = it.trim() }
             parsed.preferredCapacity?.let { prefs[Keys.PREFERRED_CAPACITY] = it.coerceIn(1, 8) }
             parsed.allowCellular?.let { prefs[Keys.ALLOW_CELLULAR] = it }
             parsed.allowWifi?.let { prefs[Keys.ALLOW_WIFI] = it }

@@ -136,7 +136,7 @@ jobs:
             }
 
             const safeSegment = versionName.replace(/[^A-Za-z0-9._-]/g, "-");
-            const releaseTag = refType === "tag" ? refName : `android-node-v${safeSegment}-b${versionCode}`;
+            const releaseTag = refType === "tag" ? refName : safeSegment;
             const isPrerelease =
               inputPrerelease || /-(?:alpha|beta|rc)(?:[.-]?\d*)?$/i.test(versionName);
 

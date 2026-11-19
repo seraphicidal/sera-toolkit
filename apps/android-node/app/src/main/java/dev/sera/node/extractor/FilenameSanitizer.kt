@@ -132,3 +132,34 @@ fun subtitleName(name: String, lang: String): String {
     if (dot <= 0) return "$name.$safe"
     return "${name.substring(0, dot)}.$safe${name.substring(dot)}"
 }
+
+private val HTML_ENTITIES = mapOf(
+    "&amp;" to "&",
+    "&lt;" to "<",
+    "&gt;" to ">",
+    "&quot;" to "\"",
+    "&apos;" to "'",
+    "&#39;" to "'",
+    "&nbsp;" to " ",
+)
+
+private val HTML_ENTITY_REGEX = Regex("""&(?:#x([0-9a-f]+)|#(\d+)|([a-z]+));""", RegexOption.IGNORE_CASE)
+
+fun decodeHtmlEntities(value: String, unknownNamedFallback: String? = null): String {
+    return HTML_ENTITY_REGEX.replace(value) { match ->
+        val entity = match.value
+        val hex = match.groupValues[1].takeIf { it.isNotEmpty() }
+        val dec = match.groupValues[2].takeIf { it.isNotEmpty() }
+        when {
+            hex != null -> {
+                val cp = hex.toIntOrNull(16)
+                if (cp != null && cp in 0..0x10ffff) String(Character.toChars(cp)) else (unknownNamedFallback ?: entity)
+            }
+            dec != null -> {
+                val cp = dec.toIntOrNull(10)
+                if (cp != null && cp in 0..0x10ffff) String(Character.toChars(cp)) else (unknownNamedFallback ?: entity)
+            }
+            else -> HTML_ENTITIES[entity.lowercase()] ?: (unknownNamedFallback ?: entity)
+        }
+    }
+}

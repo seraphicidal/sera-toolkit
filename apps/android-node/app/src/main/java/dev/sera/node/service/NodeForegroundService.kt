@@ -276,7 +276,7 @@ class NodeForegroundService : Service() {
                     tracker.update {
                         it.copy(
                             serviceState = NodeServiceState.UNCONFIGURED,
-                            lastError = "Enable at least one provider (YouTube or Instagram)",
+                            lastError = "Enable at least one provider in Settings",
                         )
                     }
                     refreshNotification()

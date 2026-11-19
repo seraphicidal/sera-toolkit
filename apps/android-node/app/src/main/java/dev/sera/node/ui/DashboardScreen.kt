@@ -330,6 +330,9 @@ private fun NodeControlCard(
                     }
                     CapabilityChip(label = igLabel, active = true)
                 }
+                if (settings.enableAllProviders) {
+                    CapabilityChip(label = "All Websites (23 Providers)", active = true)
+                }
                 CapabilityChip(
                     label = "Capacity ${settings.preferredCapacity}",
                     active = false,

@@ -111,6 +111,54 @@ class SeraNodeTaskRunner(
 
     private val youtubeExtractor = YoutubeExtractor(executor)
     private val instagramExtractor = InstagramExtractor(executor, httpFetcher)
+    private val twitterExtractor = TwitterExtractor(executor, httpFetcher)
+    private val tiktokExtractor = TiktokExtractor(executor)
+    private val redditExtractor = RedditExtractor(executor, httpFetcher)
+    private val twitchExtractor = TwitchExtractor(executor)
+    private val vimeoExtractor = VimeoExtractor(executor)
+    private val soundcloudExtractor = SoundcloudExtractor(executor)
+    private val facebookExtractor = FacebookExtractor(executor)
+    private val pinterestExtractor = PinterestExtractor(executor)
+    private val bandcampExtractor = BandcampExtractor(executor)
+    private val dailymotionExtractor = DailymotionExtractor(executor)
+    private val tumblrExtractor = TumblrExtractor(executor)
+    private val threadsExtractor = ThreadsExtractor(executor, httpFetcher)
+    private val blueskyExtractor = BlueskyExtractor(executor, httpFetcher)
+    private val mastodonExtractor = MastodonExtractor(executor, httpFetcher)
+    private val snapchatExtractor = SnapchatExtractor(executor)
+    private val gdriveExtractor = GoogleDriveExtractor(executor, httpFetcher)
+    private val dropboxExtractor = DropboxExtractor(executor, httpFetcher)
+    private val mediafireExtractor = MediaFireExtractor(executor, httpFetcher)
+    private val megaExtractor = MegaExtractor(executor)
+    private val directExtractor = DirectFileExtractor(executor, httpFetcher)
+    private val genericExtractor = GenericExtractor(executor, httpFetcher)
+
+    private val extractorsById: Map<String, YtdlpBaseExtractor> = listOf(
+        youtubeExtractor,
+        instagramExtractor,
+        twitterExtractor,
+        tiktokExtractor,
+        redditExtractor,
+        twitchExtractor,
+        vimeoExtractor,
+        soundcloudExtractor,
+        facebookExtractor,
+        pinterestExtractor,
+        bandcampExtractor,
+        dailymotionExtractor,
+        tumblrExtractor,
+        threadsExtractor,
+        blueskyExtractor,
+        mastodonExtractor,
+        snapchatExtractor,
+        gdriveExtractor,
+        dropboxExtractor,
+        mediafireExtractor,
+        megaExtractor,
+        directExtractor,
+        genericExtractor,
+    ).associateBy { it.id }
+
     private val ffmpegProcessor = FfmpegMediaProcessor(executor)
     private val resolveCache = ConcurrentHashMap<String, CachedResolution>()
 
@@ -142,7 +190,11 @@ class SeraNodeTaskRunner(
 
         return try {
             val activeProviders = config.providers.map { it.lowercase() }.toSet()
-            if (activeProviders.isNotEmpty() && task.providerId.lowercase() !in activeProviders) {
+            val requestedProvider = task.providerId.lowercase()
+            val providerAllowed = activeProviders.isEmpty() ||
+                requestedProvider in activeProviders ||
+                ("generic" in activeProviders && requestedProvider != "youtube" && requestedProvider != "instagram")
+            if (!providerAllowed) {
                 throw seraError(
                     SeraErrorCode.UNSUPPORTED_SOURCE,
                     detail = "node: not configured for ${task.providerId}",
@@ -151,14 +203,14 @@ class SeraNodeTaskRunner(
 
             val parsed = parseUserUrl(task.url, allowPrivateAddresses = config.allowPrivateAddresses)
             val detected = detectProvider(parsed.url)
-            if (task.providerId != "generic" && detected != task.providerId) {
+            if (requestedProvider != "generic" && detected != requestedProvider) {
                 throw seraError(
                     SeraErrorCode.UNSUPPORTED_SOURCE,
                     detail = "node: ${parsed.url.host} is not ${task.providerId}",
                 )
             }
 
-            val extractor = extractorFor(task.providerId)
+            val extractor = extractorFor(requestedProvider)
                 ?: throw seraError(SeraErrorCode.UNSUPPORTED_SOURCE, detail = "unknown provider ${task.providerId}")
 
             toolsManager.ensureReady()
@@ -196,11 +248,7 @@ class SeraNodeTaskRunner(
     }
 
     private fun extractorFor(providerId: String): YtdlpBaseExtractor? =
-        when (providerId.lowercase()) {
-            "youtube" -> youtubeExtractor
-            "instagram" -> instagramExtractor
-            else -> null
-        }
+        extractorsById[providerId.lowercase()]
 
     private suspend fun resolveWithCache(
         extractor: YtdlpBaseExtractor,
@@ -238,6 +286,19 @@ class SeraNodeTaskRunner(
                 try {
                     extractor.resolve(canonical, execContext.copy(allowDegraded = true))
                 } catch (_: Throwable) {
+                    throw sera
+                }
+            } else if (
+                extractor.id != "generic" &&
+                extractor.id != "youtube" &&
+                extractor.id != "instagram" &&
+                sera.code == SeraErrorCode.UNSUPPORTED_SOURCE
+            ) {
+                try {
+                    genericExtractor.resolve(canonical, execContext)
+                } catch (fallbackError: Throwable) {
+                    val refusal = SeraException.from(fallbackError)
+                    if (refusal.detail?.startsWith("robots.txt disallows") == true) throw refusal
                     throw sera
                 }
             } else {

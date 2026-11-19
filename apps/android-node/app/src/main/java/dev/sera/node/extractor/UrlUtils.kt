@@ -66,11 +66,198 @@ val YOUTUBE_HOSTS = listOf(
     "music.youtube.com",
 )
 
+val TWITTER_HOSTS = listOf(
+    "x.com",
+    "twitter.com",
+    "mobile.twitter.com",
+    "t.co",
+    "vxtwitter.com",
+    "fxtwitter.com",
+    "fixupx.com",
+    "fixvx.com",
+    "twittpr.com",
+)
+
+val TIKTOK_HOSTS = listOf(
+    "tiktok.com",
+    "vm.tiktok.com",
+    "vt.tiktok.com",
+    "m.tiktok.com",
+)
+
 val INSTAGRAM_HOSTS = listOf(
     "instagram.com",
     "instagr.am",
     "ddinstagram.com",
 )
+
+val REDDIT_HOSTS = listOf(
+    "reddit.com",
+    "redd.it",
+    "v.redd.it",
+    "old.reddit.com",
+)
+
+val TWITCH_HOSTS = listOf(
+    "twitch.tv",
+    "clips.twitch.tv",
+    "m.twitch.tv",
+)
+
+val VIMEO_HOSTS = listOf(
+    "vimeo.com",
+    "player.vimeo.com",
+)
+
+val SOUNDCLOUD_HOSTS = listOf(
+    "soundcloud.com",
+    "snd.sc",
+    "m.soundcloud.com",
+    "on.soundcloud.com",
+)
+
+val FACEBOOK_HOSTS = listOf(
+    "facebook.com",
+    "fb.watch",
+    "fb.com",
+    "m.facebook.com",
+    "web.facebook.com",
+)
+
+val PINTEREST_HOSTS = listOf(
+    "pinterest.com",
+    "pin.it",
+    "pinterest.co.uk",
+    "pinterest.ca",
+    "pinterest.de",
+)
+
+val BANDCAMP_HOSTS = listOf(
+    "bandcamp.com",
+)
+
+val DAILYMOTION_HOSTS = listOf(
+    "dailymotion.com",
+    "dai.ly",
+)
+
+val TUMBLR_HOSTS = listOf(
+    "tumblr.com",
+)
+
+val THREADS_HOSTS = listOf(
+    "threads.net",
+    "threads.com",
+)
+
+val BLUESKY_HOSTS = listOf(
+    "bsky.app",
+    "bsky.social",
+)
+
+val MASTODON_HOSTS = listOf(
+    "mastodon.social",
+    "mastodon.online",
+    "mastodon.world",
+    "mstdn.social",
+    "fosstodon.org",
+    "hachyderm.io",
+    "infosec.exchange",
+    "techhub.social",
+    "mas.to",
+)
+
+val SNAPCHAT_HOSTS = listOf(
+    "snapchat.com",
+    "t.snapchat.com",
+)
+
+val GDRIVE_HOSTS = listOf(
+    "drive.google.com",
+    "docs.google.com",
+    "drive.usercontent.google.com",
+)
+
+val DROPBOX_HOSTS = listOf(
+    "dropbox.com",
+    "dl.dropboxusercontent.com",
+)
+
+val MEDIAFIRE_HOSTS = listOf(
+    "mediafire.com",
+)
+
+val MEGA_HOSTS = listOf(
+    "mega.nz",
+    "mega.co.nz",
+)
+
+val MEDIA_EXTENSIONS = setOf(
+    "mp4",
+    "m4v",
+    "mov",
+    "webm",
+    "mkv",
+    "avi",
+    "flv",
+    "ts",
+    "m3u8",
+    "mpd",
+    "mp3",
+    "m4a",
+    "aac",
+    "opus",
+    "ogg",
+    "oga",
+    "wav",
+    "flac",
+    "wma",
+    "jpg",
+    "jpeg",
+    "png",
+    "webp",
+    "gif",
+    "avif",
+    "bmp",
+    "tif",
+    "tiff",
+    "heic",
+    "pdf",
+    "iso",
+    "zip",
+    "tar",
+    "7z",
+    "apk",
+    "dmg",
+    "exe",
+    "epub",
+)
+
+val ALL_OTHER_PROVIDER_IDS = listOf(
+    "twitter",
+    "tiktok",
+    "reddit",
+    "twitch",
+    "vimeo",
+    "soundcloud",
+    "facebook",
+    "pinterest",
+    "bandcamp",
+    "dailymotion",
+    "tumblr",
+    "threads",
+    "bluesky",
+    "mastodon",
+    "snapchat",
+    "gdrive",
+    "dropbox",
+    "mediafire",
+    "mega",
+    "direct",
+    "generic",
+)
+
+val ALL_PROVIDER_IDS = listOf("youtube", "instagram") + ALL_OTHER_PROVIDER_IDS
 
 val DEFAULT_INSTAGRAM_CDN_HOSTS = listOf(
     "cdninstagram.com",
@@ -78,6 +265,9 @@ val DEFAULT_INSTAGRAM_CDN_HOSTS = listOf(
 )
 
 private val INSTAGRAM_SHORTCODE_REGEX = Regex("""/(?:p|reel|reels|tv)/([A-Za-z0-9_-]+)""")
+private val MASTODON_STATUS_PATH_REGEX = Regex("""^/(@[^/]+/\d+|users/[^/]+/statuses/\d+)/?$""")
+private val GDRIVE_PATH_ID_REGEX = Regex("""/(?:file|document|presentation|spreadsheets)/d/([a-zA-Z0-9_-]{6,})""", RegexOption.IGNORE_CASE)
+private val GDRIVE_QUERY_ID_REGEX = Regex("""^[a-zA-Z0-9_-]{6,}$""")
 
 private const val SHORTCODE_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 
@@ -457,10 +647,47 @@ fun assertCdnHosts(
     )
 }
 
+fun extractGoogleDriveId(url: HttpUrl): String? {
+    val pathMatch = GDRIVE_PATH_ID_REGEX.find(url.encodedPath)?.groupValues?.get(1)
+    if (pathMatch != null) return pathMatch
+    val queryId = url.queryParameter("id")
+    if (queryId != null && GDRIVE_QUERY_ID_REGEX.matches(queryId)) return queryId
+    return null
+}
+
 fun detectProvider(url: HttpUrl): String? {
     val host = stripWww(url.host.lowercase())
+    val path = url.encodedPath
     if (hostMatchesAny(host, YOUTUBE_HOSTS)) return "youtube"
+    if (hostMatchesAny(host, TWITTER_HOSTS)) return "twitter"
+    if (hostMatchesAny(host, TIKTOK_HOSTS)) return "tiktok"
     if (hostMatchesAny(host, INSTAGRAM_HOSTS)) return "instagram"
+    if (hostMatchesAny(host, REDDIT_HOSTS)) return "reddit"
+    if (hostMatchesAny(host, TWITCH_HOSTS)) return "twitch"
+    if (hostMatchesAny(host, VIMEO_HOSTS)) return "vimeo"
+    if (hostMatchesAny(host, SOUNDCLOUD_HOSTS)) return "soundcloud"
+    if (hostMatchesAny(host, FACEBOOK_HOSTS)) return "facebook"
+    if (hostMatchesAny(host, PINTEREST_HOSTS)) return "pinterest"
+    if (hostMatches(host, "bandcamp.com")) return "bandcamp"
+    if (hostMatchesAny(host, DAILYMOTION_HOSTS)) return "dailymotion"
+    if (hostMatches(host, "tumblr.com")) return "tumblr"
+    if (hostMatchesAny(host, THREADS_HOSTS)) return "threads"
+    if (hostMatchesAny(host, BLUESKY_HOSTS) && path.contains("/post/")) return "bluesky"
+    if (hostMatchesAny(host, MASTODON_HOSTS) || MASTODON_STATUS_PATH_REGEX.matches(path)) return "mastodon"
+    if (hostMatchesAny(host, SNAPCHAT_HOSTS)) return "snapchat"
+    if (hostMatchesAny(host, GDRIVE_HOSTS) && extractGoogleDriveId(url) != null) return "gdrive"
+    if (hostMatchesAny(host, DROPBOX_HOSTS) && path.length > 1) return "dropbox"
+    if (hostMatchesAny(host, MEDIAFIRE_HOSTS) && path.length > 1) return "mediafire"
+    if (hostMatchesAny(host, MEGA_HOSTS) && (
+            path.startsWith("/file/") ||
+                path.startsWith("/folder/") ||
+                url.encodedFragment?.startsWith("!") == true
+            )
+    ) {
+        return "mega"
+    }
+    val ext = urlExtension(url)
+    if (ext != null && ext in MEDIA_EXTENSIONS) return "direct"
     return null
 }
 

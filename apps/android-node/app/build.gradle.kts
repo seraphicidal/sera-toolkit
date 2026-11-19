@@ -42,11 +42,11 @@ android {
         versionCode = buildConfigOption(
             listOf("SERA_VERSION_CODE", "SERA_ANDROID_VERSION_CODE"),
             listOf("SERA_ANDROID_VERSION_CODE", "SERA_VERSION_CODE"),
-        )?.toIntOrNull() ?: 12
+        )?.toIntOrNull() ?: 13
         versionName = buildConfigOption(
             listOf("SERA_VERSION_NAME", "SERA_ANDROID_VERSION_NAME"),
             listOf("SERA_ANDROID_VERSION_NAME", "SERA_VERSION_NAME"),
-        ) ?: "1.8.2"
+        ) ?: "1.8.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

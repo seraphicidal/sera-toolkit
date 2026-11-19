@@ -1,5 +1,6 @@
 package dev.sera.node.model
 
+import dev.sera.node.extractor.ALL_PROVIDER_IDS
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -47,11 +48,13 @@ data class NodeRuntimeConfig(
     val apiBaseUrl: String,
     val nodeToken: String,
     val nodeId: String = "android-node",
-    val providers: List<String> = listOf("youtube", "instagram"),
+    val providers: List<String> = ALL_PROVIDER_IDS,
     val networkClass: String = "residential",
     val instagramSessionId: String? = null,
     val youtubePlayerClients: String? = null,
     val youtubePotProviderUrl: String? = null,
+    val redditClientId: String? = null,
+    val redditClientSecret: String? = null,
     val preferredCapacity: Int = 2,
     val workDirPath: String = "",
     val maxFilesizeBytes: Long = 4L * 1024L * 1024L * 1024L,

@@ -407,4 +407,217 @@ class ExtractorLadderAndTaskRunnerTest {
         assertEquals("web-api", resolved.media.metadata?.get("extractionStrategy")?.content)
         assertTrue(resolved.media.items[1].plans.any { it.kind == "audio" && it.container == "mp3" })
     }
+
+    @Test
+    fun taskRunnerSupportsTwitterTikTokRedditThreadsCloudDirectAndGenericTasks() = runTest {
+        val sampleJson = """
+            {
+              "id": "tt1",
+              "title": "TikTok Clip",
+              "uploader": "creator",
+              "webpage_url": "https://www.tiktok.com/@creator/video/12345",
+              "duration": 15,
+              "formats": [
+                { "format_id": "v1", "ext": "mp4", "protocol": "https", "vcodec": "h264", "acodec": "aac", "width": 720, "height": 1280 }
+              ]
+            }
+        """.trimIndent()
+
+        val executor = object : MediaCommandExecutor {
+            override suspend fun dumpInfo(url: String, options: YtdlpProbeOptions): ParsedYtdlpOutput =
+                parseYtdlpInfo(sampleJson)
+
+            override suspend fun download(options: YtdlpDownloadOptions) = Unit
+            override suspend fun downloadSubtitles(options: YtdlpSubtitleOptions) = throw UnsupportedOperationException()
+            override suspend fun probeMedia(path: File, timeoutMs: Long, isCancelled: () -> Boolean) = throw UnsupportedOperationException()
+            override suspend fun keyframeAtOrBefore(path: File, seconds: Double, timeoutMs: Long, isCancelled: () -> Boolean) = null
+            override suspend fun runFfmpeg(args: List<String>, workDir: File, timeoutMs: Long, onStdoutLine: ((String) -> Unit)?, isCancelled: () -> Boolean) = throw UnsupportedOperationException()
+        }
+
+        val fakeFetcher = object : HttpFetcher {
+            override suspend fun fetchText(
+                url: HttpUrl,
+                maxBytes: Long,
+                headers: Map<String, String>,
+                keepCookies: Boolean,
+                allowPrivateAddresses: Boolean,
+                timeoutMs: Long,
+                userAgent: String,
+                isCancelled: () -> Boolean,
+            ): HttpTextResponse {
+                val u = url.toString()
+                return when {
+                    u.contains("cdn.syndication.twimg.com") -> HttpTextResponse(
+                        body = """
+                            {
+                              "id_str": "999",
+                              "text": "Hello from X",
+                              "user": { "name": "Alice", "screen_name": "alice" },
+                              "mediaDetails": [
+                                {
+                                  "type": "photo",
+                                  "media_url_https": "https://pbs.twimg.com/media/AbCdEf.jpg",
+                                  "original_info": { "width": 1200, "height": 800 }
+                                }
+                              ]
+                            }
+                        """.trimIndent(),
+                        url = u,
+                    )
+                    u.contains("threads.com") -> HttpTextResponse(
+                        body = """
+                            <div class="OuterContainerFull">
+                              <div class="BodyTextContainer">Threads post caption</div>
+                              <video poster="https://scontent.cdninstagram.com/v/poster.jpg">
+                                <source src="https://scontent.cdninstagram.com/v/clip.mp4" />
+                              </video>
+                              <div class="PostDateContainer"></div>
+                            </div>
+                        """.trimIndent(),
+                        url = u,
+                    )
+                    u.endsWith("/robots.txt") -> HttpTextResponse(
+                        body = "User-agent: *\nAllow: /\n",
+                        url = u,
+                    )
+                    else -> HttpTextResponse(
+                        body = """
+                            <html>
+                              <head>
+                                <meta property="og:title" content="Generic Video Page" />
+                                <meta property="og:video:secure_url" content="https://cdn.example.com/stream.mp4" />
+                              </head>
+                            </html>
+                        """.trimIndent(),
+                        url = u,
+                    )
+                }
+            }
+
+            override suspend fun head(
+                url: HttpUrl,
+                headers: Map<String, String>,
+                allowPrivateAddresses: Boolean,
+                timeoutMs: Long,
+                userAgent: String,
+                isCancelled: () -> Boolean,
+            ): HttpHeadResponse = HttpHeadResponse(
+                status = 200,
+                contentType = "video/mp4",
+                contentLength = 1048576L,
+                url = url.toString(),
+            )
+
+            override suspend fun downloadDirect(
+                url: String,
+                destination: File,
+                maxBytes: Long,
+                timeoutMs: Long,
+                allowPrivateAddresses: Boolean,
+                allowUrl: (HttpUrl) -> Boolean,
+                isCancelled: () -> Boolean,
+                onProgress: (DirectDownloadProgress) -> Unit,
+            ) = throw UnsupportedOperationException()
+        }
+
+        val runner = SeraNodeTaskRunner(
+            toolsManager = noopToolsManager(),
+            executor = executor,
+            httpFetcher = fakeFetcher,
+            defaultWorkRoot = tempDir,
+        )
+        val config = NodeRuntimeConfig(
+            apiBaseUrl = "https://api.example.com",
+            nodeToken = "tok",
+            workDirPath = tempDir.absolutePath,
+            allowPrivateAddresses = true,
+        )
+
+        val twitterOutcome = runner.executeTask(
+            task = RemoteTask(
+                id = "tw1",
+                kind = "resolve",
+                url = "https://twitter.com/alice/status/999/photo/1",
+                providerId = "twitter",
+            ),
+            config = config,
+            hotConfig = null,
+            onProgress = { true },
+        )
+        assertTrue(twitterOutcome is TaskExecutionOutcome.Resolved)
+        val twitterMedia = (twitterOutcome as TaskExecutionOutcome.Resolved).media
+        assertEquals("twitter", twitterMedia.provider)
+        assertEquals("Hello from X", twitterMedia.title)
+        assertEquals("image", twitterMedia.items.single().kind)
+
+        val tiktokOutcome = runner.executeTask(
+            task = RemoteTask(
+                id = "tt1",
+                kind = "resolve",
+                url = "https://www.tiktok.com/@creator/photo/12345",
+                providerId = "tiktok",
+            ),
+            config = config,
+            hotConfig = null,
+            onProgress = { true },
+        )
+        assertTrue(tiktokOutcome is TaskExecutionOutcome.Resolved)
+        assertEquals("TikTok Clip", (tiktokOutcome as TaskExecutionOutcome.Resolved).media.title)
+
+        val redditOutcome = runner.executeTask(
+            task = RemoteTask(
+                id = "rd1",
+                kind = "resolve",
+                url = "https://v.redd.it/abc123xyz",
+                providerId = "reddit",
+            ),
+            config = config,
+            hotConfig = null,
+            onProgress = { true },
+        )
+        assertTrue(redditOutcome is TaskExecutionOutcome.Resolved)
+        assertEquals("https://v.redd.it/abc123xyz/HLSPlaylist.m3u8", (redditOutcome as TaskExecutionOutcome.Resolved).media.url)
+
+        val threadsOutcome = runner.executeTask(
+            task = RemoteTask(
+                id = "th1",
+                kind = "resolve",
+                url = "https://www.threads.net/@creator/post/C12345",
+                providerId = "threads",
+            ),
+            config = config,
+            hotConfig = null,
+            onProgress = { true },
+        )
+        assertTrue(threadsOutcome is TaskExecutionOutcome.Resolved)
+        assertEquals("Threads post caption", (threadsOutcome as TaskExecutionOutcome.Resolved).media.title)
+
+        val directOutcome = runner.executeTask(
+            task = RemoteTask(
+                id = "dir1",
+                kind = "resolve",
+                url = "https://cdn.example.com/files/sample-clip.mp4",
+                providerId = "direct",
+            ),
+            config = config,
+            hotConfig = null,
+            onProgress = { true },
+        )
+        assertTrue(directOutcome is TaskExecutionOutcome.Resolved)
+        assertEquals("sample-clip", (directOutcome as TaskExecutionOutcome.Resolved).media.title)
+
+        val genericOutcome = runner.executeTask(
+            task = RemoteTask(
+                id = "gen1",
+                kind = "resolve",
+                url = "https://blog.example.com/watch-this",
+                providerId = "generic",
+            ),
+            config = config,
+            hotConfig = null,
+            onProgress = { true },
+        )
+        assertTrue(genericOutcome is TaskExecutionOutcome.Resolved)
+        assertEquals("Generic Video Page", (genericOutcome as TaskExecutionOutcome.Resolved).media.title)
+    }
 }

@@ -4,8 +4,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -73,6 +75,103 @@ class OkHttpFetcher(
             HttpTextResponse(
                 body = String(out.toByteArray(), Charsets.UTF_8),
                 url = opened.finalUrl.toString(),
+                status = response.code,
+                headers = extractHeaders(response),
+            )
+        }
+    }
+
+    override suspend fun head(
+        url: HttpUrl,
+        headers: Map<String, String>,
+        allowPrivateAddresses: Boolean,
+        timeoutMs: Long,
+        userAgent: String,
+        isCancelled: () -> Boolean,
+    ): HttpHeadResponse = withContext(Dispatchers.IO) {
+        val opened = openWithRedirects(
+            initialUrl = url,
+            headers = headers,
+            keepCookies = false,
+            allowPrivateAddresses = allowPrivateAddresses,
+            timeoutMs = timeoutMs,
+            userAgent = userAgent,
+            allowUrl = { true },
+            isCancelled = isCancelled,
+            method = "HEAD",
+        )
+        opened.response.use { response ->
+            val contentType = response.header("content-type")
+            val contentLength = response.header("content-length")?.toLongOrNull()?.takeIf { it > 0L }
+            HttpHeadResponse(
+                status = response.code,
+                contentType = contentType,
+                contentLength = contentLength,
+                url = opened.finalUrl.toString(),
+            )
+        }
+    }
+
+    override suspend fun fetchNoFollow(
+        url: HttpUrl,
+        maxBytes: Long,
+        headers: Map<String, String>,
+        allowPrivateAddresses: Boolean,
+        timeoutMs: Long,
+        userAgent: String,
+        isCancelled: () -> Boolean,
+    ): HttpTextResponse = withContext(Dispatchers.IO) {
+        validateDestination(url, allowPrivateAddresses)
+        val client = baseClient.newBuilder()
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .callTimeout(timeoutMs.coerceAtLeast(1_000L), TimeUnit.MILLISECONDS)
+            .build()
+        val reqBuilder = Request.Builder().url(url).get()
+        reqBuilder.header("User-Agent", userAgent)
+        for ((k, v) in headers) reqBuilder.header(k, v)
+        val call = client.newCall(reqBuilder.build())
+        val response = executeCall(call, isCancelled)
+        response.use { resp ->
+            val bodyText = readBoundedText(resp, maxBytes, isCancelled)
+            HttpTextResponse(
+                body = bodyText,
+                url = url.toString(),
+                status = resp.code,
+                headers = extractHeaders(resp),
+            )
+        }
+    }
+
+    override suspend fun postForm(
+        url: HttpUrl,
+        formBody: String,
+        headers: Map<String, String>,
+        maxBytes: Long,
+        allowPrivateAddresses: Boolean,
+        timeoutMs: Long,
+        userAgent: String,
+        isCancelled: () -> Boolean,
+    ): HttpTextResponse = withContext(Dispatchers.IO) {
+        validateDestination(url, allowPrivateAddresses)
+        val client = baseClient.newBuilder()
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .callTimeout(timeoutMs.coerceAtLeast(1_000L), TimeUnit.MILLISECONDS)
+            .build()
+        val body = formBody.toRequestBody("application/x-www-form-urlencoded".toMediaType())
+        val reqBuilder = Request.Builder().url(url).post(body)
+        reqBuilder.header("User-Agent", userAgent)
+        for ((k, v) in headers) reqBuilder.header(k, v)
+        val call = client.newCall(reqBuilder.build())
+        val response = executeCall(call, isCancelled)
+        response.use { resp ->
+            val bodyText = readBoundedText(resp, maxBytes, isCancelled)
+            HttpTextResponse(
+                body = bodyText,
+                url = url.toString(),
+                status = resp.code,
+                headers = extractHeaders(resp),
             )
         }
     }
@@ -198,6 +297,7 @@ class OkHttpFetcher(
         userAgent: String,
         allowUrl: (HttpUrl) -> Boolean,
         isCancelled: () -> Boolean,
+        method: String = "GET",
     ): OpenedHttp {
         val client = baseClient.newBuilder()
             .followRedirects(false)
@@ -211,19 +311,7 @@ class OkHttpFetcher(
 
         for (hop in 0..DEFAULT_MAX_REDIRECTS) {
             if (isCancelled()) throw seraError(SeraErrorCode.CANCELLED)
-            if (current.scheme != "http" && current.scheme != "https") {
-                throw seraError(SeraErrorCode.BLOCKED_ADDRESS, detail = "redirect to ${current.scheme}:")
-            }
-            if (current.encodedUsername.isNotEmpty() || current.encodedPassword.isNotEmpty()) {
-                throw seraError(SeraErrorCode.BLOCKED_ADDRESS, detail = "credentials in url")
-            }
-            val bareHost = current.host.lowercase().trimEnd('.')
-            if (!allowPrivateAddresses && isIpLiteral(bareHost) && !isPublicAddress(bareHost)) {
-                throw seraError(SeraErrorCode.BLOCKED_ADDRESS, detail = "non-public address $bareHost")
-            }
-            if (!allowPrivateAddresses && current.port !in ALLOWED_PORTS) {
-                throw seraError(SeraErrorCode.BLOCKED_ADDRESS, detail = "port ${current.port}")
-            }
+            validateDestination(current, allowPrivateAddresses)
             if (hop > 0 && current.port !in ALLOWED_PORTS && current.port != initialUrl.port) {
                 throw seraError(SeraErrorCode.BLOCKED_ADDRESS, detail = "redirect to port ${current.port}")
             }
@@ -238,7 +326,12 @@ class OkHttpFetcher(
                 )
             }
 
-            val reqBuilder = Request.Builder().url(current).get()
+            val reqBuilder = Request.Builder().url(current)
+            if (method.equals("HEAD", ignoreCase = true)) {
+                reqBuilder.head()
+            } else {
+                reqBuilder.get()
+            }
             reqBuilder.header("User-Agent", userAgent)
             reqBuilder.header("Accept-Language", "en-US,en;q=0.9")
             reqBuilder.header("Accept", "*/*")
@@ -258,29 +351,7 @@ class OkHttpFetcher(
             }
 
             val call = client.newCall(reqBuilder.build())
-            val response = try {
-                if (isCancelled()) {
-                    call.cancel()
-                    throw seraError(SeraErrorCode.CANCELLED)
-                }
-                call.execute()
-            } catch (error: SeraException) {
-                throw error
-            } catch (error: UnknownHostException) {
-                throw seraError(
-                    SeraErrorCode.INVALID_URL,
-                    message = "We couldn't find that site.",
-                    hint = "Check the address and try again.",
-                    detail = error.message,
-                    cause = error,
-                )
-            } catch (error: InterruptedIOException) {
-                if (isCancelled()) throw seraError(SeraErrorCode.CANCELLED, cause = error)
-                throw seraError(SeraErrorCode.TIMEOUT, cause = error)
-            } catch (error: IOException) {
-                if (isCancelled()) throw seraError(SeraErrorCode.CANCELLED, cause = error)
-                throw seraError(SeraErrorCode.NETWORK_ERROR, detail = error.message, cause = error)
-            }
+            val response = executeCall(call, isCancelled)
 
             if (response.code in 300..399) {
                 val location = response.header("location")
@@ -301,6 +372,79 @@ class OkHttpFetcher(
         }
 
         throw seraError(SeraErrorCode.NETWORK_ERROR, detail = "redirect loop")
+    }
+
+    private fun validateDestination(current: HttpUrl, allowPrivateAddresses: Boolean) {
+        if (current.scheme != "http" && current.scheme != "https") {
+            throw seraError(SeraErrorCode.BLOCKED_ADDRESS, detail = "redirect to ${current.scheme}:")
+        }
+        if (current.encodedUsername.isNotEmpty() || current.encodedPassword.isNotEmpty()) {
+            throw seraError(SeraErrorCode.BLOCKED_ADDRESS, detail = "credentials in url")
+        }
+        val bareHost = current.host.lowercase().trimEnd('.')
+        if (!allowPrivateAddresses && isIpLiteral(bareHost) && !isPublicAddress(bareHost)) {
+            throw seraError(SeraErrorCode.BLOCKED_ADDRESS, detail = "non-public address $bareHost")
+        }
+        if (!allowPrivateAddresses && current.port !in ALLOWED_PORTS) {
+            throw seraError(SeraErrorCode.BLOCKED_ADDRESS, detail = "port ${current.port}")
+        }
+    }
+
+    private fun executeCall(call: okhttp3.Call, isCancelled: () -> Boolean): Response =
+        try {
+            if (isCancelled()) {
+                call.cancel()
+                throw seraError(SeraErrorCode.CANCELLED)
+            }
+            call.execute()
+        } catch (error: SeraException) {
+            throw error
+        } catch (error: UnknownHostException) {
+            throw seraError(
+                SeraErrorCode.INVALID_URL,
+                message = "We couldn't find that site.",
+                hint = "Check the address and try again.",
+                detail = error.message,
+                cause = error,
+            )
+        } catch (error: InterruptedIOException) {
+            if (isCancelled()) throw seraError(SeraErrorCode.CANCELLED, cause = error)
+            throw seraError(SeraErrorCode.TIMEOUT, cause = error)
+        } catch (error: IOException) {
+            if (isCancelled()) throw seraError(SeraErrorCode.CANCELLED, cause = error)
+            throw seraError(SeraErrorCode.NETWORK_ERROR, detail = error.message, cause = error)
+        }
+
+    private fun readBoundedText(response: Response, maxBytes: Long, isCancelled: () -> Boolean): String {
+        val body = response.body ?: return ""
+        val declared = body.contentLength()
+        if (declared > maxBytes) {
+            throw seraError(SeraErrorCode.TOO_LARGE, detail = "content-length $declared > $maxBytes")
+        }
+        val out = ByteArrayOutputStream()
+        val buf = ByteArray(16 * 1024)
+        var total = 0L
+        body.byteStream().use { stream ->
+            while (true) {
+                if (isCancelled()) throw seraError(SeraErrorCode.CANCELLED)
+                val read = stream.read(buf)
+                if (read < 0) break
+                total += read
+                if (total > maxBytes) {
+                    throw seraError(SeraErrorCode.TOO_LARGE, detail = "body exceeded $maxBytes bytes")
+                }
+                out.write(buf, 0, read)
+            }
+        }
+        return String(out.toByteArray(), Charsets.UTF_8)
+    }
+
+    private fun extractHeaders(response: Response): Map<String, String> {
+        val map = LinkedHashMap<String, String>()
+        for (i in 0 until response.headers.size) {
+            map[response.headers.name(i).lowercase()] = response.headers.value(i)
+        }
+        return map
     }
 
     private fun originOf(url: HttpUrl): String = "${url.scheme}://${url.host.lowercase()}:${url.port}"
