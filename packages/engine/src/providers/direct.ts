@@ -1,7 +1,8 @@
 import type { ContainerFormat, MediaKind, ProviderCapabilities } from '@sera/contracts/types';
 import { declare } from './capabilities.js';
 import { seraError } from '../errors.js';
-import { MEDIA_EXTENSIONS, urlExtension } from '../security/url.js';
+import { normalizeContainer as normalizeFormatContainer } from '../normalize/formats.js';
+import { hostMatchesAny, MEDIA_EXTENSIONS, parseUserUrl, urlExtension } from '../security/url.js';
 import { formatBytes } from '../util/format.js';
 import { sanitizeStem } from '../util/filename.js';
 import type {
@@ -219,7 +220,10 @@ const ARCHIVE_DOC_MIMES: Readonly<Record<string, ContainerFormat>> = {
 
 export function classify(contentType: string, extension: string): MediaKind {
   if (contentType === 'image/gif' || (!contentType && extension === 'gif')) return 'gif';
-  if (contentType.startsWith('image/') || (!contentType && IMAGE_EXTS.has(extension)))
+  if (
+    (contentType.startsWith('image/') && !contentType.includes('svg')) ||
+    (!contentType && extension !== 'svg' && IMAGE_EXTS.has(extension))
+  )
     return 'image';
   if (contentType.startsWith('video/') || (!contentType && VIDEO_EXTS.has(extension)))
     return 'video';
@@ -239,6 +243,21 @@ export function classify(contentType: string, extension: string): MediaKind {
   }
   if (contentType.includes('mpegurl') || contentType.includes('dash+xml')) return 'video';
   return 'unknown';
+}
+
+export function isSafeProviderMediaUrl(raw: unknown, context: ProviderContext): raw is string {
+  if (typeof raw !== 'string') return false;
+  try {
+    const { url } = parseUserUrl(raw, {
+      allowPrivateAddresses: context.config.allowPrivateAddresses,
+    });
+    if (url.protocol !== 'https:') return false;
+    if (hostMatchesAny(url.hostname, context.config.blockedHosts)) return false;
+    context.allowUrl?.(url);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function normalizeContainer(contentType: string, extension: string): ContainerFormat {
@@ -265,33 +284,5 @@ export function normalizeContainer(contentType: string, extension: string): Cont
   const mapped = fromType[contentType];
   if (mapped) return mapped;
 
-  const normalized = extension === 'jpeg' ? 'jpg' : extension === 'm4v' ? 'mp4' : extension;
-  const known: readonly string[] = [
-    'mp4',
-    'webm',
-    'mov',
-    'mkv',
-    'mp3',
-    'm4a',
-    'aac',
-    'opus',
-    'ogg',
-    'wav',
-    'flac',
-    'gif',
-    'jpg',
-    'png',
-    'webp',
-    'avif',
-    'pdf',
-    'iso',
-    'zip',
-    'tar',
-    '7z',
-    'apk',
-    'dmg',
-    'exe',
-    'epub',
-  ];
-  return (known.includes(normalized) ? normalized : 'bin') as ContainerFormat;
+  return normalizeFormatContainer(extension, 'bin');
 }

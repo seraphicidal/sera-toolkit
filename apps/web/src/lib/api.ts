@@ -29,11 +29,15 @@ const NETWORK_FAILURE: JobError = {
 };
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers = new Headers(init?.headers);
+  if (init?.body !== undefined && !headers.has('content-type')) {
+    headers.set('content-type', 'application/json');
+  }
   let response: Response;
   try {
     response = await fetch(path, {
       ...init,
-      headers: { 'content-type': 'application/json', ...init?.headers },
+      headers,
     });
   } catch {
     throw new ApiError(NETWORK_FAILURE);
@@ -55,7 +59,15 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
     );
   }
 
-  return (await response.json()) as T;
+  try {
+    return (await response.json()) as T;
+  } catch {
+    throw new ApiError({
+      code: 'INTERNAL',
+      message: 'Something went wrong on our side.',
+      retryable: true,
+    });
+  }
 }
 
 export function resolveMedia(url: string, signal?: AbortSignal): Promise<MediaInfo> {
@@ -79,9 +91,12 @@ export function createJob(request: CreateJobRequest): Promise<Job> {
 }
 
 export function getJob(id: string, signal?: AbortSignal): Promise<Job> {
-  return call<Job>(`/api/jobs/${id}`, { ...(signal ? { signal } : {}) });
+  return call<Job>(`/api/jobs/${encodeURIComponent(id)}`, {
+    cache: 'no-store',
+    ...(signal ? { signal } : {}),
+  });
 }
 
 export async function cancelJob(id: string): Promise<void> {
-  await fetch(`/api/jobs/${id}`, { method: 'DELETE' }).catch(() => undefined);
+  await fetch(`/api/jobs/${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => undefined);
 }

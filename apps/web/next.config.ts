@@ -1,22 +1,8 @@
 import { fileURLToPath } from 'node:url';
 import type { NextConfig } from 'next';
+import { buildCspHeader } from './src/lib/csp';
 
-const apiOrigin = (process.env.SERA_API_URL ?? 'http://127.0.0.1:4000').replace(/\/+$/, '');
-
-const csp = [
-  "default-src 'self'",
-  "script-src 'self' 'unsafe-inline'",
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob:",
-  "font-src 'self'",
-  "connect-src 'self'",
-  "media-src 'self' blob:",
-  "object-src 'none'",
-  "base-uri 'self'",
-  "form-action 'self'",
-  "frame-ancestors 'none'",
-  'upgrade-insecure-requests',
-].join('; ');
+const csp = buildCspHeader();
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
@@ -24,17 +10,9 @@ const nextConfig: NextConfig = {
   output: 'standalone',
   experimental: {
     isrFlushToDisk: false,
-    proxyTimeout: 180_000,
+    proxyTimeout: 600_000,
   },
   outputFileTracingRoot: fileURLToPath(new URL('../../', import.meta.url)),
-
-  rewrites() {
-    return Promise.resolve([
-      { source: '/api/:path*', destination: `${apiOrigin}/api/:path*` },
-      { source: '/health', destination: `${apiOrigin}/health` },
-      { source: '/ready', destination: `${apiOrigin}/ready` },
-    ]);
-  },
 
   headers() {
     return Promise.resolve([

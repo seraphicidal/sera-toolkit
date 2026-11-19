@@ -33,17 +33,26 @@ const DEFAULTS = {
   maxTracked: 10_000,
 } as const;
 
+const SWEEP_BATCH = 32;
+
 export class AbuseGuard {
-  private readonly entries = new Map<string, Entry>();
+  private readonly watching = new Map<string, Entry>();
+  private readonly blocked = new Map<string, Entry>();
   private readonly options: Required<AbuseGuardOptions>;
+  private watchCursor: IterableIterator<[string, Entry]> | undefined;
+  private blockedCursor: IterableIterator<[string, Entry]> | undefined;
 
   constructor(options: AbuseGuardOptions = {}) {
     this.options = { ...DEFAULTS, ...options };
   }
 
   assertAllowed(clientKey: string, now = Date.now()): void {
-    const entry = this.entries.get(clientKey);
-    if (!entry || entry.blockedUntil <= now) return;
+    const entry = this.blocked.get(clientKey);
+    if (!entry) return;
+    if (entry.blockedUntil <= now) {
+      this.blocked.delete(clientKey);
+      return;
+    }
 
     throw seraError('RATE_LIMITED', {
       message: "You're downloading too quickly.",
@@ -55,14 +64,24 @@ export class AbuseGuard {
   recordFailure(clientKey: string, code?: ErrorCode, now = Date.now()): void {
     if (code !== undefined && !countsAsAbuse(code)) return;
 
-    const existing = this.entries.get(clientKey);
+    const existingBlocked = this.blocked.get(clientKey);
+    if (existingBlocked && existingBlocked.blockedUntil > now) {
+      this.blocked.delete(clientKey);
+      this.blocked.set(clientKey, existingBlocked);
+      return;
+    }
+    if (existingBlocked) {
+      this.blocked.delete(clientKey);
+    }
+
+    const existing = this.watching.get(clientKey);
     const entry: Entry =
       existing && now - existing.windowStartedAt <= this.options.windowMs
         ? existing
         : {
             failures: 0,
             windowStartedAt: now,
-            blockedUntil: existing && existing.blockedUntil > now ? existing.blockedUntil : 0,
+            blockedUntil: 0,
           };
 
     entry.failures += 1;
@@ -70,35 +89,77 @@ export class AbuseGuard {
       entry.blockedUntil = now + this.options.cooldownMs;
       entry.failures = 0;
       entry.windowStartedAt = now;
+      this.watching.delete(clientKey);
+      this.blocked.delete(clientKey);
+      this.blocked.set(clientKey, entry);
+    } else {
+      this.watching.delete(clientKey);
+      this.watching.set(clientKey, entry);
     }
-
-    this.entries.set(clientKey, entry);
     this.evict(now);
   }
 
   recordSuccess(clientKey: string, now = Date.now()): void {
-    const entry = this.entries.get(clientKey);
-    if (!entry || entry.blockedUntil > now) return;
-    entry.blockedUntil = 0;
+    const blocked = this.blocked.get(clientKey);
+    if (blocked && blocked.blockedUntil > now) return;
+    if (blocked) this.blocked.delete(clientKey);
+
+    const entry = this.watching.get(clientKey);
+    if (!entry) return;
     entry.failures = Math.max(0, entry.failures - 1);
-    if (entry.failures === 0) this.entries.delete(clientKey);
+    if (entry.failures === 0) {
+      this.watching.delete(clientKey);
+    } else {
+      this.watching.delete(clientKey);
+      this.watching.set(clientKey, entry);
+    }
   }
 
   get size(): number {
-    return this.entries.size;
+    return this.watching.size + this.blocked.size;
+  }
+
+  private sweepExpired(now: number): void {
+    if (this.watching.size > 0) {
+      this.watchCursor ??= this.watching.entries();
+      for (let i = 0; i < SWEEP_BATCH; i += 1) {
+        const next = this.watchCursor.next();
+        if (next.done) {
+          this.watchCursor = undefined;
+          break;
+        }
+        if (now - next.value[1].windowStartedAt > this.options.windowMs) {
+          this.watching.delete(next.value[0]);
+        }
+      }
+    }
+    if (this.blocked.size > 0) {
+      this.blockedCursor ??= this.blocked.entries();
+      for (let i = 0; i < SWEEP_BATCH; i += 1) {
+        const next = this.blockedCursor.next();
+        if (next.done) {
+          this.blockedCursor = undefined;
+          break;
+        }
+        if (next.value[1].blockedUntil <= now) {
+          this.blocked.delete(next.value[0]);
+        }
+      }
+    }
   }
 
   private evict(now: number): void {
-    if (this.entries.size <= this.options.maxTracked) return;
-    for (const [key, entry] of this.entries) {
-      const stale =
-        now - entry.windowStartedAt > this.options.windowMs && entry.blockedUntil <= now;
-      if (stale) this.entries.delete(key);
-    }
-    while (this.entries.size > this.options.maxTracked) {
-      const oldest = this.entries.keys().next();
+    if (this.size <= this.options.maxTracked) return;
+    this.sweepExpired(now);
+    while (this.size > this.options.maxTracked && this.watching.size > 0) {
+      const oldest = this.watching.keys().next();
       if (oldest.done) break;
-      this.entries.delete(oldest.value);
+      this.watching.delete(oldest.value);
+    }
+    while (this.size > this.options.maxTracked && this.blocked.size > 0) {
+      const oldest = this.blocked.keys().next();
+      if (oldest.done) break;
+      this.blocked.delete(oldest.value);
     }
   }
 }

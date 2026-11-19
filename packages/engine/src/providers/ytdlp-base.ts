@@ -1,11 +1,11 @@
-import type { ContainerFormat, MediaInfoType, ProviderCapabilities } from '@sera/contracts/types';
+import type { MediaInfoType, ProviderCapabilities } from '@sera/contracts/types';
 import { subtitleTracks } from './subtitles.js';
 import { declare } from './capabilities.js';
 import { seraError } from '../errors.js';
 import { assertNotDrmProtected } from '../extract/ytdlp.js';
 import type { YtdlpInfo, YtdlpThumbnail } from '../extract/ytdlp-types.js';
 import { num, str } from '../extract/ytdlp-types.js';
-import { entryFormats, toUsableFormats } from '../normalize/formats.js';
+import { entryFormats, normalizeContainer, toUsableFormats } from '../normalize/formats.js';
 import {
   buildAlternateContainerPlans,
   buildAudioPlans,
@@ -17,7 +17,11 @@ import {
   type PlanBuildOptions,
 } from '../normalize/plans.js';
 import { runStrategies, type ExtractionStrategy } from '../extract/strategy.js';
-import { hostMatchesAny } from '../security/url.js';
+import {
+  hostMatchesAny,
+  validateProviderUrl,
+  type ProviderUrlValidationOptions,
+} from '../security/url.js';
 import { truncate } from '../util/format.js';
 import type {
   DownloadPlan,
@@ -110,11 +114,17 @@ export abstract class YtdlpProvider implements MediaProvider {
       maxFilesizeBytes: context.config.maxFilesizeBytes,
     };
 
+    const urlValidation: ProviderUrlValidationOptions = {
+      allowPrivateAddresses: context.config.allowPrivateAddresses,
+      blockedHosts: context.config.blockedHosts,
+      ...(context.allowUrl ? { allowUrl: context.allowUrl } : {}),
+    };
+
     const entries = collectEntries(info).slice(0, context.config.maxItemsPerJob);
     const items: ResolvedItem[] = [];
 
     entries.forEach((entry, index) => {
-      const item = this.toItem(entry, index, planOptions);
+      const item = this.toItem(entry, index, planOptions, urlValidation);
       if (item) items.push(item);
     });
 
@@ -153,15 +163,21 @@ export abstract class YtdlpProvider implements MediaProvider {
 
     const author =
       str(info.uploader) ?? str(info.channel) ?? str(info.creator) ?? str(info.uploader_id);
-    const authorUrl = str(info.uploader_url) ?? str(info.channel_url);
-    const thumbnail = pickThumbnail(info) ?? items.find((i) => i.thumbnailUrl)?.thumbnailUrl;
+    const authorUrl = validateProviderUrl(
+      str(info.uploader_url) ?? str(info.channel_url),
+      urlValidation,
+    );
+    const thumbnail =
+      validateProviderUrl(pickThumbnail(info), urlValidation) ??
+      items.find((i) => i.thumbnailUrl)?.thumbnailUrl;
     const createdAt = parseTimestamp(info);
     const description = str(info.description);
+    const resolvedUrl = validateProviderUrl(str(info.webpage_url), urlValidation) ?? url.toString();
 
     return {
       provider: this.id,
       providerLabel: this.label,
-      url: str(info.webpage_url) ?? url.toString(),
+      url: resolvedUrl,
       type,
       title: str(info.title) ?? str(info.fulltitle) ?? this.fallbackTitle(url),
       ...(description ? { description: truncate(description, 500) } : {}),
@@ -179,6 +195,7 @@ export abstract class YtdlpProvider implements MediaProvider {
     entry: YtdlpInfo,
     index: number,
     planOptions: PlanBuildOptions,
+    urlValidation: ProviderUrlValidationOptions = {},
   ): ResolvedItem | undefined {
     const kind = kindOf(entry);
     const formats = toUsableFormats(entryFormats(entry));
@@ -186,7 +203,8 @@ export abstract class YtdlpProvider implements MediaProvider {
     const plans: DownloadPlan[] = [];
 
     if (kind === 'image') {
-      plans.push(...buildImagePlans(entry, str(entry.url)));
+      const directUrl = validateProviderUrl(str(entry.url), urlValidation);
+      plans.push(...buildImagePlans(entry, directUrl));
     } else if (kind === 'gif') {
       const videoPlans = buildVideoPlans(formats, duration, planOptions);
       plans.push(...buildGifPlans(true, videoPlans, duration, planOptions));
@@ -208,13 +226,23 @@ export abstract class YtdlpProvider implements MediaProvider {
 
     const width = num(entry.width) ?? plans.find((p) => p.width)?.width;
     const height = num(entry.height) ?? plans.find((p) => p.height)?.height;
-    const container = (str(entry.ext) ?? plans[0]?.container) as ContainerFormat | undefined;
-    const thumbnailUrl = pickThumbnail(entry);
-    const thumbnailFallbackUrl = str(entry.thumbnail);
+    const rawExt = str(entry.ext);
+    const container = rawExt
+      ? normalizeContainer(rawExt, plans[0]?.container ?? 'bin')
+      : plans[0]?.container;
+    const thumbnailUrl = validateProviderUrl(pickThumbnail(entry), urlValidation);
+    const thumbnailFallbackUrl = validateProviderUrl(str(entry.thumbnail), urlValidation);
     const subtitles = kind === 'video' || kind === 'audio' ? subtitleTracks(entry) : [];
     const title = str(entry.title);
     const filesize = num(entry.filesize) ?? num(entry.filesize_approx);
     const sourceId = str(entry.id);
+    const playlistIndex = num(entry.playlist_index);
+    const resolvedIndex =
+      playlistIndex !== undefined && playlistIndex >= 1 ? Math.trunc(playlistIndex) - 1 : index;
+    const isLive =
+      Boolean(entry.is_live) ||
+      entry.live_status === 'is_live' ||
+      entry.live_status === 'is_upcoming';
     const tags = {
       ...(str(entry.artist) ? { artist: str(entry.artist)! } : {}),
       ...(str(entry.album) ? { album: str(entry.album)! } : {}),
@@ -223,7 +251,7 @@ export abstract class YtdlpProvider implements MediaProvider {
 
     return {
       ...(sourceId ? { sourceId } : {}),
-      index,
+      index: resolvedIndex,
       kind,
       ...(title ? { title } : {}),
       ...(thumbnailUrl ? { thumbnailUrl } : {}),
@@ -237,7 +265,7 @@ export abstract class YtdlpProvider implements MediaProvider {
       ...(duration !== undefined ? { duration } : {}),
       ...(container ? { container } : {}),
       ...(filesize !== undefined ? { filesizeBytes: filesize } : {}),
-      ...(entry.is_live ? { isLive: true } : {}),
+      ...(isLive ? { isLive: true } : {}),
       plans: ensureRecommendations(plans),
     };
   }

@@ -139,16 +139,17 @@ export function registerMediaRoutes(app: FastifyInstance, engine: SeraEngine): v
           void engine.usage.record({ source: info.provider, kind: 'resolve', ok: true });
         return await reply.header('cache-control', 'no-store').send(info);
       } catch (error) {
-        if (!signal.aborted) {
-          abuse.recordFailure(error instanceof SeraError ? error.code : undefined);
-          if (!request.canary) {
-            void engine.usage.record({
-              source: engine.resolver.sourceOf(body.url),
-              kind: 'resolve',
-              ok: false,
-              code: SeraError.from(error).code,
-            });
-          }
+        if (signal.aborted) {
+          throw seraError('CANCELLED', { cause: error });
+        }
+        abuse.recordFailure(error instanceof SeraError ? error.code : undefined);
+        if (!request.canary) {
+          void engine.usage.record({
+            source: engine.resolver.sourceOf(body.url),
+            kind: 'resolve',
+            ok: false,
+            code: SeraError.from(error).code,
+          });
         }
         throw error;
       }
@@ -182,7 +183,7 @@ export function registerMediaRoutes(app: FastifyInstance, engine: SeraEngine): v
         abuse.recordFailure(error instanceof SeraError ? error.code : undefined);
         if (!request.canary) {
           void engine.usage.record({
-            source: 'instagram',
+            source: engine.resolver.sourceOf(body.url),
             kind: 'resolve',
             ok: false,
             code: SeraError.from(error).code,
@@ -215,32 +216,41 @@ export function registerMediaRoutes(app: FastifyInstance, engine: SeraEngine): v
         .send(cached.body);
     }
 
-    const data = await thumbnailCache.coalesce(
-      source,
-      async (coalescedSignal) => {
-        const response = await safeFetch(target, {
-          dispatcher: engine.resolver.dispatcher,
-          timeoutMs: 10_000,
-          maxBytes: MAX_THUMBNAIL_BYTES,
-          signal: coalescedSignal,
-          allowUrl: (url) =>
-            !hostMatchesAny(url.hostname, engine.config.blockedHosts) &&
-            !engine.resolver.isBlocked(url),
-        });
+    const abortSignal = clientAbortSignal(request, reply);
+    let data: { readonly body: Buffer; readonly contentType: string };
+    try {
+      data = await thumbnailCache.coalesce(
+        source,
+        async (coalescedSignal) => {
+          const response = await safeFetch(target, {
+            dispatcher: engine.resolver.dispatcher,
+            timeoutMs: 10_000,
+            maxBytes: MAX_THUMBNAIL_BYTES,
+            signal: coalescedSignal,
+            allowUrl: (url) =>
+              !hostMatchesAny(url.hostname, engine.config.blockedHosts) &&
+              !engine.resolver.isBlocked(url),
+          });
 
-        if (response.status >= 400) throw seraError('NOT_FOUND');
+          if (response.status >= 400) throw seraError('NOT_FOUND');
 
-        const contentType =
-          (header(response.headers, 'content-type') ?? '').split(';')[0]?.trim().toLowerCase() ??
-          '';
-        if (!IMAGE_TYPES.has(contentType))
-          throw seraError('NOT_FOUND', { detail: `thumb type ${contentType}` });
+          const contentType =
+            (header(response.headers, 'content-type') ?? '').split(';')[0]?.trim().toLowerCase() ??
+            '';
+          if (!IMAGE_TYPES.has(contentType))
+            throw seraError('NOT_FOUND', { detail: `thumb type ${contentType}` });
 
-        thumbnailCache.set(source, response.body, contentType);
-        return { body: response.body, contentType };
-      },
-      clientAbortSignal(request, reply),
-    );
+          thumbnailCache.set(source, response.body, contentType);
+          return { body: response.body, contentType };
+        },
+        abortSignal,
+      );
+    } catch (error) {
+      if (abortSignal.aborted) {
+        throw seraError('CANCELLED', { cause: error });
+      }
+      throw error;
+    }
 
     return reply
       .header('content-type', data.contentType)

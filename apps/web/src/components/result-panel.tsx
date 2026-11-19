@@ -134,20 +134,32 @@ export function ResultPanel({ job, onReset }: { readonly job: Job; readonly onRe
       )}
 
       <div className="mt-4 flex gap-2">
-        <a
-          href={isSafeDownloadPath(result.downloadPath) ? result.downloadPath : '#'}
-          download
-          className="flex h-12 flex-1 items-center justify-center gap-2 rounded-[var(--radius-input)] bg-[var(--color-accent)] text-[0.9375rem] font-medium text-[var(--color-accent-ink)] transition-colors hover:bg-[var(--color-accent-hover)]"
-        >
-          <DownloadIcon size={17} />
-          {result.isArchive ? 'Download ZIP' : 'Download'}
-        </a>
+        {safeMainUrl ? (
+          <a
+            href={safeMainUrl}
+            download
+            className="flex h-12 flex-1 items-center justify-center gap-2 rounded-[var(--radius-input)] bg-[var(--color-accent)] text-[0.9375rem] font-medium text-[var(--color-accent-ink)] transition-colors hover:bg-[var(--color-accent-hover)]"
+          >
+            <DownloadIcon size={17} />
+            {result.isArchive ? 'Download ZIP' : 'Download'}
+          </a>
+        ) : (
+          <button
+            type="button"
+            disabled
+            className="flex h-12 flex-1 cursor-not-allowed items-center justify-center gap-2 rounded-[var(--radius-input)] bg-[var(--color-accent)]/50 text-[0.9375rem] font-medium text-[var(--color-accent-ink)]"
+          >
+            <DownloadIcon size={17} />
+            Download unavailable
+          </button>
+        )}
 
         <button
           type="button"
           onClick={() => void copyMainLink()}
+          disabled={!safeMainUrl}
           aria-label="Copy download link"
-          className="flex h-12 cursor-pointer items-center justify-center gap-1.5 rounded-[var(--radius-input)] border border-[var(--color-line)] bg-[var(--color-surface)] px-4 text-[0.875rem] font-medium text-[var(--color-ink)] transition-colors hover:bg-[var(--color-sunken)]"
+          className="flex h-12 cursor-pointer items-center justify-center gap-1.5 rounded-[var(--radius-input)] border border-[var(--color-line)] bg-[var(--color-surface)] px-4 text-[0.875rem] font-medium text-[var(--color-ink)] transition-colors hover:bg-[var(--color-sunken)] disabled:cursor-not-allowed disabled:opacity-50"
         >
           {copiedMain ? (
             <>
@@ -170,36 +182,49 @@ export function ResultPanel({ job, onReset }: { readonly job: Job; readonly onRe
             {pluralize(result.files.length, 'file')} individually
           </summary>
           <ul className="mt-2 flex flex-col gap-1 border-l border-[var(--color-line)] pl-3">
-            {result.files.map((file) => (
-              <li
-                key={file.downloadPath || file.name}
-                className="flex items-center justify-between gap-2 py-1"
-              >
-                <a
-                  href={isSafeDownloadPath(file.downloadPath) ? file.downloadPath : '#'}
-                  download
-                  className="flex min-w-0 flex-1 items-center justify-between gap-3 text-[0.8125rem] text-[var(--color-ink-muted)] transition-colors hover:text-[var(--color-accent)]"
+            {result.files.map((file) => {
+              const safeItemUrl = isSafeDownloadPath(file.downloadPath)
+                ? file.downloadPath
+                : undefined;
+              return (
+                <li
+                  key={file.downloadPath || file.name}
+                  className="flex items-center justify-between gap-2 py-1"
                 >
-                  <span className="truncate">{file.name}</span>
-                  <span className="tabular shrink-0 text-[var(--color-ink-faint)]">
-                    {formatBytes(file.sizeBytes)}
-                  </span>
-                </a>
-                <button
-                  type="button"
-                  onClick={() => void copyItemLink(file.downloadPath)}
-                  aria-label={`Copy link for ${file.name}`}
-                  title="Copy link"
-                  className="grid size-7 shrink-0 cursor-pointer place-items-center rounded text-[var(--color-ink-faint)] transition-colors hover:bg-[var(--color-sunken)] hover:text-[var(--color-ink)]"
-                >
-                  {copiedFile === file.downloadPath ? (
-                    <CheckIcon size={13} className="text-[var(--color-success)]" />
+                  {safeItemUrl ? (
+                    <a
+                      href={safeItemUrl}
+                      download
+                      className="flex min-w-0 flex-1 items-center justify-between gap-3 text-[0.8125rem] text-[var(--color-ink-muted)] transition-colors hover:text-[var(--color-accent)]"
+                    >
+                      <span className="truncate">{file.name}</span>
+                      <span className="tabular shrink-0 text-[var(--color-ink-faint)]">
+                        {formatBytes(file.sizeBytes)}
+                      </span>
+                    </a>
                   ) : (
-                    <CopyIcon size={13} />
+                    <span className="flex min-w-0 flex-1 items-center justify-between gap-3 text-[0.8125rem] text-[var(--color-ink-faint)]">
+                      <span className="truncate">{file.name}</span>
+                      <span className="tabular shrink-0">{formatBytes(file.sizeBytes)}</span>
+                    </span>
                   )}
-                </button>
-              </li>
-            ))}
+                  <button
+                    type="button"
+                    disabled={!safeItemUrl}
+                    onClick={() => void copyItemLink(file.downloadPath)}
+                    aria-label={`Copy link for ${file.name}`}
+                    title="Copy link"
+                    className="grid size-7 shrink-0 cursor-pointer place-items-center rounded text-[var(--color-ink-faint)] transition-colors hover:bg-[var(--color-sunken)] hover:text-[var(--color-ink)] disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    {copiedFile === file.downloadPath ? (
+                      <CheckIcon size={13} className="text-[var(--color-success)]" />
+                    ) : (
+                      <CopyIcon size={13} />
+                    )}
+                  </button>
+                </li>
+              );
+            })}
           </ul>
         </details>
       )}

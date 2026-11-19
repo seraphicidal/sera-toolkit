@@ -30,14 +30,11 @@ for k, v in pairs(patch) do
   if k ~= 'progress' then current[k] = v end
 end
 if patch.progress then
-  if not current.progress then current.progress = {} end
-  local maxPercent = current.progress.percent or 0
+  local maxPercent = (current.progress and current.progress.percent) or 0
   if patch.progress.percent and patch.progress.percent > maxPercent then
     maxPercent = patch.progress.percent
   end
-  for pk, pv in pairs(patch.progress) do
-    current.progress[pk] = pv
-  end
+  current.progress = patch.progress
   current.progress.percent = maxPercent
 end
 current.updatedAt = ARGV[4]
@@ -91,19 +88,31 @@ export class RedisJobBackend implements JobBackend {
   }
 
   async submit(record: JobRecord): Promise<void> {
-    await this.write(record);
-    await this.connection.sadd(CLIENT_PREFIX + record.clientKey, record.id);
-    await this.connection.expire(CLIENT_PREFIX + record.clientKey, this.recordTtlSeconds);
-    await this.queue.add(
-      'download',
-      { jobId: record.id },
-      {
-        jobId: record.id,
-        attempts: 1,
-        removeOnComplete: { age: 3600, count: 1000 },
-        removeOnFail: { age: 86_400 },
-      },
-    );
+    await this.ready();
+    await this.connection
+      .multi()
+      .set(RECORD_PREFIX + record.id, JSON.stringify(record), 'EX', this.recordTtlSeconds)
+      .sadd(CLIENT_PREFIX + record.clientKey, record.id)
+      .expire(CLIENT_PREFIX + record.clientKey, this.recordTtlSeconds)
+      .exec();
+    try {
+      await this.queue.add(
+        'download',
+        { jobId: record.id },
+        {
+          jobId: record.id,
+          attempts: 1,
+          removeOnComplete: { age: 3600, count: 1000 },
+          removeOnFail: { age: 86_400 },
+        },
+      );
+    } catch (error) {
+      await Promise.allSettled([
+        this.connection.del(RECORD_PREFIX + record.id),
+        this.connection.srem(CLIENT_PREFIX + record.clientKey, record.id),
+      ]);
+      throw error;
+    }
   }
 
   async get(id: string): Promise<JobRecord | undefined> {
@@ -155,7 +164,8 @@ export class RedisJobBackend implements JobBackend {
     const ids = await this.connection.smembers(CLIENT_PREFIX + clientKey);
     if (!ids.length) return 0;
 
-    const records = await Promise.all(ids.map((id) => this.get(id)));
+    const rawRecords = await this.connection.mget(...ids.map((id) => RECORD_PREFIX + id));
+    const records = rawRecords.map((raw) => (raw ? parseRedisRecord(raw) : undefined));
     let count = 0;
     const stale: string[] = [];
     for (const [index, record] of records.entries()) {
@@ -219,15 +229,6 @@ export class RedisJobBackend implements JobBackend {
     await this.queue.close().catch(() => undefined);
     this.subscriber.disconnect();
     this.connection.disconnect();
-  }
-
-  private async write(record: JobRecord): Promise<void> {
-    await this.connection.set(
-      RECORD_PREFIX + record.id,
-      JSON.stringify(record),
-      'EX',
-      this.recordTtlSeconds,
-    );
   }
 }
 

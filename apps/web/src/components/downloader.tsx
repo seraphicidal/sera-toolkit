@@ -139,6 +139,8 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
     setInfo(undefined);
     setSelectedIds(new Set());
     setLabel(undefined);
+    setBatchQueue([]);
+    setBatchIndex(0);
   }, [initialInfo]);
 
   const clearAll = useCallback(() => {
@@ -210,35 +212,58 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
 
   const again = useCallback(
     (link: string) => {
+      if (
+        jobId &&
+        (phase === 'running' || phase === 'submitting' || (job && isRunning(job.state)))
+      ) {
+        void cancelJob(jobId);
+      }
+      setBatchQueue([]);
+      setBatchIndex(0);
       setUrl(link);
       void analyze(link);
       window.scrollTo({ top: 0, behavior: 'smooth' });
     },
-    [analyze],
+    [analyze, job, jobId, phase],
   );
 
-  useEffect(() => {
-    if (!info) return;
-    const kinds = availableKinds(info, selectedIds);
-    if (kinds.length > 0 && !kinds.includes(kind)) {
-      const fallbackKind = kinds[0];
-      if (fallbackKind) {
-        setKind(fallbackKind);
-        setLabel(qualityLabels(info, fallbackKind, selectedIds)[0]);
-        return;
+  const activeKinds = useMemo(
+    () => (info ? availableKinds(info, selectedIds) : []),
+    [info, selectedIds],
+  );
+  const pickerKind: SelectableKind = activeKinds.includes(kind)
+    ? kind
+    : (activeKinds[0] ?? kind);
+  const activeLabels = useMemo(
+    () => (info ? qualityLabels(info, pickerKind, selectedIds) : []),
+    [info, pickerKind, selectedIds],
+  );
+  const effectiveLabel = label && activeLabels.includes(label) ? label : activeLabels[0];
+
+  const handleToggleItem = useCallback((itemId: string) => {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(itemId)) {
+        next.delete(itemId);
+      } else if (next.size < MAX_SELECTED_ITEMS) {
+        next.add(itemId);
       }
-    }
-    const labels = qualityLabels(info, kind, selectedIds);
-    if (!labels.length) {
-      setLabel(undefined);
-      return;
-    }
-    setLabel((current) => (current && labels.includes(current) ? current : labels[0]));
-  }, [info, kind, selectedIds]);
+      return next;
+    });
+  }, []);
+
+  const handleSelectAllItems = useCallback(
+    (all: boolean) => {
+      setSelectedIds(
+        all && info ? selectItemsUpToMax(info.items, MAX_SELECTED_ITEMS) : new Set(),
+      );
+    },
+    [info],
+  );
 
   const selection = useMemo(
-    () => (info ? resolveSelection(info, selectedIds, kind, label) : undefined),
-    [info, selectedIds, kind, label],
+    () => (info ? resolveSelection(info, selectedIds, pickerKind, effectiveLabel) : undefined),
+    [info, selectedIds, pickerKind, effectiveLabel],
   );
 
   const singleItem =
@@ -249,7 +274,7 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
 
   const singleOption = singleItem?.options.find((option) => option.id === selection?.optionIds[0]);
   const subtitles = subtitleChoices(singleItem, singleOption);
-  const effectiveKind = singleOption?.kind ?? kind;
+  const effectiveKind = singleOption?.kind ?? pickerKind;
 
   const canTrim = Boolean(singleItem && (effectiveKind === 'video' || effectiveKind === 'audio'));
   const rawTrim: TrimSummary = useMemo(
@@ -535,19 +560,8 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
                 <ItemPicker
                   info={info}
                   selectedIds={selectedIds}
-                  onToggle={(itemId) =>
-                    setSelectedIds((current) => {
-                      const next = new Set(current);
-                      if (next.has(itemId)) next.delete(itemId);
-                      else next.add(itemId);
-                      return next;
-                    })
-                  }
-                  onSelectAll={(all) =>
-                    setSelectedIds(
-                      all ? selectItemsUpToMax(info.items, MAX_SELECTED_ITEMS) : new Set(),
-                    )
-                  }
+                  onToggle={handleToggleItem}
+                  onSelectAll={handleSelectAllItems}
                   onSelectIds={setSelectedIds}
                   maxItems={MAX_SELECTED_ITEMS}
                 />
@@ -556,12 +570,12 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
               <FormatPicker
                 info={info}
                 selectedIds={selectedIds}
-                kind={kind}
+                kind={pickerKind}
                 onKindChange={(nextKind) => {
                   setKind(nextKind);
                   setPreferredKind(nextKind);
                 }}
-                label={label}
+                label={effectiveLabel}
                 onLabelChange={setLabel}
               />
 
@@ -655,7 +669,7 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
         </>
       )}
 
-      {!importMode && <RecentDownloads onAgain={again} />}
+      {!importMode && <RecentDownloads onAgain={again} disabled={working} />}
     </div>
   );
 }

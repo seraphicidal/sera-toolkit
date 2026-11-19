@@ -76,6 +76,8 @@ export class MemoryJobBackend implements JobBackend {
     this.records.set(id, next);
     if (!isActive(next.state)) {
       this.untrackActive(next.clientKey, id);
+      const queuedIdx = this.waiting.indexOf(id);
+      if (queuedIdx !== -1) this.waiting.splice(queuedIdx, 1);
     }
     this.events.emit(id, next);
 

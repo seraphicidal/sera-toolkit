@@ -400,4 +400,24 @@ describe('a post only an account can read', () => {
     });
     expect(node.calls).toBe(0);
   });
+
+  it('stops immediately without escalating when cancelled', async () => {
+    const controller = new AbortController();
+    const primary = backend('oracle', {
+      result: seraError('SOURCE_BLOCKED'),
+    });
+    const fallback = backend('residential', { result: 'ok' });
+    const router = new ExtractionRouter({
+      primary,
+      logger: silentLogger(),
+      fallbacks: () => [fallback],
+      capabilitiesOf: caps(),
+    });
+    controller.abort();
+    await expect(router.resolve(instagram, 'youtube', controller.signal)).rejects.toMatchObject({
+      code: 'CANCELLED',
+    });
+    expect(primary.calls).toBe(0);
+    expect(fallback.calls).toBe(0);
+  });
 });

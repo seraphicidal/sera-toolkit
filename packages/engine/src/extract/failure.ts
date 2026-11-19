@@ -81,9 +81,19 @@ const BY_PHRASE: readonly (readonly [FailureClass, readonly string[]])[] = [
   ['SOURCE_ERROR', ['http error 5', 'internal server error', 'service unavailable']],
 ];
 
+const DEFINITIVE_CODES = new Set([
+  'UNSUPPORTED_SOURCE',
+  'PRIVATE_CONTENT',
+  'DRM_PROTECTED',
+  'BLOCKED_ADDRESS',
+  'CANCELLED',
+]);
+
 export function classifyFailure(error: unknown): FailureClass {
   const seraError = SeraError.from(error);
-  if (seraError.code === 'UNSUPPORTED_SOURCE') return 'UNSUPPORTED_MEDIA';
+  if (DEFINITIVE_CODES.has(seraError.code)) {
+    return FAILURE_BY_CODE[seraError.code] ?? 'EXTRACTOR_BUG';
+  }
   const haystack = `${seraError.message} ${seraError.detail ?? ''}`.toLowerCase();
 
   for (const [failure, phrases] of BY_PHRASE) {

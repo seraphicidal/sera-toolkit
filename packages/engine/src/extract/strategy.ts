@@ -50,15 +50,25 @@ export async function runStrategies(
 
   const attempts: StrategyAttempt[] = [];
   let firstError: unknown;
-  let previous: FailureClass | undefined;
+  const seenFailures = new Set<FailureClass>();
 
   for (const [index, strategy] of usable.entries()) {
-    if (previous && strategy.answers && !strategy.answers.includes(previous)) {
-      logger.info(
-        { provider: options.provider, strategy: strategy.id, failureClass: previous },
-        'skipping a strategy that does not answer this failure',
-      );
-      continue;
+    if (context.signal?.aborted) {
+      throw withLadder(seraError('CANCELLED'), attempts);
+    }
+    if (seenFailures.size && strategy.answers) {
+      const answersAny = strategy.answers.some((handled) => seenFailures.has(handled));
+      if (!answersAny) {
+        logger.info(
+          {
+            provider: options.provider,
+            strategy: strategy.id,
+            failureClass: attempts.at(-1)?.failure,
+          },
+          'skipping a strategy that does not answer this failure',
+        );
+        continue;
+      }
     }
     const started = Date.now();
     try {
@@ -78,6 +88,14 @@ export async function runStrategies(
       }
       return { media, strategy: strategy.id, attempts };
     } catch (error) {
+      if (context.signal?.aborted || SeraError.from(error).code === 'CANCELLED') {
+        throw withLadder(
+          SeraError.from(error).code === 'CANCELLED'
+            ? error
+            : seraError('CANCELLED', { cause: error }),
+          attempts,
+        );
+      }
       const failure = classifyFailure(error);
       const detail = SeraError.from(error).detail;
       attempts.push({
@@ -86,12 +104,15 @@ export async function runStrategies(
         durationMs: Date.now() - started,
         ...(detail ? { detail } : {}),
       });
-      if (index === 0) firstError = error;
-      previous = failure;
+      firstError ??= error;
+      seenFailures.add(failure);
 
       const next = usable
         .slice(index + 1)
-        .find((candidate) => !candidate.answers || candidate.answers.includes(failure));
+        .find(
+          (candidate) =>
+            !candidate.answers || candidate.answers.some((handled) => seenFailures.has(handled)),
+        );
       if (isDefinitive(failure) || !next) {
         logger.info(
           {

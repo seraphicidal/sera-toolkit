@@ -69,6 +69,16 @@ export function openImportChannel(target: Window, timeoutMs = 20_000): ImportCha
     fail = reject;
   });
 
+  let closed = false;
+  if (!opener || opener.closed) {
+    closed = true;
+    const noopClose = (): void => {
+      closed = true;
+    };
+    queueMicrotask(() => fail(new Error('no active opener window')));
+    return { received, close: noopClose };
+  }
+
   const onMessage = (event: MessageEvent): void => {
     const request = trustedImport(event, opener);
     if (!request) return;
@@ -83,6 +93,8 @@ export function openImportChannel(target: Window, timeoutMs = 20_000): ImportCha
   }, timeoutMs);
 
   const close = (): void => {
+    if (closed) return;
+    closed = true;
     target.clearTimeout(timer);
     target.removeEventListener('message', onMessage);
   };

@@ -2,8 +2,11 @@ import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { seraError, SeraError } from '../errors.js';
 import { confineToHttp } from '../security/egress.js';
+import { scrubCredentials } from '../security/url.js';
 import { run } from '../util/spawn.js';
 import type { YtdlpInfo } from './ytdlp-types.js';
+
+export { scrubCredentials };
 
 export interface YtdlpOptions {
   readonly binary: string;
@@ -127,16 +130,13 @@ export async function dumpInfo(
 ): Promise<YtdlpInfo> {
   assertHttpUrl(url);
   const args = baseArgs(options);
-  let playlistEnd = options.playlist ? 100 : undefined;
-  if (options.maxEntries !== undefined) {
-    playlistEnd = Math.min(playlistEnd ?? options.maxEntries, options.maxEntries);
-  }
   if (options.playlist) {
     const index = args.indexOf('--no-playlist');
     if (index >= 0) args.splice(index, 1);
-    args.push('--yes-playlist');
+    const playlistEnd =
+      options.maxEntries !== undefined ? Math.min(100, options.maxEntries) : 100;
+    args.push('--yes-playlist', '--playlist-end', String(playlistEnd));
   }
-  if (playlistEnd !== undefined) args.push('--playlist-end', String(playlistEnd));
   if (options.flatPlaylist) args.push('--flat-playlist');
 
   args.push('--dump-single-json', '--', url);
@@ -161,7 +161,7 @@ export async function dumpInfo(
     });
   }
   assertNotDrmProtected(parsed);
-  if (result.stdout.length <= 4 * 1024 * 1024) {
+  if (result.stdout.length <= 1024 * 1024) {
     return { ...parsed, _rawJson: result.stdout };
   }
   return parsed;
@@ -242,6 +242,7 @@ export async function download(request: DownloadRequest): Promise<void> {
   }
 
   const bytesByFormat = new Map<string, number>();
+  const totalsByFormat = new Map<string, number>();
   let lastPercent = 0;
 
   const emit = (line: string): void => {
@@ -262,17 +263,23 @@ export async function download(request: DownloadRequest): Promise<void> {
     const done = parseNumeric(downloaded);
     if (done === undefined) return;
 
-    bytesByFormat.set(formatId && formatId !== 'NA' ? formatId : 'default', done);
+    const streamKey = formatId && formatId !== 'NA' ? formatId : 'default';
+    bytesByFormat.set(streamKey, done);
     const bytesDownloaded = sum(bytesByFormat);
 
     const totalForStream = parseNumeric(total) ?? parseNumeric(totalEstimate);
+    if (totalForStream !== undefined) {
+      totalsByFormat.set(streamKey, Math.max(done, totalForStream));
+    }
     const bytesTotal =
       request.expectedTotalBytes ??
-      (bytesByFormat.size === 1 && totalForStream !== undefined ? totalForStream : undefined);
+      (totalsByFormat.size === bytesByFormat.size && totalsByFormat.size > 0
+        ? sum(totalsByFormat)
+        : undefined);
 
     if (bytesTotal && bytesTotal > 0) {
       lastPercent = Math.max(lastPercent, Math.min(99.5, (bytesDownloaded / bytesTotal) * 100));
-    } else if (status === 'finished') {
+    } else if (status === 'finished' && !request.mergeContainer) {
       lastPercent = Math.max(lastPercent, 99);
     }
 
@@ -389,10 +396,6 @@ export async function version(binary: string, timeoutMs = 10_000): Promise<strin
 
 export function resetVersionCache(): void {
   versionCache.clear();
-}
-
-export function scrubCredentials(text: string): string {
-  return text.replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]*:[^\s/@]*@/gi, '$1[redacted]@');
 }
 
 export function classifyYtdlpFailure(stderr: string, exitCode: number): SeraError {

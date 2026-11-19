@@ -2,6 +2,8 @@
 
 set "HERE=%~dp0"
 set "UPDATELOG=%HERE%ytdlp-update.log"
+if not defined NODE for /f "delims=" %%N in ('where node.exe 2^>nul') do if not defined NODE set "NODE=%%N"
+if not defined NODE set "NODE=C:\Program Files\nodejs\node.exe"
 
 if /i "%~1"=="daily" goto daily
 

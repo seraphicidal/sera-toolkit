@@ -6,6 +6,7 @@ import type { SeraEngine } from '@sera/engine';
 declare module 'fastify' {
   interface FastifyRequest {
     clientKey: string;
+    clientKeys: readonly [string, string];
     canary: boolean;
   }
 }
@@ -87,6 +88,17 @@ export function normalizeClientAddress(raw: string): string {
     const num = parseInt(p || '0', 16);
     return isNaN(num) ? '0' : num.toString(16);
   });
+  if (
+    parts.length === 8 &&
+    parts.slice(0, 5).every((p) => parseInt(p || '0', 16) === 0) &&
+    parseInt(parts[5] ?? '0', 16) === 0xffff
+  ) {
+    const w6 = parseInt(parts[6] ?? '0', 16);
+    const w7 = parseInt(parts[7] ?? '0', 16);
+    if (!Number.isNaN(w6) && !Number.isNaN(w7)) {
+      return `${(w6 >>> 8) & 0xff}.${w6 & 0xff}.${(w7 >>> 8) & 0xff}.${w7 & 0xff}`;
+    }
+  }
   while (first4.length < 4) first4.push('0');
   return `${first4.join(':')}::/64`;
 }
@@ -104,6 +116,18 @@ export function computeClientKey(
     .slice(0, 22);
 }
 
+export function computeClientKeys(
+  address: string,
+  secret: string | Buffer,
+  now = Date.now(),
+  rotationIntervalMs = 24 * 60 * 60_000,
+): readonly [string, string] {
+  return [
+    computeClientKey(address, secret, now, rotationIntervalMs),
+    computeClientKey(address, secret, Math.max(0, now - rotationIntervalMs), rotationIntervalMs),
+  ];
+}
+
 function addressOf(request: FastifyRequest): string {
   return request.ip;
 }
@@ -116,11 +140,14 @@ export const clientKeyPlugin = fp(function clientKeyPlugin(
   const { config } = options.engine;
 
   app.decorateRequest('clientKey', '');
+  app.decorateRequest('clientKeys', undefined as unknown as readonly [string, string]);
   app.decorateRequest('canary', false);
   app.addHook('onRequest', (request, _reply, next) => {
     request.canary = isCanaryToken(request.headers['x-sera-canary'], config.canaryToken);
     const address = normalizeClientAddress(addressOf(request));
-    request.clientKey = computeClientKey(address, config.secret);
+    const keys = computeClientKeys(address, config.secret);
+    request.clientKey = keys[0];
+    request.clientKeys = keys;
     next();
   });
 

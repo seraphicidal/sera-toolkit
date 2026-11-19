@@ -6,6 +6,10 @@ import { clientKeyPlugin } from './plugins/client.js';
 import { errorHandlerPlugin } from './plugins/errors.js';
 import { registerAdminRoutes } from './routes/admin.js';
 import { registerExtractionNodeRoutes } from './routes/extraction-node.js';
+import {
+  createExtractionUpdatesService,
+  registerExtractionUpdateRoutes,
+} from './routes/extraction-updates.js';
 import { registerJobRoutes } from './routes/jobs.js';
 import { registerLegalRoutes } from './routes/legal.js';
 import { registerMediaRoutes } from './routes/media.js';
@@ -14,10 +18,15 @@ import { registerMetaRoutes } from './routes/meta.js';
 export async function buildServer(engine: SeraEngine): Promise<FastifyInstance> {
   const { config } = engine;
 
+  const trustProxy =
+    typeof config.trustProxy === 'number'
+      ? (_address: string, hop: number) => hop <= (config.trustProxy as number)
+      : config.trustProxy;
+
   const app = Fastify({
     loggerInstance: engine.logger as FastifyBaseLogger,
-    trustProxy: config.trustProxy,
-    bodyLimit: 64 * 1024,
+    trustProxy,
+    bodyLimit: 256 * 1024,
     routerOptions: { maxParamLength: 4096 },
     logController: new LogController({ disableRequestLogging: true }),
     requestTimeout: 0,
@@ -67,7 +76,11 @@ export async function buildServer(engine: SeraEngine): Promise<FastifyInstance> 
   registerMetaRoutes(app, engine);
   registerMediaRoutes(app, engine);
   registerJobRoutes(app, engine);
-  registerExtractionNodeRoutes(app, engine);
+  const updates = config.extractionNodes.enabled
+    ? createExtractionUpdatesService(engine)
+    : undefined;
+  registerExtractionNodeRoutes(app, engine, updates);
+  if (updates) registerExtractionUpdateRoutes(app, engine, updates);
   registerAdminRoutes(app, engine);
   registerLegalRoutes(app, engine);
 

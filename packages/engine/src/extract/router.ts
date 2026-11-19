@@ -1,10 +1,16 @@
-import type { ProviderCapabilities } from '@sera/contracts/types';
-import { SeraError } from '../errors.js';
+import type { NodeNetworkClass, ProviderCapabilities } from '@sera/contracts/types';
+import { SeraError, seraError } from '../errors.js';
 import type { Logger } from '../logging.js';
 import type { ResolvedMedia } from '../providers/types.js';
 import { classifyFailure, isDefinitive, isEgressProblem, type FailureClass } from './failure.js';
 
-export type NetworkClass = 'datacenter' | 'residential' | 'unknown';
+export type NetworkClass = NodeNetworkClass;
+
+const NETWORK_RANK: Record<NetworkClass, number> = {
+  residential: 0,
+  unknown: 1,
+  datacenter: 2,
+};
 
 export interface ExtractionBackend {
   readonly id: string;
@@ -18,7 +24,14 @@ export interface ExtractionBackend {
     url: URL,
     providerId: string,
     signal?: AbortSignal,
-  ): Promise<ResolvedMedia | { readonly media: ResolvedMedia; readonly rawInfoJson?: string }>;
+  ): Promise<
+    | ResolvedMedia
+    | {
+        readonly media: ResolvedMedia;
+        readonly rawInfoJson?: string;
+        readonly networkClass?: NetworkClass;
+      }
+  >;
 }
 
 export interface ExtractionOutcome {
@@ -77,7 +90,8 @@ export class ExtractionRouter {
         (backend) =>
           backend.isHealthy() &&
           (backend.providers.length === 0 || backend.providers.includes(providerId)),
-      );
+      )
+      .sort((a, b) => NETWORK_RANK[a.networkClass] - NETWORK_RANK[b.networkClass]);
 
     const preferRemote =
       !capabilities.cloudExtraction &&
@@ -91,8 +105,22 @@ export class ExtractionRouter {
     failure: FailureClass,
     from: ExtractionBackend,
     to: ExtractionBackend,
+    errorCode?: string,
   ): boolean {
     if (isEgressProblem(failure)) return to.networkClass !== from.networkClass;
+    if (failure === 'STREAM_403') {
+      return to.networkClass === 'residential' && from.networkClass !== 'residential';
+    }
+    if (
+      from.kind === 'local' &&
+      from.networkClass !== 'residential' &&
+      to.networkClass === 'residential' &&
+      (failure === 'RATE_LIMITED' ||
+        (failure === 'LOGIN_REQUIRED' && errorCode !== 'PROVIDER_AUTH_REQUIRED') ||
+        failure === 'EXTRACTOR_BUG')
+    ) {
+      return true;
+    }
     if (from.kind === 'remote') {
       return failure === 'NETWORK_ERROR' || failure === 'UPSTREAM_TIMEOUT';
     }
@@ -123,7 +151,15 @@ export class ExtractionRouter {
     providerId: string,
     failure: FailureClass,
     signal?: AbortSignal,
-  ): Promise<{ media: ResolvedMedia; backend: string; rawInfoJson?: string } | undefined> {
+  ): Promise<
+    | {
+        media: ResolvedMedia;
+        backend: string;
+        networkClass: NetworkClass;
+        rawInfoJson?: string;
+      }
+    | undefined
+  > {
     if (isDefinitive(failure)) return undefined;
     const backend = this.deps.authenticated?.(providerId);
     if (!backend?.isHealthy()) return undefined;
@@ -131,12 +167,22 @@ export class ExtractionRouter {
       const outcome = await backend.resolve(url, providerId, signal);
       const media = 'media' in outcome ? outcome.media : outcome;
       const rawInfoJson = 'rawInfoJson' in outcome ? outcome.rawInfoJson : undefined;
+      const networkClass =
+        'networkClass' in outcome && outcome.networkClass
+          ? outcome.networkClass
+          : backend.networkClass;
       this.deps.logger.info(
         { provider: providerId, backend: backend.id, items: media.items.length },
         'extraction succeeded on a node holding an account',
       );
-      return { media, backend: backend.id, ...(rawInfoJson ? { rawInfoJson } : {}) };
+      return {
+        media,
+        backend: backend.id,
+        networkClass,
+        ...(rawInfoJson ? { rawInfoJson } : {}),
+      };
     } catch (error) {
+      rethrowIfCancelled(error, signal);
       const failed = classifyFailure(error);
       this.deps.logger.warn(
         { provider: providerId, backend: backend.id, failureClass: failed },
@@ -155,6 +201,7 @@ export class ExtractionRouter {
     let firstFailure: FailureClass | undefined;
 
     for (const [index, backend] of chain.entries()) {
+      if (signal?.aborted) throw seraError('CANCELLED');
       try {
         const outcome = await backend.resolve(url, providerId, signal);
         const media = 'media' in outcome ? outcome.media : outcome;
@@ -194,20 +241,22 @@ export class ExtractionRouter {
           resolvedAt: Date.now(),
         };
       } catch (error) {
+        rethrowIfCancelled(error, signal);
         const failure = classifyFailure(error);
+        const errorCode = SeraError.from(error).code;
         if (index === 0) {
           firstError = error;
           firstFailure = failure;
         }
 
         const next = chain[index + 1];
-        if (!next || !this.shouldEscalate(failure, backend, next)) {
+        if (!next || !this.shouldEscalate(failure, backend, next, errorCode)) {
           const signedIn = await this.withAccount(url, providerId, failure, signal);
           if (signedIn) {
             return {
               media: signedIn.media,
               backend: signedIn.backend,
-              networkClass: 'residential',
+              networkClass: signedIn.networkClass,
               remote: true,
               fallbackUsed: true,
               attempts: index + 2,
@@ -270,4 +319,10 @@ export class ExtractionRouter {
 
     throw SeraError.from(firstError ?? new Error('no extraction backend was available'));
   }
+}
+
+function rethrowIfCancelled(error: unknown, signal?: AbortSignal): void {
+  const sera = SeraError.from(error);
+  if (sera.code === 'CANCELLED') throw sera;
+  if (signal?.aborted) throw seraError('CANCELLED', { cause: error });
 }

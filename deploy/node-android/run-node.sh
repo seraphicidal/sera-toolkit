@@ -23,8 +23,16 @@ ONLY_WHILE_CHARGING=0
 [ -f "$STATE/node.conf" ] && . "$STATE/node.conf"
 
 child=''
+refresh_pid=''
 reason=''
 last_refresh=0
+
+trim_log() {
+  local f=$1
+  if [ -f "$f" ] && [ "$(wc -l <"$f" 2>/dev/null || echo 0)" -gt 2000 ]; then
+    tail -n 1000 "$f" >"$f.tmp" && mv -f "$f.tmp" "$f"
+  fi
+}
 
 stop_node() {
   if [ -n "$child" ] && kill -0 "$child" 2>/dev/null; then
@@ -37,6 +45,10 @@ stop_node() {
 shutdown() {
   say "stopping"
   stop_node
+  if [ -n "$refresh_pid" ] && kill -0 "$refresh_pid" 2>/dev/null; then
+    kill "$refresh_pid" 2>/dev/null
+    wait "$refresh_pid" 2>/dev/null
+  fi
   command -v termux-wake-unlock >/dev/null && termux-wake-unlock
   rm -f "$PIDFILE"
   exit 0
@@ -63,19 +75,25 @@ conditions_hold() {
 }
 
 refresh_ytdlp() {
+  if [ -n "$refresh_pid" ] && kill -0 "$refresh_pid" 2>/dev/null; then
+    return
+  fi
+  trim_log "$LOG"
+  trim_log "$STATE/ytdlp-update.log"
   if [ -e "$STATE/ytdlp-updates.paused" ]; then
     last_refresh=$(date +%s)
     say "yt-dlp updates are paused" >>"$STATE/ytdlp-update.log"
     return
   fi
-  say "refreshing yt-dlp" >>"$STATE/ytdlp-update.log"
-  if (cd "$DIR" && npm run -s tools:fetch -- --only=ytdlp --pin-from=main) \
-    >>"$STATE/ytdlp-update.log" 2>&1; then
-    last_refresh=$(date +%s)
-  else
-    last_refresh=$(($(date +%s) - REFRESH_SECONDS + 3600))
-    say "yt-dlp refresh failed; trying again in an hour"
-  fi
+  last_refresh=$(date +%s)
+  (
+    say "refreshing yt-dlp" >>"$STATE/ytdlp-update.log"
+    if ! (cd "$DIR" && npm run -s tools:fetch -- --only=ytdlp --pin-from=main) \
+      >>"$STATE/ytdlp-update.log" 2>&1; then
+      say "yt-dlp refresh failed; will retry on next interval" >>"$STATE/ytdlp-update.log"
+    fi
+  ) &
+  refresh_pid=$!
 }
 
 configured() {

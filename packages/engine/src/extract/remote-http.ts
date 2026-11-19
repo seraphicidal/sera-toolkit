@@ -1,6 +1,7 @@
 import { MESSAGES, SeraError, seraError } from '../errors.js';
 import type { Logger } from '../logging.js';
 import type { ResolvedMedia } from '../providers/types.js';
+import { readBoundedJson } from '../security/http.js';
 import type {
   NodeFeature,
   NodeStatus,
@@ -10,6 +11,9 @@ import type {
   RemoteTask,
 } from './remote.js';
 import type { NetworkClass } from './router.js';
+
+const MAX_REMOTE_JSON_BYTES = 16 * 1024 * 1024;
+const VALID_TASK_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
 export class RemoteOverHttp implements RemoteExtraction {
   private nodes: { readonly at: number; readonly value: NodeStatus[] } | undefined;
@@ -40,11 +44,18 @@ export class RemoteOverHttp implements RemoteExtraction {
 
   private refreshing: Promise<void> | undefined;
 
+  private readJson<T>(response: Response, detail: string): Promise<T> {
+    return readBoundedJson<T>(response, MAX_REMOTE_JSON_BYTES, detail, 'PROVIDER_UNAVAILABLE');
+  }
+
   private async refresh(): Promise<void> {
     this.refreshing ??= (async () => {
       try {
         const response = await this.call('GET', '/internal/extraction/nodes');
-        const body = (await response.json()) as { nodes?: NodeStatus[] };
+        const body = await this.readJson<{ nodes?: NodeStatus[] }>(
+          response,
+          'invalid node list response',
+        );
         this.consecutiveFailures = 0;
         this.nodes = { at: Date.now(), value: body.nodes ?? [] };
       } catch (error) {
@@ -52,6 +63,8 @@ export class RemoteOverHttp implements RemoteExtraction {
         this.logger.warn({ err: error }, 'could not read the extraction node list');
         if (!this.nodes || this.nodes.value.length === 0 || this.consecutiveFailures >= 3) {
           this.nodes = { at: Date.now(), value: [] };
+        } else {
+          this.nodes = { at: Date.now(), value: this.nodes.value };
         }
       } finally {
         this.refreshing = undefined;
@@ -127,7 +140,15 @@ export class RemoteOverHttp implements RemoteExtraction {
     },
   ): Promise<{ media?: ResolvedMedia; files?: readonly RemoteFile[] }> {
     const started = await this.call('POST', '/internal/extraction/dispatch', task, options.signal);
-    const { taskId } = (await started.json()) as { taskId: string };
+    const { taskId } = await this.readJson<{ taskId?: string }>(
+      started,
+      'invalid extraction dispatch response',
+    );
+    if (!taskId || !VALID_TASK_ID.test(taskId)) {
+      throw seraError('PROVIDER_UNAVAILABLE', {
+        detail: 'invalid taskId from extraction dispatch',
+      });
+    }
 
     let seenStep: string | undefined;
     let seenPercent: number | undefined;
@@ -149,14 +170,14 @@ export class RemoteOverHttp implements RemoteExtraction {
         );
         const reqDuration = Date.now() - reqStart;
 
-        const state = (await response.json()) as {
+        const state = await this.readJson<{
           state: 'pending' | 'done' | 'failed';
           claimedBy?: string;
           progress?: RemoteProgress;
           media?: ResolvedMedia;
           files?: readonly RemoteFile[];
           error?: { code: string; message?: string; detail?: string };
-        };
+        }>(response, 'invalid extraction status response');
 
         if (state.claimedBy) options.onClaimed?.(state.claimedBy);
         if (state.progress) {
@@ -222,6 +243,7 @@ export class RemoteOverHttp implements RemoteExtraction {
       });
     }
     if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
       throw seraError('PROVIDER_UNAVAILABLE', {
         detail: `remote: ${method} ${path} answered ${String(response.status)}`,
       });

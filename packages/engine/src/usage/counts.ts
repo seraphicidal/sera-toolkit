@@ -89,7 +89,8 @@ export function parseUsageDay(
 }
 
 export function usageDates(count: number, now = new Date()): string[] {
-  const days = Math.max(1, Math.min(USAGE_RETENTION_DAYS, Math.floor(count)));
+  const safeCount = Number.isFinite(count) ? count : 1;
+  const days = Math.max(1, Math.min(USAGE_RETENTION_DAYS, Math.floor(safeCount)));
   return Array.from({ length: days }, (_, offset) =>
     new Date(now.getTime() - offset * 86_400_000).toISOString().slice(0, 10),
   );
@@ -130,8 +131,9 @@ export const usageKey = (date: string): string => `sera:usage:${date}`;
 
 export interface UsagePipeline {
   hincrby(key: string, field: string, by: number): UsagePipeline;
+  hgetall?(key: string): UsagePipeline;
   expire(key: string, seconds: number): UsagePipeline;
-  exec(): Promise<unknown>;
+  exec(): Promise<[Error | null, unknown][] | null>;
 }
 
 export interface UsageRedis {
@@ -152,21 +154,42 @@ export class RedisUsageCounter implements UsageCounter {
     if (!increment) return;
     const key = usageKey(this.clock().toISOString().slice(0, 10));
     try {
-      await this.redis
+      const results = await this.redis
         .multi()
         .hincrby(key, increment.field, increment.by)
         .expire(key, USAGE_RETENTION_DAYS * 86_400)
         .exec();
+      if (Array.isArray(results)) {
+        for (const item of results) {
+          if (Array.isArray(item) && item[0] instanceof Error) {
+            throw item[0];
+          }
+        }
+      }
     } catch (error) {
       this.logger.warn({ err: error, field: increment.field }, 'usage count not recorded');
     }
   }
 
   async read(days: number, now = this.clock()): Promise<UsageDay[]> {
+    const dates = usageDates(days, now);
+    const pipeline = this.redis.multi();
+    if (typeof pipeline.hgetall === 'function') {
+      for (const date of dates) pipeline.hgetall(usageKey(date));
+      const results = await pipeline.exec();
+      if (Array.isArray(results) && results.length === dates.length) {
+        return dates.map((date, index) => {
+          const tuple = results[index];
+          const hash =
+            Array.isArray(tuple) && !tuple[0] && tuple[1] && typeof tuple[1] === 'object'
+              ? (tuple[1] as Record<string, string>)
+              : {};
+          return parseUsageDay(date, hash);
+        });
+      }
+    }
     return Promise.all(
-      usageDates(days, now).map(async (date) =>
-        parseUsageDay(date, await this.redis.hgetall(usageKey(date))),
-      ),
+      dates.map(async (date) => parseUsageDay(date, await this.redis.hgetall(usageKey(date)))),
     );
   }
 

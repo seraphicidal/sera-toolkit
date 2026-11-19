@@ -1,7 +1,9 @@
 import { seraError } from '../errors.js';
 import type { Logger } from '../logging.js';
+import { readBoundedJson } from '../security/http.js';
 
 const TOKEN_ENDPOINT = 'https://www.reddit.com/api/v1/access_token';
+const MAX_REDDIT_JSON_BYTES = 8 * 1024 * 1024;
 
 const RENEW_MARGIN_MS = 60_000;
 
@@ -72,18 +74,24 @@ export class RedditTokenSource {
     }
 
     if (response.status === 401 || response.status === 403) {
+      await response.body?.cancel().catch(() => undefined);
       throw seraError('PROVIDER_CONFIGURATION_ERROR', {
         message: "Reddit rejected this server's credentials.",
         detail: `reddit: token endpoint returned ${response.status}`,
       });
     }
     if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
       throw seraError('PROVIDER_UNAVAILABLE', {
         detail: `reddit: token endpoint returned ${response.status}`,
       });
     }
 
-    const payload = (await response.json()) as { access_token?: unknown; expires_in?: unknown };
+    const payload = await readBoundedJson<{ access_token?: unknown; expires_in?: unknown }>(
+      response,
+      MAX_REDDIT_JSON_BYTES,
+      'reddit: invalid JSON from token endpoint',
+    );
     const value = typeof payload.access_token === 'string' ? payload.access_token : undefined;
     if (!value) {
       throw seraError('PROVIDER_UNAVAILABLE', { detail: 'reddit: token response had no token' });
@@ -184,25 +192,36 @@ export async function fetchPost(
 
   let response = await call(await tokens.token(signal, fetchImpl));
   if (response.status === 401) {
+    await response.body?.cancel().catch(() => undefined);
     tokens.invalidate();
     response = await call(await tokens.token(signal, fetchImpl));
   }
 
-  if (response.status === 404) throw seraError('MEDIA_UNAVAILABLE', { detail: 'reddit: 404' });
+  if (response.status === 404) {
+    await response.body?.cancel().catch(() => undefined);
+    throw seraError('MEDIA_UNAVAILABLE', { detail: 'reddit: 404' });
+  }
   if (response.status === 403) {
+    await response.body?.cancel().catch(() => undefined);
     throw seraError('PRIVATE_CONTENT', {
       message: 'That post is in a private or quarantined community.',
       detail: 'reddit: 403 from the data API',
     });
   }
   if (response.status === 429) {
+    await response.body?.cancel().catch(() => undefined);
     throw seraError('RATE_LIMITED', { detail: 'reddit: 429 from the data API' });
   }
   if (!response.ok) {
+    await response.body?.cancel().catch(() => undefined);
     throw seraError('PROVIDER_UNAVAILABLE', { detail: `reddit: data api ${response.status}` });
   }
 
-  const body = await response.json();
+  const body = await readBoundedJson<unknown>(
+    response,
+    MAX_REDDIT_JSON_BYTES,
+    'reddit: invalid JSON from data api',
+  );
   const post = firstPostIn(body);
   if (!post) throw seraError('MEDIA_UNAVAILABLE', { detail: 'reddit: no post in listing' });
   return post;

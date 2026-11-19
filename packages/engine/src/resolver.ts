@@ -85,7 +85,10 @@ export interface ResolverDependencies {
   readonly registry?: ProviderRegistry;
   readonly dispatcher?: Dispatcher;
   readonly remoteBackends?: () => readonly ExtractionBackend[];
-  readonly sessionBackend?: (feature: NodeFeature) => ExtractionBackend | undefined;
+  readonly sessionBackend?: (
+    feature: NodeFeature,
+    providerId?: string,
+  ) => ExtractionBackend | undefined;
   readonly importHosts?: MediaHostPolicy;
   readonly probe?: (
     url: string,
@@ -149,7 +152,7 @@ export class MediaResolver {
       capabilitiesOf: (providerId) => this.registry.get(providerId)?.capabilities,
       authenticated: (providerId) => {
         const feature = this.registry.get(providerId)?.nodeSession;
-        return feature ? deps.sessionBackend?.(feature) : undefined;
+        return feature ? deps.sessionBackend?.(feature, providerId) : undefined;
       },
       lastResort: (url, providerId, signal) =>
         this.runProvider(url, providerId, signal, { allowDegraded: true }),
@@ -199,14 +202,12 @@ export class MediaResolver {
     await this.egress.close();
   }
 
-  private cachedExtractorVersion: string | undefined;
-
   private async extractorVersion(): Promise<string> {
-    const cached = this.cachedExtractorVersion;
-    if (cached) return cached;
-    const resolved = await ytdlpVersion(this.config.ytdlpPath).catch(() => 'unknown');
-    this.cachedExtractorVersion = resolved;
-    return resolved;
+    try {
+      return await ytdlpVersion(this.config.ytdlpPath);
+    } catch {
+      return 'unknown';
+    }
   }
 
   private readonly router: ExtractionRouter;
@@ -252,6 +253,12 @@ export class MediaResolver {
     }
 
     const canonical = normalizeUrl(normalizeForProvider(provider, url));
+    if (this.isBlocked(canonical)) {
+      throw seraError('UNSUPPORTED_SOURCE', { detail: 'This URL has been blocked' });
+    }
+    if (!this.config.allowPrivateAddresses && canonical.hostname !== url.hostname) {
+      await this.egress.assertPublicDestination(canonical);
+    }
     const started = Date.now();
 
     let outcome: ExtractionOutcome;
@@ -345,7 +352,7 @@ export class MediaResolver {
       }
 
       const canonical = normalizeUrl(normalizeForProvider(provider, url));
-      if (this.denylist.isBlocked(canonical).blocked) {
+      if (this.isBlocked(canonical)) {
         throw seraError('UNSUPPORTED_SOURCE', { detail: 'This URL has been blocked' });
       }
       const shortcode = shortcodeFrom(canonical);
@@ -524,10 +531,29 @@ export class MediaResolver {
         };
 
         if (!media.items.length) throw seraError('MEDIA_UNAVAILABLE');
-        const withMedia = { ...outcome, media };
+        const usesYtdlp = media.items.some((item) =>
+          item.plans.some((plan) => plan.fetch.via === 'ytdlp'),
+        );
+        const withMedia: ExtractionOutcome = {
+          ...outcome,
+          media,
+          ...(usesYtdlp && outcome.rawInfoJson
+            ? { rawInfoJson: outcome.rawInfoJson }
+            : { rawInfoJson: undefined }),
+        };
         this.cache.set(cacheKey, withMedia);
         if (media.url !== canonical.toString()) {
-          this.cache.set(`${providerId}|${media.url}`, withMedia);
+          let sameOrigin = true;
+          if (providerId === 'generic') {
+            try {
+              sameOrigin = new URL(media.url).origin === canonical.origin;
+            } catch {
+              sameOrigin = false;
+            }
+          }
+          if (sameOrigin) {
+            this.cache.set(`${providerId}|${media.url}`, withMedia);
+          }
         }
         return withMedia;
       },
@@ -803,7 +829,7 @@ export class MediaResolver {
   }
 
   verifyInfoId(infoId: string, now = Date.now()): InfoTokenPayload {
-    const payload = readToken<InfoTokenPayload>(infoId, this.config.secret);
+    const payload = readToken<InfoTokenPayload>(infoId, this.config.secret, MAX_INFO_TOKEN_LENGTH);
     if ('h' in payload || typeof payload.u !== 'string' || typeof payload.p !== 'string') {
       throw seraError('EXPIRED', { detail: 'malformed info token' });
     }

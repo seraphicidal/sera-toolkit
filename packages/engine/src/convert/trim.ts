@@ -96,7 +96,18 @@ function videoCodecArgs(extension: string): string[] {
       '8',
     ];
   }
-  return ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', '-pix_fmt', 'yuv420p'];
+  return [
+    '-vf',
+    'scale=trunc(iw/2)*2:trunc(ih/2)*2',
+    '-c:v',
+    'libx264',
+    '-preset',
+    'veryfast',
+    '-crf',
+    '18',
+    '-pix_fmt',
+    'yuv420p',
+  ];
 }
 
 export async function trimMedia(request: TrimMediaRequest): Promise<{ reencoded: boolean }> {

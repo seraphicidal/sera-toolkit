@@ -1,9 +1,15 @@
 import type { ContainerFormat, ProviderCapabilities } from '@sera/contracts/types';
-import { seraError } from '../errors.js';
+import { SeraError, seraError } from '../errors.js';
 import { ensureRecommendations } from '../normalize/plans.js';
-import { formatBytes, nonEmpty, qualityLabel, truncate } from '../util/format.js';
+import {
+  decodeHtmlEntities,
+  formatBytes,
+  nonEmpty,
+  qualityLabel,
+  truncate,
+} from '../util/format.js';
 import { discard, header } from '../security/http.js';
-import { hostMatchesAny } from '../security/url.js';
+import { hostMatchesAny, stripWww } from '../security/url.js';
 import type { DownloadPlan, ProviderContext, ResolvedItem, ResolvedMedia } from './types.js';
 import { YtdlpProvider } from './ytdlp-base.js';
 import { declare } from './capabilities.js';
@@ -33,7 +39,7 @@ export class TwitterProvider extends YtdlpProvider {
   });
 
   override normalize(url: URL): URL {
-    if (url.hostname.toLowerCase() === 't.co') return url;
+    if (stripWww(url.hostname.toLowerCase()) === 't.co') return url;
     const out = new URL(url.toString());
     out.hostname = 'x.com';
     out.protocol = 'https:';
@@ -43,7 +49,9 @@ export class TwitterProvider extends YtdlpProvider {
 
   override async resolve(url: URL, context: ProviderContext): Promise<ResolvedMedia> {
     const target =
-      url.hostname.toLowerCase() === 't.co' ? await this.expandShortLink(url, context) : url;
+      stripWww(url.hostname.toLowerCase()) === 't.co'
+        ? await this.expandShortLink(url, context)
+        : url;
     return super.resolve(target, context);
   }
 
@@ -76,7 +84,7 @@ export class TwitterProvider extends YtdlpProvider {
         /content=["']\d+;\s*url=([^"'>]+)["']/i.exec(html) ??
         /location\.replace\(["']([^"']+)["']\)/i.exec(html);
       if (match?.[1]) {
-        location = match[1].replace(/\\/g, '');
+        location = decodeHtmlEntities(match[1].replace(/\\\//g, '/').replace(/\\/g, ''));
       }
     } else {
       discard(response.body);
@@ -104,6 +112,15 @@ export class TwitterProvider extends YtdlpProvider {
     }
     if (hostMatchesAny(target.hostname, context.config.blockedHosts)) {
       throw seraError('BLOCKED_ADDRESS', { detail: 't.co redirect to blocked host' });
+    }
+    try {
+      context.allowUrl?.(target);
+    } catch (error) {
+      if (error instanceof SeraError) throw error;
+      throw seraError('BLOCKED_ADDRESS', {
+        detail: 't.co redirect to blocked destination',
+        cause: error,
+      });
     }
     if (target.port !== '' && target.port !== '80' && target.port !== '443') {
       throw seraError('BLOCKED_ADDRESS', { detail: `t.co redirect to port ${target.port}` });
@@ -163,7 +180,13 @@ export class TwitterProvider extends YtdlpProvider {
 
   private async viaSyndication(url: URL, context: ProviderContext): Promise<ResolvedMedia> {
     const tweet = await this.readTweet(url, context).catch((error: unknown) => {
-      if (context.signal?.aborted) throw error;
+      if (
+        context.signal?.aborted ||
+        (error instanceof SeraError &&
+          (error.code === 'CANCELLED' || error.code === 'BLOCKED_ADDRESS'))
+      ) {
+        throw error;
+      }
       return undefined;
     });
     const source = usableMedia(tweet).length ? tweet : (tweet?.quoted_tweet ?? tweet);
@@ -368,7 +391,7 @@ interface NormalizedTweetMedia {
   readonly height?: number | undefined;
   readonly alt?: string | undefined;
   readonly sourceId: string;
-  readonly thumbnailUrl: string;
+  readonly thumbnailUrl?: string | undefined;
   readonly durationSeconds?: number | undefined;
   readonly variants: readonly {
     url: string;
@@ -409,7 +432,7 @@ function buildTwitterMediaItem(
       index,
       kind: 'image',
       title: alt ? truncate(alt, 120) : `Image ${index + 1}`,
-      thumbnailUrl,
+      ...(thumbnailUrl ? { thumbnailUrl } : {}),
       ...(width ? { width } : {}),
       ...(height ? { height } : {}),
       container,
@@ -509,7 +532,7 @@ function buildTwitterMediaItem(
     index,
     kind: isGif ? 'gif' : 'video',
     title: alt ? truncate(alt, 120) : isGif ? `GIF ${index + 1}` : `Video ${index + 1}`,
-    thumbnailUrl,
+    ...(thumbnailUrl ? { thumbnailUrl } : {}),
     ...(itemWidth ? { width: itemWidth } : {}),
     ...(itemHeight ? { height: itemHeight } : {}),
     ...(durationSeconds ? { duration: durationSeconds } : {}),
@@ -551,7 +574,9 @@ function toFxItem(
         }))
       : [{ url: source, width, height }];
 
-  const thumbnailUrl = validateTwitterMediaUrl(media.thumbnail_url, allowUrl) ?? source;
+  const thumbnailUrl =
+    validateTwitterMediaUrl(media.thumbnail_url, allowUrl) ??
+    (media.type === 'photo' ? source : undefined);
   return buildTwitterMediaItem(
     {
       source,
@@ -561,7 +586,7 @@ function toFxItem(
       height,
       alt,
       sourceId,
-      thumbnailUrl,
+      ...(thumbnailUrl ? { thumbnailUrl } : {}),
       durationSeconds: media.duration,
       variants,
     },

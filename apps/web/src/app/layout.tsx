@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from 'next';
+import { headers } from 'next/headers';
 import Link from 'next/link';
 import { SERA_VERSION } from '@sera/contracts/types';
 import { HeaderHomeLink } from '@/components/header-home-link';
@@ -32,11 +33,17 @@ export const viewport: Viewport = {
   ],
 };
 
-export default function RootLayout({ children }: { readonly children: React.ReactNode }) {
+export default async function RootLayout({
+  children,
+}: {
+  readonly children: React.ReactNode;
+}) {
+  const nonce = (await headers()).get('x-nonce') ?? undefined;
+
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
-        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+        <script nonce={nonce} dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
       <body className="min-h-dvh antialiased">
         <a

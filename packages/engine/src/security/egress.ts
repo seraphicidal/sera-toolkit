@@ -8,8 +8,10 @@ import {
   type Server,
   type ServerResponse,
 } from 'node:http';
-import { connect, isIPv6, type Socket } from 'node:net';
+import { request as httpsRequest } from 'node:https';
+import { connect, isIP, isIPv6, type Socket } from 'node:net';
 import type { Duplex } from 'node:stream';
+import { connect as tlsConnect } from 'node:tls';
 import { seraError } from '../errors.js';
 import { isIpLiteral, isPublicAddress } from './ip.js';
 
@@ -17,6 +19,7 @@ export interface EgressGuardOptions {
   readonly resolve?: (hostname: string) => Promise<readonly LookupAddress[]>;
   readonly isAllowedAddress?: (address: string) => boolean;
   readonly allowPrivateAddresses?: boolean;
+  readonly allowNonStandardPorts?: boolean;
   readonly upstreamProxy?: string;
   readonly connectTimeoutMs?: number;
 }
@@ -39,6 +42,7 @@ const defaultResolve = (hostname: string): Promise<LookupAddress[]> =>
 export class EgressGuard {
   private readonly resolveName: (hostname: string) => Promise<readonly LookupAddress[]>;
   private readonly isAllowedAddress: (address: string) => boolean;
+  private readonly allowNonStandardPorts: boolean;
   private readonly defaultUpstreamProxy: string | undefined;
   private readonly connectTimeoutMs: number;
 
@@ -50,8 +54,15 @@ export class EgressGuard {
     this.resolveName = options.resolve ?? defaultResolve;
     this.isAllowedAddress =
       options.isAllowedAddress ?? (options.allowPrivateAddresses ? () => true : isPublicAddress);
+    this.allowNonStandardPorts =
+      options.allowNonStandardPorts ??
+      (Boolean(options.allowPrivateAddresses) || options.isAllowedAddress !== undefined);
     this.defaultUpstreamProxy = options.upstreamProxy;
     this.connectTimeoutMs = options.connectTimeoutMs ?? 10_000;
+  }
+
+  private isAllowedPort(port: number): boolean {
+    return this.allowNonStandardPorts || port === 80 || port === 443;
   }
 
   async addressesFor(hostname: string): Promise<readonly LookupAddress[]> {
@@ -167,38 +178,76 @@ export class EgressGuard {
       refuse(client, 400, 'Bad Request');
       return;
     }
-
-    let address: LookupAddress;
-    try {
-      address = (await this.addressesFor(target.host))[0]!;
-    } catch {
+    if (!this.isAllowedPort(target.port)) {
       refuse(client, 403, 'Forbidden');
       return;
     }
 
+    let clientGone = client.destroyed;
+    const onEarlyClose = () => {
+      clientGone = true;
+    };
+    client.once('close', onEarlyClose);
+
+    let addresses: readonly LookupAddress[];
+    try {
+      addresses = await this.addressesFor(target.host);
+    } catch {
+      client.off('close', onEarlyClose);
+      refuse(client, 403, 'Forbidden');
+      return;
+    }
+    client.off('close', onEarlyClose);
+    if (clientGone || client.destroyed) return;
+
     if (!upstreamProxy) {
-      const upstream = connect({
-        host: address.address,
-        port: target.port,
-        family: address.family,
-        timeout: this.connectTimeoutMs,
-      });
-      this.track(upstream);
-      let established = false;
-      upstream.once('timeout', () => upstream.destroy(new Error('connect timeout')));
-      upstream.once('connect', () => {
-        established = true;
-        upstream.setTimeout(0);
-        client.write('HTTP/1.1 200 Connection Established\r\n\r\n');
-        if (head.length) upstream.write(head);
-        upstream.pipe(client);
-        client.pipe(upstream);
-      });
-      upstream.once('error', () =>
-        established ? client.destroy() : refuse(client, 502, 'Bad Gateway'),
-      );
-      client.once('close', () => upstream.destroy());
-      upstream.once('close', () => client.destroy());
+      const connectNext = (index: number): void => {
+        const current = addresses[index]!;
+        const upstream = connect({
+          host: current.address,
+          port: target.port,
+          family: current.family,
+          timeout: this.connectTimeoutMs,
+        });
+        this.track(upstream);
+        let established = false;
+        let handedOff = false;
+        const onClientClose = () => {
+          upstream.destroy();
+        };
+        const cleanupClientClose = () => {
+          client.off('close', onClientClose);
+        };
+        upstream.once('timeout', () => upstream.destroy(new Error('connect timeout')));
+        upstream.once('connect', () => {
+          if (client.destroyed) {
+            upstream.destroy();
+            return;
+          }
+          established = true;
+          handedOff = true;
+          upstream.setTimeout(0);
+          client.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+          if (head.length) upstream.write(head);
+          upstream.pipe(client);
+          client.pipe(upstream);
+        });
+        upstream.once('error', () => {
+          cleanupClientClose();
+          if (!established && !client.destroyed && index + 1 < addresses.length) {
+            connectNext(index + 1);
+            return;
+          }
+          if (established) client.destroy();
+          else refuse(client, 502, 'Bad Gateway');
+        });
+        client.once('close', onClientClose);
+        upstream.once('close', () => {
+          cleanupClientClose();
+          if (handedOff || index + 1 >= addresses.length) client.destroy();
+        });
+      };
+      connectNext(0);
       return;
     }
 
@@ -209,12 +258,25 @@ export class EgressGuard {
       refuse(client, 502, 'Bad Gateway');
       return;
     }
+    if ((proxyUrl.protocol !== 'http:' && proxyUrl.protocol !== 'https:') || !proxyUrl.hostname) {
+      refuse(client, 502, 'Bad Gateway');
+      return;
+    }
 
-    const upstream = connect({
-      host: unbracket(proxyUrl.hostname),
-      port: upstreamPort(proxyUrl),
-      timeout: this.connectTimeoutMs,
-    });
+    const proxyHost = unbracket(proxyUrl.hostname);
+    const upstream: Socket =
+      proxyUrl.protocol === 'https:'
+        ? tlsConnect({
+            host: proxyHost,
+            port: upstreamPort(proxyUrl),
+            ...(isIP(proxyHost) === 0 ? { servername: proxyHost } : {}),
+            timeout: this.connectTimeoutMs,
+          })
+        : connect({
+            host: proxyHost,
+            port: upstreamPort(proxyUrl),
+            timeout: this.connectTimeoutMs,
+          });
     this.track(upstream);
     let established = false;
     upstream.once('timeout', () => upstream.destroy(new Error('connect timeout')));
@@ -224,7 +286,8 @@ export class EgressGuard {
     client.once('close', () => upstream.destroy());
     upstream.once('close', () => client.destroy());
 
-    upstream.once('connect', () => {
+    const connectEvent = proxyUrl.protocol === 'https:' ? 'secureConnect' : 'connect';
+    upstream.once(connectEvent, () => {
       const hostHeader = `${formatAuthorityHost(target.host)}:${String(target.port)}`;
       let connectReq = `CONNECT ${hostHeader} HTTP/1.1\r\nHost: ${hostHeader}\r\n`;
       if (proxyUrl.username || proxyUrl.password) {
@@ -252,7 +315,8 @@ export class EgressGuard {
         upstream.off('data', onData);
         const headerText = buffer.subarray(0, headerEnd).toString('latin1');
         const statusLine = headerText.split('\r\n')[0] ?? '';
-        const statusCode = Number(statusLine.split(' ')[1]);
+        const statusMatch = /^HTTP\/1\.[01]\s+(\d{3})(?:\s|$)/.exec(statusLine);
+        const statusCode = statusMatch ? Number(statusMatch[1]) : 0;
 
         if (statusCode >= 200 && statusCode < 300) {
           established = true;
@@ -283,6 +347,9 @@ export class EgressGuard {
       socket.once('connect', () => upstream.setTimeout(0));
     });
     upstream.once('response', (response: IncomingMessage) => {
+      response.once('error', () => {
+        if (!res.destroyed) res.destroy();
+      });
       res.writeHead(response.statusCode ?? 502, forwardable(response.headers));
       response.pipe(res);
     });
@@ -291,18 +358,21 @@ export class EgressGuard {
       else if (!res.destroyed) res.destroy();
     });
     res.once('close', () => {
-      if (!res.writableEnded && !upstream.destroyed) {
-        upstream.destroy();
+      if (!res.writableEnded) {
+        req.unpipe(upstream);
+        if (!upstream.destroyed) upstream.destroy();
       }
     });
     req.once('aborted', () => {
+      req.unpipe(upstream);
       if (!upstream.destroyed) {
         upstream.destroy();
       }
     });
     req.once('close', () => {
-      if (!req.complete && !upstream.destroyed) {
-        upstream.destroy();
+      if (!req.complete) {
+        req.unpipe(upstream);
+        if (!upstream.destroyed) upstream.destroy();
       }
     });
     req.pipe(upstream);
@@ -324,20 +394,37 @@ export class EgressGuard {
       res.writeHead(400).end();
       return;
     }
+    const targetPort = Number(url.port) || 80;
+    if (!this.isAllowedPort(targetPort)) {
+      res.writeHead(403, { 'content-type': 'text/plain' }).end('refused by the port guard');
+      return;
+    }
 
-    let address: LookupAddress;
+    let reqGone = res.destroyed || req.destroyed;
+    const onEarlyAbort = () => {
+      reqGone = true;
+    };
+    res.once('close', onEarlyAbort);
+
+    let addresses: readonly LookupAddress[];
     try {
-      address = (await this.addressesFor(url.hostname))[0]!;
+      addresses = await this.addressesFor(url.hostname);
     } catch {
+      res.off('close', onEarlyAbort);
       res.writeHead(403, { 'content-type': 'text/plain' }).end('refused by the address guard');
       return;
     }
+    res.off('close', onEarlyAbort);
+    if (reqGone || res.destroyed) return;
+
+    const address =
+      addresses.find((a) => a.family === 4) ?? addresses[0]!;
 
     if (!upstreamProxy) {
       const upstream = httpRequest({
         host: address.address,
         family: address.family,
-        port: url.port || 80,
+        port: targetPort,
         method: req.method,
         path: `${url.pathname}${url.search}`,
         headers: { ...forwardable(req.headers), host: url.host },
@@ -355,6 +442,10 @@ export class EgressGuard {
       res.writeHead(502).end();
       return;
     }
+    if ((proxyUrl.protocol !== 'http:' && proxyUrl.protocol !== 'https:') || !proxyUrl.hostname) {
+      res.writeHead(502).end();
+      return;
+    }
 
     const headers: Record<string, string | string[]> = {
       ...forwardable(req.headers),
@@ -367,7 +458,8 @@ export class EgressGuard {
       headers['proxy-authorization'] = `Basic ${creds}`;
     }
 
-    const upstream = httpRequest({
+    const makeRequest = proxyUrl.protocol === 'https:' ? httpsRequest : httpRequest;
+    const upstream = makeRequest({
       host: unbracket(proxyUrl.hostname),
       port: upstreamPort(proxyUrl),
       method: req.method,
@@ -427,7 +519,7 @@ export function confineToHttp(selector: string): string {
           alternative
             .split('+')
             .map((atom) =>
-              !atom || atom.includes('[protocol') ? atom : `${atom}${HTTP_PROTOCOLS}`,
+              !atom || atom.includes(HTTP_PROTOCOLS) ? atom : `${atom}${HTTP_PROTOCOLS}`,
             )
             .join('+'),
         )

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DIR="${SERA_DIR:-/opt/sera}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DIR="${SERA_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 STATE_DIR=/var/lib/sera
 STATUS="$STATE_DIR/auto-update.status"
 REFUSED="$STATE_DIR/auto-update.refused"
@@ -88,9 +89,48 @@ elif [ "$target" != "$old_rev" ]; then
 fi
 new_rev=$(git rev-parse HEAD)
 
+remote_digests() {
+  local image repo tag digest
+  for image in $(sera config --images | sort -u); do
+    local ref="${image%%@*}"
+    local last="${ref##*/}"
+    if [[ "$last" == *:* ]]; then
+      repo="${ref%:*}"
+      tag="${last##*:}"
+    else
+      repo="$ref"
+      tag="latest"
+    fi
+    digest=$(docker buildx imagetools inspect "$repo:$tag" --format '{{.Manifest.Digest}}' 2>/dev/null || echo unknown)
+    echo "$image $digest"
+  done
+}
+
+rollback_tag() {
+  local ref="${1%%@*}"
+  local last="${ref##*/}"
+  if [[ "$last" == *:* ]]; then
+    local repo="${ref%:*}"
+    local tag="${last##*:}"
+    local safe_tag="${tag//[^a-zA-Z0-9._-]/_}"
+    printf '%s:sera-rollback-%s\n' "$repo" "$safe_tag"
+  else
+    printf '%s:sera-rollback\n' "$ref"
+  fi
+}
+
+pending_digests=$(remote_digests)
+if [ -e "$REFUSED" ] && [ "$(cat "$REFUSED")" = "$new_rev $pending_digests" ]; then
+  if [ "$old_rev" != "$new_rev" ]; then
+    git reset -q --keep "$old_rev"
+  fi
+  log "this release failed its health check before; not pulling or deploying it again"
+  exit 1
+fi
+
 before=$(image_ids)
 while read -r image id; do
-  [ "$id" = none ] || docker tag "$id" "${image%:*}:sera-rollback"
+  [ "$id" = none ] || docker tag "$id" "$(rollback_tag "$image")"
 done <<<"$before"
 
 sera pull -q
@@ -99,19 +139,13 @@ after=$(image_ids)
 restore() {
   git reset -q --keep "$old_rev"
   while read -r image id; do
-    [ "$id" = none ] || docker tag "${image%:*}:sera-rollback" "$image"
+    [ "$id" = none ] || docker tag "$(rollback_tag "$image")" "${image%%@*}"
   done <<<"$before"
 }
 
 if [ "$before" = "$after" ] && [ "$old_rev" = "$new_rev" ]; then
   if [ ! -e "$REFUSED" ] && ! grep -q '^ok' "$STATUS" 2>/dev/null; then status ok unchanged; fi
   exit 0
-fi
-
-if [ -e "$REFUSED" ] && [ "$(cat "$REFUSED")" = "$new_rev $after" ]; then
-  restore
-  log "this release failed its health check before; not deploying it again"
-  exit 1
 fi
 
 log "deploying $(git rev-parse --short HEAD)"
@@ -125,7 +159,7 @@ if wait_healthy; then
 fi
 
 log "not healthy within ${HEALTH_TIMEOUT_SECONDS}s; rolling back to ${old_rev:0:7}"
-echo "$new_rev $after" >"$REFUSED"
+echo "$new_rev $pending_digests" >"$REFUSED"
 restore
 sera up -d --remove-orphans
 if wait_healthy; then

@@ -1,9 +1,19 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import { loadConfig, seraError, SeraEngine, type ResolvedMedia } from '@sera/engine';
+import {
+  ExtractionNodeRegistry,
+  JobRunner,
+  loadConfig,
+  seraError,
+  SeraEngine,
+  silentLogger,
+  WorkspaceManager,
+  type RemoteTask,
+  type ResolvedMedia,
+} from '@sera/engine';
 import { buildServer } from '../server.js';
 
 const TOKEN = 'test-node-token-0123456789';
@@ -686,5 +696,579 @@ describe('multi-node authentication and isolation', () => {
 
     multiEngine.extractionNodes.fail(task.id, seraError('SOURCE_BLOCKED'));
     await resolvePromise;
+  });
+
+  it('wakes dispatch long-poll immediately on initial progress transition', async () => {
+    multiEngine.extractionNodes.register('laptop', ['youtube'], 1);
+    const dispatch = await multiApp.inject({
+      method: 'POST',
+      url: '/internal/extraction/dispatch',
+      headers: { authorization: `Bearer ${WORKER_TOKEN}` },
+      payload: {
+        kind: 'resolve',
+        url: 'https://www.youtube.com/watch?v=wake',
+        providerId: 'youtube',
+      },
+    });
+    const { taskId } = dispatch.json<{ taskId: string }>();
+
+    const claimed = await multiApp.inject({
+      method: 'POST',
+      url: '/internal/extraction/claim',
+      headers: { authorization: `Bearer ${LAPTOP_TOKEN}` },
+      payload: { nodeId: 'laptop', providers: ['youtube'], capacity: 1 },
+    });
+    const task = claimed.json<{ id: string }>();
+
+    const pollPromise = multiApp.inject({
+      method: 'GET',
+      url: `/internal/extraction/dispatch/${taskId}?wait=5`,
+      headers: { authorization: `Bearer ${WORKER_TOKEN}` },
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    await multiApp.inject({
+      method: 'POST',
+      url: `/internal/extraction/${task.id}/progress`,
+      headers: { authorization: `Bearer ${LAPTOP_TOKEN}` },
+      payload: { percent: 25, step: 'Resolving stream' },
+    });
+
+    const polled = await pollPromise;
+    expect(polled.statusCode).toBe(200);
+    expect(polled.json()).toMatchObject({
+      state: 'pending',
+      progress: { percent: 25, step: 'Resolving stream' },
+    });
+
+    await multiApp.inject({
+      method: 'DELETE',
+      url: `/internal/extraction/dispatch/${taskId}`,
+      headers: { authorization: `Bearer ${WORKER_TOKEN}` },
+    });
+  });
+
+  it('returns 400 on array querystrings and 415 on non-octet-stream /file uploads, and rejects workerToken on /claim', async () => {
+    const badWait = await multiApp.inject({
+      method: 'GET',
+      url: '/internal/extraction/dispatch/missing-id?wait=1&wait=2',
+      headers: { authorization: `Bearer ${WORKER_TOKEN}` },
+    });
+  const badName = await multiApp.inject({
+      method: 'POST',
+      url: '/internal/extraction/11112222333344445555666677778888/file?name=a&name=b',
+      headers: {
+        authorization: `Bearer ${LAPTOP_TOKEN}`,
+        'content-type': 'application/octet-stream',
+      },
+      payload: Buffer.from('x'),
+    });
+    expect(badName.statusCode).toBe(400);
+    expect([400, 404]).toContain(badWait.statusCode);
+
+    const wrongMime = await multiApp.inject({
+      method: 'POST',
+      url: '/internal/extraction/11112222333344445555666677778888/file',
+      headers: {
+        authorization: `Bearer ${LAPTOP_TOKEN}`,
+        'content-type': 'application/json',
+      },
+      payload: '{}',
+    });
+    expect(wrongMime.statusCode).toBe(415);
+
+    const workerClaim = await multiApp.inject({
+      method: 'POST',
+      url: '/internal/extraction/claim',
+      headers: { authorization: `Bearer ${WORKER_TOKEN}` },
+      payload: { nodeId: 'worker-as-node', providers: ['youtube'], capacity: 1 },
+    });
+    expect(workerClaim.statusCode).toBe(401);
+  });
+
+  it('rate-limits repeated invalid internal auth attempts without throttling valid nodes, and rejects javascript: legal targetUrl', async () => {
+    const isolatedDir = await mkdtemp(join(tmpdir(), 'sera-node-rl-'));
+    const isolatedEngine = await SeraEngine.create({
+      config: loadConfig({
+        NODE_ENV: 'test',
+        LOG_LEVEL: 'silent',
+        SERA_SECRET: 'isolated-secret',
+        SERA_DATA_DIR: isolatedDir,
+        SERA_EXTRACTION_NODE_TOKENS: `laptop:${LAPTOP_TOKEN}`,
+        SERA_EXTRACTION_CLAIM_HOLD_SECONDS: '1',
+      }),
+    });
+    const isolatedApp = await buildServer(isolatedEngine);
+    await isolatedApp.ready();
+    try {
+      const badReport = await isolatedApp.inject({
+        method: 'POST',
+        url: '/api/legal/report',
+        payload: {
+          targetUrl: 'javascript:alert(1)',
+          category: 'copyright',
+          explanation: 'Malicious javascript pseudo-protocol URL submitted in report.',
+          notifierName: 'Test Notifier',
+          notifierEmail: 'notifier@example.com',
+          goodFaithConfirmed: true,
+        },
+      });
+      expect(badReport.statusCode).toBe(400);
+
+      let saw429 = false;
+      for (let i = 0; i < 35; i += 1) {
+        const res = await isolatedApp.inject({
+          method: 'POST',
+          url: '/internal/extraction/claim',
+          headers: { authorization: 'Bearer wrong-token' },
+          payload: { nodeId: 'x', providers: ['youtube'], capacity: 1 },
+        });
+        if (res.statusCode === 429) {
+          saw429 = true;
+          break;
+        }
+      }
+      expect(saw429).toBe(true);
+
+      const validNode = await isolatedApp.inject({
+        method: 'POST',
+        url: '/internal/extraction/claim',
+        headers: { authorization: `Bearer ${LAPTOP_TOKEN}` },
+        payload: { nodeId: 'laptop', providers: ['youtube'], capacity: 1 },
+      });
+      expect(validNode.statusCode).toBe(204);
+    } finally {
+      await isolatedApp.close();
+      await isolatedEngine.close?.();
+      await rm(isolatedDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('mobile resilience, metadata, manifest hash, and routing', () => {
+  it('returns X-Sera-Manifest-Hash on claim 204 and 200 and updates on override change', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'sera-claim-hash-'));
+    const claimEngine = await SeraEngine.create({
+      config: loadConfig({
+        NODE_ENV: 'test',
+        LOG_LEVEL: 'silent',
+        SERA_SECRET: 'hash-secret',
+        SERA_DATA_DIR: dir,
+        SERA_EXTRACTION_NODE_TOKEN: TOKEN,
+        SERA_EXTRACTION_CLAIM_HOLD_SECONDS: '1',
+      }),
+    });
+    const claimApp = await buildServer(claimEngine);
+    await claimApp.ready();
+
+    try {
+      const idleClaim = await claimApp.inject({
+        method: 'POST',
+        url: '/internal/extraction/claim',
+        headers: auth,
+        payload: {
+          nodeId: 'android-node',
+          providers: ['youtube', 'instagram'],
+          capacity: 2,
+          networkClass: 'residential',
+          transport: 'cellular',
+          appVersion: '1.2.0',
+          ytdlpVersion: '2026.10.26',
+          ffmpegVersion: '7.1',
+          features: ['trim', 'subtitles', 'items', 'instagram-session'],
+        },
+      });
+      expect(idleClaim.statusCode).toBe(204);
+      const firstHash = idleClaim.headers['x-sera-manifest-hash'];
+      expect(typeof firstHash).toBe('string');
+      expect((firstHash as string).length).toBe(64);
+
+      const nodeStatus = claimEngine.extractionNodes
+        .status()
+        .find((node) => node.id === 'android-node');
+      expect(nodeStatus).toMatchObject({
+        id: 'android-node',
+        networkClass: 'residential',
+        transport: 'cellular',
+        appVersion: '1.2.0',
+        ytdlpVersion: '2026.10.26',
+        ffmpegVersion: '7.1',
+      });
+
+      await mkdir(join(dir, 'updates'), { recursive: true });
+      await writeFile(
+        join(dir, 'updates', 'manifest.json'),
+        JSON.stringify({
+          providerConfig: { youtube: { playerClients: ['android', 'web_safari'] } },
+        }),
+      );
+
+      const dispatched = claimEngine.extractionNodes.dispatch({
+        kind: 'resolve',
+        url: 'https://www.youtube.com/watch?v=aqz-KE-bpKQ',
+        providerId: 'youtube',
+      });
+
+      const workClaim = await claimApp.inject({
+        method: 'POST',
+        url: '/internal/extraction/claim',
+        headers: auth,
+        payload: {
+          nodeId: 'android-node',
+          providers: ['youtube', 'instagram'],
+          capacity: 2,
+          networkClass: 'residential',
+          transport: 'wifi',
+          features: ['trim', 'subtitles', 'items'],
+        },
+      });
+      expect(workClaim.statusCode).toBe(200);
+      const updatedHash = workClaim.headers['x-sera-manifest-hash'];
+      expect(typeof updatedHash).toBe('string');
+      expect(updatedHash).not.toBe(firstHash);
+
+      const task = workClaim.json<{ id: string }>();
+      claimEngine.extractionNodes.fail(task.id, seraError('CANCELLED'));
+      await dispatched.catch(() => undefined);
+    } finally {
+      await claimApp.close();
+      await claimEngine.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('supports idempotent full retry and offset/Content-Range resume on /file', async () => {
+    engine.extractionNodes.register('mobile-resume-node', ['youtube'], 1);
+    const dispatched = engine.extractionNodes.dispatchJob({
+      kind: 'job',
+      url: 'https://www.youtube.com/watch?v=resume',
+      providerId: 'youtube',
+      planKeys: ['video/mp4/1080p'],
+    });
+    const claimed = await app.inject({
+      method: 'POST',
+      url: '/internal/extraction/claim',
+      headers: auth,
+      payload: {
+        nodeId: 'mobile-resume-node',
+        providers: ['youtube'],
+        capacity: 1,
+        features: ['trim', 'subtitles'],
+      },
+    });
+    expect(claimed.statusCode).toBe(200);
+    const task = claimed.json<{ id: string }>();
+
+    const firstHalf = Buffer.alloc(24 * 1024, 0x41);
+    const secondHalf = Buffer.alloc(24 * 1024, 0x42);
+    const full = Buffer.concat([firstHalf, secondHalf]);
+
+    const chunk1 = await app.inject({
+      method: 'POST',
+      url: `/internal/extraction/${task.id}/file?name=mobile.mp4&mime=video%2Fmp4`,
+      headers: {
+        ...auth,
+        'content-type': 'application/octet-stream',
+        'content-range': `bytes 0-${firstHalf.length - 1}/${full.length}`,
+      },
+      payload: firstHalf,
+    });
+    expect(chunk1.statusCode).toBe(200);
+    expect(chunk1.json()).toEqual({ accepted: true, complete: false, sizeBytes: firstHalf.length });
+
+    const statusBefore = await app.inject({
+      method: 'GET',
+      url: `/internal/extraction/${task.id}/file?name=mobile.mp4`,
+      headers: auth,
+    });
+    expect(statusBefore.statusCode).toBe(200);
+    expect(statusBefore.json()).toEqual({
+      exists: true,
+      complete: false,
+      sizeBytes: firstHalf.length,
+    });
+
+    const badOffset = await app.inject({
+      method: 'POST',
+      url: `/internal/extraction/${task.id}/file?name=mobile.mp4&offset=${full.length + 100}`,
+      headers: { ...auth, 'content-type': 'application/octet-stream' },
+      payload: secondHalf,
+    });
+    expect(badOffset.statusCode).toBe(416);
+    expect(badOffset.headers['x-sera-received-bytes']).toBe(String(firstHalf.length));
+
+    const chunk2 = await app.inject({
+      method: 'POST',
+      url: `/internal/extraction/${task.id}/file?name=mobile.mp4&offset=${firstHalf.length}&mime=video%2Fmp4`,
+      headers: {
+        ...auth,
+        'content-type': 'application/octet-stream',
+        'content-range': `bytes ${firstHalf.length}-${full.length - 1}/${full.length}`,
+      },
+      payload: secondHalf,
+    });
+    expect(chunk2.statusCode).toBe(200);
+    expect(chunk2.json()).toEqual({ accepted: true, sizeBytes: full.length });
+
+    const duplicateRetry = await app.inject({
+      method: 'POST',
+      url: `/internal/extraction/${task.id}/file?name=mobile.mp4&mime=video%2Fmp4`,
+      headers: { ...auth, 'content-type': 'application/octet-stream' },
+      payload: full,
+    });
+    expect(duplicateRetry.statusCode).toBe(200);
+    expect(duplicateRetry.json()).toEqual({ accepted: true, sizeBytes: full.length });
+
+    await app.inject({
+      method: 'POST',
+      url: `/internal/extraction/${task.id}/complete`,
+      headers: auth,
+      payload: {},
+    });
+
+    const files = await dispatched;
+    expect(files).toHaveLength(1);
+    expect(files[0]!.name).toBe('mobile.mp4');
+    expect(await readFile(files[0]!.path)).toEqual(full);
+  });
+
+  it('configures default leaseMs from SERA_EXTRACTION_LEASE_SECONDS', async () => {
+    const previous = process.env.SERA_EXTRACTION_LEASE_SECONDS;
+    process.env.SERA_EXTRACTION_LEASE_SECONDS = '1';
+    try {
+      const nodes = new ExtractionNodeRegistry(silentLogger(), 5000, 5000);
+      const dispatched = nodes.dispatch({
+        kind: 'resolve',
+        url: 'https://www.youtube.com/watch?v=lease',
+        providerId: 'youtube',
+      });
+      const first = await nodes.claim('android-a', ['youtube'], 1, 200);
+      expect(first).toBeDefined();
+
+      const retaken = await nodes.claim('android-b', ['youtube'], 1, 1500);
+      expect(retaken).toBeDefined();
+      expect(retaken!.id).not.toBe(first!.id);
+      nodes.completeResolve(retaken!.id, remoteMedia);
+      await expect(dispatched).resolves.toMatchObject({ title: 'Resolved somewhere else' });
+    } finally {
+      if (previous === undefined) {
+        delete process.env.SERA_EXTRACTION_LEASE_SECONDS;
+      } else {
+        process.env.SERA_EXTRACTION_LEASE_SECONDS = previous;
+      }
+    }
+  });
+
+  it('routes YouTube and Instagram (video and session photo) to Android when laptop is offline', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'sera-android-routing-'));
+    const androidEngine = await SeraEngine.create({
+      config: loadConfig({
+        NODE_ENV: 'test',
+        LOG_LEVEL: 'silent',
+        SERA_SECRET: 'android-routing-secret',
+        SERA_DATA_DIR: dir,
+        SERA_NETWORK_CLASS: 'datacenter',
+        SERA_EXTRACTION_NODE_TOKENS: 'android:tok-android-123456',
+        SERA_EXTRACTION_CLAIM_HOLD_SECONDS: '1',
+      }),
+      probe: (_url, opts) => {
+        if (opts.providerId === 'instagram') {
+          return Promise.reject(
+            seraError('RATE_LIMITED', { detail: 'instagram datacenter rate-limit reached' }),
+          );
+        }
+        return Promise.reject(
+          seraError('SOURCE_BLOCKED', { detail: "Sign in to confirm you're not a bot" }),
+        );
+      },
+    });
+    const androidApp = await buildServer(androidEngine);
+    await androidApp.ready();
+
+    try {
+      const androidHeaders = { authorization: 'Bearer tok-android-123456' };
+      await androidApp.inject({
+        method: 'POST',
+        url: '/internal/extraction/claim',
+        headers: androidHeaders,
+        payload: {
+          nodeId: 'android',
+          providers: ['youtube', 'instagram'],
+          capacity: 2,
+          networkClass: 'residential',
+          transport: 'cellular',
+          features: ['trim', 'subtitles', 'items', 'instagram-session'],
+        },
+      });
+
+      const igReelResolvePromise = androidApp.inject({
+        method: 'POST',
+        url: '/api/media/info',
+        payload: { url: 'https://www.instagram.com/reel/Cxyz12345/' },
+      });
+
+      let igTask: { id: string; providerId: string } | undefined;
+      for (let i = 0; i < 8 && !igTask; i += 1) {
+        const res = await androidApp.inject({
+          method: 'POST',
+          url: '/internal/extraction/claim',
+          headers: androidHeaders,
+          payload: {
+            nodeId: 'android',
+            providers: ['youtube', 'instagram'],
+            capacity: 2,
+            networkClass: 'residential',
+            transport: 'cellular',
+            features: ['trim', 'subtitles', 'items', 'instagram-session'],
+          },
+        });
+        if (res.statusCode === 200) igTask = res.json();
+      }
+      expect(igTask).toBeDefined();
+      expect(igTask!.providerId).toBe('instagram');
+
+      await androidApp.inject({
+        method: 'POST',
+        url: `/internal/extraction/${igTask!.id}/resolved`,
+        headers: androidHeaders,
+        payload: {
+          media: {
+            provider: 'instagram',
+            providerLabel: 'Instagram',
+            url: 'https://www.instagram.com/reel/Cxyz12345/',
+            type: 'single',
+            title: 'IG Reel',
+            items: [
+              {
+                index: 0,
+                kind: 'video',
+                plans: [
+                  {
+                    kind: 'video',
+                    container: 'mp4',
+                    label: 'Original',
+                    requiresConversion: false,
+                    recommended: true,
+                    fetch: { via: 'ytdlp', selector: 'best' },
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      });
+
+      const igReelInfo = await igReelResolvePromise;
+      expect(igReelInfo.statusCode).toBe(200);
+      expect(igReelInfo.json<{ title: string }>().title).toBe('IG Reel');
+    } finally {
+      await androidApp.close();
+      await androidEngine.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('forwards requires: [instagram-session] and networkClass in JobRunner.run', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'sera-runner-ig-session-'));
+    try {
+      const cfg = loadConfig({
+        NODE_ENV: 'test',
+        LOG_LEVEL: 'silent',
+        SERA_SECRET: 'runner-ig-secret',
+        SERA_DATA_DIR: dir,
+      });
+      const workspaces = new WorkspaceManager(dir, 3600, silentLogger());
+      const dispatchedTasks: Omit<RemoteTask, 'id' | 'createdAt'>[] = [];
+      const jpegBytes = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(64)]);
+
+      const igSessionMedia: ResolvedMedia = {
+        provider: 'instagram',
+        providerLabel: 'Instagram',
+        url: 'https://www.instagram.com/p/DcOX3hWFiey/',
+        type: 'single',
+        title: 'IG Photo',
+        remoteBackend: 'instagram-session',
+        metadata: { source: 'web-api' },
+        items: [
+          {
+            index: 0,
+            kind: 'image',
+            plans: [
+              {
+                kind: 'image',
+                container: 'jpg',
+                label: 'Original',
+                requiresConversion: false,
+                recommended: true,
+                fetch: { via: 'direct', url: 'https://scontent.cdninstagram.com/v/photo.jpg' },
+              },
+            ],
+          },
+        ],
+      };
+
+      const runner = new JobRunner({
+        config: cfg,
+        logger: silentLogger(),
+        resolver: {
+          resolveCanonical: () => Promise.resolve(igSessionMedia),
+          dispatcher: undefined,
+        } as never,
+        workspaces,
+        remote: {
+          status: () => [
+            {
+              id: 'android',
+              providers: ['youtube', 'instagram'],
+              networkClass: 'residential',
+              capacity: 2,
+              features: ['trim', 'subtitles', 'items', 'instagram-session'],
+              transport: 'cellular',
+              inFlight: 0,
+              lastSeenMs: 10,
+              healthy: true,
+            },
+          ],
+          availableProviders: () => ['youtube', 'instagram'],
+          hasHealthyNode: () => true,
+          networkClasses: () => ['residential'],
+          hasFeature: () => true,
+          dispatch: () => Promise.reject(new Error('unexpected')),
+          dispatchJob: async (
+            task,
+          ): Promise<
+            readonly { readonly name: string; readonly mimeType: string; readonly path: string }[]
+          > => {
+            dispatchedTasks.push(task);
+            const path = join(dir, 'ig-photo.jpg');
+            await writeFile(path, jpegBytes);
+            return [{ name: 'ig-photo.jpg', mimeType: 'image/jpeg', path }];
+          },
+        },
+      });
+
+      const result = await runner.run(
+        {
+          jobId: 'dddddddddddddddddddddddddddddddd',
+          provider: 'instagram',
+          url: igSessionMedia.url,
+          selections: [{ itemIndex: 0, planKey: 'image/jpg/Original' }],
+          packaging: 'auto',
+          resolvedMedia: igSessionMedia,
+          resolvedAt: Date.now(),
+        },
+        () => undefined,
+      );
+
+      expect(result.filename).toBe('ig-photo.jpg');
+      expect(dispatchedTasks).toHaveLength(1);
+      expect(dispatchedTasks[0]).toMatchObject({
+        kind: 'job',
+        providerId: 'instagram',
+        networkClass: 'residential',
+        requires: ['instagram-session'],
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

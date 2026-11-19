@@ -89,6 +89,7 @@ export interface YtdlpInfo {
   readonly view_count?: number | null;
   readonly like_count?: number | null;
   readonly playlist_count?: number | null;
+  readonly playlist_index?: number | null;
   readonly age_limit?: number | null;
   readonly availability?: string | null;
   readonly requested_downloads?: readonly { readonly filepath?: string }[];

@@ -134,4 +134,16 @@ describe('what counts as abuse', () => {
     for (let i = 0; i < 3; i += 1) guard.recordFailure('a', 'BLOCKED_ADDRESS');
     expect(blocked(guard, 'a')).toBe(true);
   });
+
+  it('evicts non-blocked entries before dropping active cooldown blocks', () => {
+    const guard = new AbuseGuard({ maxFailures: 2 });
+    guard.recordFailure('attacker', 'BLOCKED_ADDRESS');
+    guard.recordFailure('attacker', 'BLOCKED_ADDRESS');
+    expect(blocked(guard, 'attacker')).toBe(true);
+
+    for (let i = 0; i < 12_000; i += 1) {
+      guard.recordFailure(`probe-${i}`, 'INVALID_URL');
+    }
+    expect(blocked(guard, 'attacker')).toBe(true);
+  });
 });

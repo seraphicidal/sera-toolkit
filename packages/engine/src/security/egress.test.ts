@@ -435,3 +435,22 @@ describe('confineToHttp', () => {
     }
   });
 });
+
+describe('the egress proxy upstream validation', () => {
+  it('refuses unsupported upstream proxy protocols cleanly with 502', async () => {
+    const socksGuard = new EgressGuard({
+      resolve: table({ 'site.test': ['1.1.1.1'] }),
+      isAllowedAddress: isPublicAddress,
+      connectTimeoutMs: 1_000,
+    });
+    const socksProxy = await socksGuard.proxyUrl('socks5://127.0.0.1:1080');
+    try {
+      const response = await viaProxy('http://site.test/hello', socksProxy);
+      expect(response.status).toBe(502);
+      const connectStatus = await connectVia('site.test:443', socksProxy);
+      expect(connectStatus).toContain('502');
+    } finally {
+      await socksGuard.close();
+    }
+  });
+});

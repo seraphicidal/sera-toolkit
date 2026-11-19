@@ -113,6 +113,15 @@ const ERROR_BACKOFF_MS = 5_000;
 const MAX_BACKOFF_MS = 60_000;
 const PROGRESS_INTERVAL_MS = 1_000;
 const PROGRESS_THROTTLE_MS = 250;
+const AUTH_BACKOFF_MS = 30_000;
+const MAX_AUTH_FAILURES = 3;
+
+class FatalAuthError extends Error {
+  constructor(status: number) {
+    super(`extraction node authentication rejected (${status})`);
+    this.name = 'FatalAuthError';
+  }
+}
 
 const CLAIM_TIMEOUT_MS = 60_000;
 
@@ -159,6 +168,7 @@ export class ExtractionNode {
 
   async run(): Promise<void> {
     let backoff = ERROR_BACKOFF_MS;
+    let authFailures = 0;
     this.logger.info(
       {
         api: this.apiUrl,
@@ -174,10 +184,22 @@ export class ExtractionNode {
       try {
         const task = await this.claim();
         backoff = ERROR_BACKOFF_MS;
+        authFailures = 0;
         if (!task || this.stopping) continue;
         await this.handle(task);
       } catch (error) {
         if (this.stopping) break;
+        if (error instanceof FatalAuthError) {
+          authFailures += 1;
+          this.logger.error(
+            { err: error.message, authFailures, maxAuthFailures: MAX_AUTH_FAILURES },
+            'extraction node token rejected by API',
+          );
+          if (authFailures >= MAX_AUTH_FAILURES) throw error;
+          await sleep(AUTH_BACKOFF_MS);
+          continue;
+        }
+        authFailures = 0;
         this.logger.warn(
           { err: error instanceof Error ? error.message : String(error), backoffMs: backoff },
           'could not reach the SERA API',
@@ -191,6 +213,7 @@ export class ExtractionNode {
   private async claim(): Promise<RemoteTask | undefined> {
     const controller = new AbortController();
     this.claimAbort = controller;
+    const startedAt = Date.now();
     try {
       const response = await this.post(
         '/internal/extraction/claim',
@@ -205,10 +228,17 @@ export class ExtractionNode {
         controller.signal,
       );
       if (response.status === 204) {
-        if (!this.stopping) await sleep(IDLE_BACKOFF_MS);
+        if (!this.stopping && Date.now() - startedAt < 5_000) await sleep(IDLE_BACKOFF_MS);
         return undefined;
       }
-      if (!response.ok) throw new Error(`claim returned ${response.status}`);
+      if (response.status === 401 || response.status === 403) {
+        await response.body?.cancel().catch(() => undefined);
+        throw new FatalAuthError(response.status);
+      }
+      if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
+        throw new Error(`claim returned ${response.status}`);
+      }
       return (await response.json()) as RemoteTask;
     } finally {
       if (this.claimAbort === controller) this.claimAbort = undefined;
@@ -252,18 +282,29 @@ export class ExtractionNode {
     let currentBytesTotal: number | undefined;
     let lastSentAt = 0;
     let heartbeatInFlight = false;
+    let progressChain: Promise<void> = Promise.resolve();
+    const enqueueProgress = (
+      percent: number,
+      step: string,
+      bytesDownloaded?: number,
+      bytesTotal?: number,
+    ): void => {
+      progressChain = progressChain.then(() =>
+        this.progress(task.id, percent, step, abort, bytesDownloaded, bytesTotal),
+      );
+    };
+
     const heartbeat = setInterval(() => {
       if (heartbeatInFlight || abort.signal.aborted) return;
       heartbeatInFlight = true;
       lastSentAt = Date.now();
-      void this.progress(
-        task.id,
+      enqueueProgress(
         currentPercent,
         currentStep,
-        abort,
         currentBytesDownloaded,
         currentBytesTotal,
-      ).finally(() => {
+      );
+      void progressChain.finally(() => {
         heartbeatInFlight = false;
       });
     }, PROGRESS_INTERVAL_MS);
@@ -283,11 +324,9 @@ export class ExtractionNode {
       const now = Date.now();
       if (stepChanged || now - lastSentAt >= PROGRESS_THROTTLE_MS) {
         lastSentAt = now;
-        void this.progress(
-          task.id,
+        enqueueProgress(
           currentPercent,
           currentStep,
-          abort,
           bytesDownloaded,
           bytesTotal,
         );
@@ -299,7 +338,7 @@ export class ExtractionNode {
 
       if (task.kind === 'resolve') {
         const media = await this.resolver.resolveCanonical(url, task.providerId, abort.signal);
-        await this.report(`/internal/extraction/${task.id}/resolved`, { media });
+        await this.report(`/internal/extraction/${task.id}/resolved`, { media }, abort.signal);
         this.logger.info(
           {
             task: task.id,
@@ -363,7 +402,7 @@ export class ExtractionNode {
 
     const trim = taskTrim(task);
     const subtitles = taskSubtitles(task);
-    const cached = this.resolver.getCached(task.providerId, url.toString());
+    const cached = this.resolver.getCached(task.providerId, media.url);
     const spec: JobSpec = {
       jobId,
       provider: task.providerId,
@@ -451,6 +490,12 @@ export class ExtractionNode {
           callback(null, chunk);
         },
       });
+      stream.once('error', (error) => {
+        if (!trackingStream?.destroyed) trackingStream?.destroy(error);
+      });
+      trackingStream.once('close', () => {
+        if (!stream.destroyed) stream.destroy();
+      });
       bodyStream = Readable.toWeb(stream.pipe(trackingStream)) as ReadableStream<Uint8Array>;
     } else {
       bodyStream = Readable.toWeb(stream) as ReadableStream<Uint8Array>;
@@ -471,8 +516,14 @@ export class ExtractionNode {
           signal: combinedSignal,
         },
       );
-      if (response.status === 409) throw seraError('CANCELLED');
-      if (!response.ok) throw new Error(`upload of ${name} returned ${response.status}`);
+      if (response.status === 409) {
+        await response.body?.cancel().catch(() => undefined);
+        throw seraError('CANCELLED');
+      }
+      if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
+        throw new Error(`upload of ${name} returned ${response.status}`);
+      }
       const payload = (await response.json().catch(() => undefined)) as
         { accepted?: boolean; cancelled?: boolean } | undefined;
       if (payload?.cancelled) throw seraError('CANCELLED');
@@ -493,21 +544,30 @@ export class ExtractionNode {
     bytesDownloaded?: number,
     bytesTotal?: number,
   ): Promise<void> {
+    if (abort.signal.aborted) return;
     try {
-      const response = await this.post(`/internal/extraction/${taskId}/progress`, {
-        percent,
-        step,
-        ...(bytesDownloaded !== undefined ? { bytesDownloaded } : {}),
-        ...(bytesTotal !== undefined ? { bytesTotal } : {}),
-      });
-      if (!response.ok) return;
+      const response = await this.post(
+        `/internal/extraction/${taskId}/progress`,
+        {
+          percent,
+          step,
+          ...(bytesDownloaded !== undefined ? { bytesDownloaded } : {}),
+          ...(bytesTotal !== undefined ? { bytesTotal } : {}),
+        },
+        REQUEST_TIMEOUT_MS,
+        abort.signal,
+      );
+      if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
+        return;
+      }
       const body = (await response.json()) as { cancelled?: boolean };
       if (body.cancelled && !abort.signal.aborted) abort.abort();
     } catch {}
   }
 
-  private async report(path: string, body: unknown): Promise<void> {
-    const response = await this.post(path, body);
+  private async report(path: string, body: unknown, signal?: AbortSignal): Promise<void> {
+    const response = await this.post(path, body, REQUEST_TIMEOUT_MS, signal);
     if (!response.ok) {
       throw new Error(`the server refused ${path.split('/').pop()} (HTTP ${response.status})`);
     }

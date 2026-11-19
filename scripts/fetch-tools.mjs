@@ -47,8 +47,10 @@ async function fetchBuffer(url, label) {
   const response = await fetch(url, {
     headers: { 'user-agent': 'sera-toolkit/1.0 (+tools fetch)' },
     redirect: 'follow',
+    signal: AbortSignal.timeout(120_000),
   });
   if (!response.ok) fail(`${label}: HTTP ${response.status} for ${url}`);
+  if (!response.body) fail(`${label}: empty response body for ${url}`);
   const total = Number(response.headers.get('content-length')) || 0;
   const chunks = [];
   let received = 0;

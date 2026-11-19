@@ -2,41 +2,36 @@ import { classifyFailure, isDefinitive } from './failure.js';
 import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import type { TrimRange } from '@sera/contracts/types';
+import type {
+  NodeFeature,
+  NodeStatus,
+  NodeTransport,
+  RemoteProgress,
+  RemoteTask,
+  RemoteTaskItem,
+  RemoteTaskKind,
+} from '@sera/contracts/types';
 import { seraError, type SeraError } from '../errors.js';
 import type { Logger } from '../logging.js';
 import type { ResolvedMedia } from '../providers/types.js';
 import type { ExtractionBackend, NetworkClass } from './router.js';
 
-export type RemoteTaskKind = 'resolve' | 'job';
+export type {
+  NodeFeature,
+  NodeStatus,
+  NodeTransport,
+  RemoteProgress,
+  RemoteTask,
+  RemoteTaskItem,
+  RemoteTaskKind,
+};
 
-export interface RemoteTask {
-  readonly id: string;
-  readonly kind: RemoteTaskKind;
-  readonly url: string;
-  readonly providerId: string;
-  readonly networkClass?: NetworkClass;
-  readonly planKeys?: readonly string[];
-  readonly items?: readonly RemoteTaskItem[];
-  readonly filename?: string;
-  readonly trim?: TrimRange;
-  readonly requires?: readonly NodeFeature[];
-  readonly avoid?: readonly string[];
-  readonly subtitles?: {
-    readonly lang: string;
-    readonly auto: boolean;
-    readonly format: 'srt' | 'vtt' | 'embed';
-    readonly only: boolean;
-  };
-  readonly createdAt: number;
+export interface NodeMetadata {
+  readonly transport?: NodeTransport;
+  readonly appVersion?: string;
+  readonly ytdlpVersion?: string;
+  readonly ffmpegVersion?: string;
 }
-
-export interface RemoteTaskItem {
-  readonly index: number;
-  readonly sourceId?: string;
-}
-
-export type NodeFeature = 'trim' | 'subtitles' | 'items' | 'instagram-session';
 
 export function requiredFeatures(
   task: Pick<RemoteTask, 'trim' | 'subtitles' | 'items' | 'requires'>,
@@ -46,13 +41,6 @@ export function requiredFeatures(
   if (task.subtitles) required.push('subtitles');
   if (task.items?.length) required.push('items');
   return required;
-}
-
-export interface RemoteProgress {
-  readonly percent: number;
-  readonly step: string;
-  readonly bytesDownloaded?: number;
-  readonly bytesTotal?: number;
 }
 
 interface Waiter {
@@ -67,6 +55,10 @@ interface NodeRecord {
   capacity: number;
   networkClass: NetworkClass;
   features: string[];
+  transport?: NodeTransport;
+  appVersion?: string;
+  ytdlpVersion?: string;
+  ffmpegVersion?: string;
   seen: number;
 }
 
@@ -94,15 +86,14 @@ export interface RemoteFile {
   readonly path: string;
 }
 
-export interface NodeStatus {
-  readonly id: string;
-  readonly providers: readonly string[];
-  readonly networkClass: NetworkClass;
-  readonly capacity: number;
-  readonly features?: readonly string[];
-  readonly inFlight: number;
-  readonly lastSeenMs: number;
-  readonly healthy: boolean;
+const DEFAULT_LEASE_SECONDS = 60;
+
+function defaultLeaseMs(): number {
+  const raw = process.env.SERA_EXTRACTION_LEASE_SECONDS;
+  if (!raw) return DEFAULT_LEASE_SECONDS * 1000;
+  const parsed = Number.parseInt(raw.trim(), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_LEASE_SECONDS * 1000;
+  return parsed * 1000;
 }
 
 export interface RemoteExtraction {
@@ -139,7 +130,7 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
     private readonly logger: Logger,
     private readonly staleAfterMs = 90_000,
     private readonly taskTimeoutMs = 15 * 60_000,
-    private readonly leaseMs = 45_000,
+    private readonly leaseMs = defaultLeaseMs(),
   ) {}
 
   register(
@@ -148,20 +139,42 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
     capacity: number,
     networkClass: NetworkClass = 'residential',
     features: readonly string[] = [],
+    metadata?: NodeMetadata,
   ): NodeRecord {
     const known = this.nodes.get(nodeId);
+    const transport = metadata?.transport ?? known?.transport;
+    const appVersion = metadata?.appVersion ?? known?.appVersion;
+    const ytdlpVersion = metadata?.ytdlpVersion ?? known?.ytdlpVersion;
+    const ffmpegVersion = metadata?.ffmpegVersion ?? known?.ffmpegVersion;
     const record: NodeRecord = {
       id: nodeId,
       providers: [...providers],
       capacity: Math.max(1, capacity),
       networkClass,
       features: [...features],
+      ...(transport ? { transport } : {}),
+      ...(appVersion ? { appVersion } : {}),
+      ...(ytdlpVersion ? { ytdlpVersion } : {}),
+      ...(ffmpegVersion ? { ffmpegVersion } : {}),
       seen: Date.now(),
     };
     this.nodes.set(nodeId, record);
-    if (known?.features.join() !== record.features.join()) {
+    if (
+      known?.features.join() !== record.features.join() ||
+      known?.transport !== record.transport
+    ) {
       this.logger.info(
-        { node: nodeId, providers, capacity, networkClass, features },
+        {
+          node: nodeId,
+          providers,
+          capacity,
+          networkClass,
+          features,
+          ...(transport ? { transport } : {}),
+          ...(appVersion ? { appVersion } : {}),
+          ...(ytdlpVersion ? { ytdlpVersion } : {}),
+          ...(ffmpegVersion ? { ffmpegVersion } : {}),
+        },
         'extraction node connected',
       );
     }
@@ -191,8 +204,9 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
     holdMs: number,
     networkClass: NetworkClass = 'residential',
     features: readonly string[] = [],
+    metadata?: NodeMetadata,
   ): Promise<RemoteTask | undefined> {
-    const node = this.register(nodeId, providers, capacity, networkClass, features);
+    const node = this.register(nodeId, providers, capacity, networkClass, features, metadata);
 
     const ready = this.queue.findIndex((task) => this.accepts(node, task));
     if (ready !== -1) {
@@ -250,6 +264,17 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
     }
   }
 
+  renewLease(taskId: string): boolean {
+    const pending = this.pending.get(taskId);
+    if (!pending || pending.cancelled) return false;
+    this.renew(pending);
+    if (pending.claimedBy) {
+      const node = this.nodes.get(pending.claimedBy);
+      if (node) node.seen = Date.now();
+    }
+    return true;
+  }
+
   reportProgress(taskId: string, progress: RemoteProgress): void {
     const pending = this.pending.get(taskId);
     if (!pending) return;
@@ -276,7 +301,14 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
       const node = this.nodes.get(pending.claimedBy);
       if (node) node.seen = Date.now();
     }
-    pending.files.push(file);
+    const existingIndex = pending.files.findIndex(
+      (entry) => entry.name.toLowerCase() === file.name.toLowerCase(),
+    );
+    if (existingIndex !== -1) {
+      pending.files[existingIndex] = file;
+    } else {
+      pending.files.push(file);
+    }
     return true;
   }
 
@@ -309,6 +341,10 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
       networkClass: node.networkClass,
       capacity: node.capacity,
       features: node.features,
+      ...(node.transport ? { transport: node.transport } : {}),
+      ...(node.appVersion ? { appVersion: node.appVersion } : {}),
+      ...(node.ytdlpVersion ? { ytdlpVersion: node.ytdlpVersion } : {}),
+      ...(node.ffmpegVersion ? { ffmpegVersion: node.ffmpegVersion } : {}),
       inFlight: this.inFlightFor(node.id),
       lastSeenMs: now - node.seen,
       healthy: now - node.seen < this.staleAfterMs,
@@ -378,6 +414,14 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
       nodes.length &&
       !nodes.some((node) => required.every((feature) => node.features.includes(feature)))
     ) {
+      if (required.includes('instagram-session')) {
+        return Promise.reject(
+          seraError('PROVIDER_AUTH_REQUIRED', {
+            message: 'This post needs a connected extraction node with an Instagram session.',
+            detail: `remote: no connected node declares ${required.join(', ')}`,
+          }),
+        );
+      }
       return Promise.reject(
         seraError('PROVIDER_UNAVAILABLE', {
           message: required.includes('trim')
@@ -614,6 +658,7 @@ export function remoteBackends(registry: RemoteExtraction): ExtractionBackend[] 
 export function sessionBackend(
   registry: RemoteExtraction,
   feature: NodeFeature,
+  providerId?: string,
 ): ExtractionBackend {
   return {
     id: feature,
@@ -622,7 +667,7 @@ export function sessionBackend(
     get providers() {
       return registry.availableProviders();
     },
-    isHealthy: () => registry.hasFeature(feature),
+    isHealthy: () => registry.hasFeature(feature, providerId),
     resolve: async (url, providerId, signal) => {
       const tried: string[] = [];
       for (;;) {

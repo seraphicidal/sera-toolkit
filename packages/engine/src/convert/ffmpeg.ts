@@ -281,7 +281,20 @@ export function buildArgs(request: ConvertRequest, source: ProbeResult): string[
         if (videoCompatible && audioCompatible) {
           args.push('-c', 'copy');
         } else {
-          args.push('-c:v', 'libvpx-vp9', '-crf', '32', '-b:v', '0', '-row-mt', '1');
+          args.push(
+            '-c:v',
+            'libvpx-vp9',
+            '-deadline',
+            'good',
+            '-cpu-used',
+            '4',
+            '-crf',
+            '32',
+            '-b:v',
+            '0',
+            '-row-mt',
+            '1',
+          );
           args.push(
             source.audio ? '-c:a' : '-an',
             ...(source.audio ? ['libopus', '-b:a', '128k'] : []),

@@ -64,6 +64,7 @@ export function ImportClient() {
   }, []);
 
   useEffect(() => {
+    const hadImportHash = /[#&](?:v|p)=/.test(window.location.hash);
     if (!fragment.current.read) {
       fragment.current = { read: true, value: readImportFragment(window) };
     }
@@ -93,7 +94,19 @@ export function ImportClient() {
       return () => abortRef.current?.abort();
     }
 
-    if (!window.opener) {
+    if (hadImportHash) {
+      setError({
+        code: 'INVALID_URL',
+        message: 'That import link was malformed or incomplete.',
+        hint: 'Open the post on Instagram and run the SERA bookmarklet again.',
+        retryable: false,
+      });
+      setPhase('error');
+      return () => abortRef.current?.abort();
+    }
+
+    const openerWindow = window.opener as Window | null;
+    if (!openerWindow || openerWindow.closed) {
       setPhase('idle');
       return () => abortRef.current?.abort();
     }

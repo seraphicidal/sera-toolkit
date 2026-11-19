@@ -1,4 +1,4 @@
-import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { seraError } from '../errors.js';
 
 const SEPARATOR = '.';
@@ -32,8 +32,12 @@ export function signToken<T extends object>(
 const BASE64URL_PART = /^[A-Za-z0-9_-]+$/;
 const MAX_TOKEN_LENGTH = 16_384;
 
-export function readToken<T extends object>(token: string, secret: Buffer): T & SignedPayload {
-  if (!token || token.length > MAX_TOKEN_LENGTH) {
+export function readToken<T extends object>(
+  token: string,
+  secret: Buffer,
+  maxLength = MAX_TOKEN_LENGTH,
+): T & SignedPayload {
+  if (!token || token.length > maxLength) {
     throw seraError('EXPIRED', { detail: 'malformed token' });
   }
   const index = token.indexOf(SEPARATOR);
@@ -48,7 +52,13 @@ export function readToken<T extends object>(token: string, secret: Buffer): T & 
   const provided = Buffer.from(sig, 'utf8');
   const expected = Buffer.from(b64url(hmac(secret, encoded)), 'utf8');
 
-  if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) {
+  if (
+    !timingSafeEqual(
+      createHash('sha256').update(provided).digest(),
+      createHash('sha256').update(expected).digest(),
+    ) ||
+    provided.length !== expected.length
+  ) {
     throw seraError('EXPIRED', { detail: 'bad token signature' });
   }
 
@@ -58,12 +68,12 @@ export function readToken<T extends object>(token: string, secret: Buffer): T & 
   } catch (cause) {
     throw seraError('EXPIRED', { detail: 'unparseable token payload', cause });
   }
-  if (typeof parsed !== 'object' || parsed === null) {
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
     throw seraError('EXPIRED', { detail: 'non-object token payload' });
   }
 
   const payload = parsed as T & SignedPayload;
-  if (typeof payload.e !== 'number') {
+  if (typeof payload.e !== 'number' || !Number.isFinite(payload.e)) {
     throw seraError('EXPIRED', { detail: 'token past its expiry' });
   }
   return payload;

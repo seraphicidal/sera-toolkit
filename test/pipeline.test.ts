@@ -485,6 +485,8 @@ describe('progress reporting', () => {
     let previous = -1;
     for await (const event of engine.jobs.events(id)) {
       if (event.type === 'ping') continue;
+      expect(event.job).toBeDefined();
+      if (!event.job) break;
       expect(event.job.progress.percent).toBeGreaterThanOrEqual(previous);
       previous = event.job.progress.percent;
       if (event.type === 'done' || event.type === 'error') break;

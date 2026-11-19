@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DIR="${SERA_DIR:-/opt/sera}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DIR="${SERA_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 STATE_DIR=/var/lib/sera/alerts
 CANARY=/var/lib/sera/canary.json
 REPO="${SERA_ALERT_REPO:-seraphicidal/sera-toolkit}"
@@ -14,12 +15,17 @@ if [ -z "$topic" ]; then
   echo "[alert] SERA_ALERT_NTFY_TOPIC is not set; nothing to do"
   exit 0
 fi
+encoded_topic=$(jq -rn --arg t "$topic" '$t | @uri')
 
 notify() {
+  local click_header=()
+  if [ -n "$domain" ]; then
+    click_header=(-H "Click: https://$domain/health")
+  fi
   if ! curl -fsS --max-time 15 -o /dev/null \
     -H "Title: $1" -H "Priority: $3" -H "Tags: $4" \
-    -H "Click: https://$domain/health" \
-    -d "$2" "https://ntfy.sh/$topic"; then
+    ${click_header[@]+"${click_header[@]}"} \
+    -d "$2" "https://ntfy.sh/$encoded_topic"; then
     echo "[alert] could not reach ntfy.sh"
     return 1
   fi
@@ -91,22 +97,26 @@ elif [ -n "$canary_token" ]; then
   auth_headers=(-H "x-sera-canary: $canary_token")
 fi
 
-body=$(curl -fsS --max-time 15 --resolve "$domain:443:127.0.0.1" ${auth_headers[@]+"${auth_headers[@]}"} "https://$domain/health" || true)
-if [ -z "$body" ] || ! echo "$body" | jq -e .checks >/dev/null 2>&1; then
-  observe api down "the API is not answering"
+if [ -z "$domain" ]; then
+  observe api down "SERA_DOMAIN is not configured in $DIR/.env"
 else
-  observe api up ''
-  nodes=$(echo "$body" | jq -r '[.checks[] | select(.name == "extraction-nodes") | .status][0] // "absent"')
-  if [ "$nodes" = ok ] || [ "$nodes" = absent ]; then
-    observe nodes up ''
+  body=$(curl -fsS --max-time 15 --resolve "$domain:443:127.0.0.1" ${auth_headers[@]+"${auth_headers[@]}"} "https://$domain/health" || true)
+  if [ -z "$body" ] || ! echo "$body" | jq -e .checks >/dev/null 2>&1; then
+    observe api down "the API is not answering"
   else
-    observe nodes down "no extraction node is live (YouTube will fail)"
-  fi
-  failing=$(echo "$body" | jq -r '[.checks[] | select(.name != "extraction-nodes" and .status != "ok") | .name] | join(", ")')
-  if [ -z "$failing" ]; then
-    observe checks up ''
-  else
-    observe checks down "health check failing: $failing"
+    observe api up ''
+    nodes=$(echo "$body" | jq -r '[.checks[] | select(.name == "extraction-nodes") | .status][0] // "absent"')
+    if [ "$nodes" = ok ] || [ "$nodes" = absent ]; then
+      observe nodes up ''
+    else
+      observe nodes down "no extraction node is live (YouTube will fail)"
+    fi
+    failing=$(echo "$body" | jq -r '[.checks[] | select(.name != "extraction-nodes" and .status != "ok") | .name] | join(", ")')
+    if [ -z "$failing" ]; then
+      observe checks up ''
+    else
+      observe checks down "health check failing: $failing"
+    fi
   fi
 fi
 

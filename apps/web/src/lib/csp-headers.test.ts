@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import nextConfig from '../../next.config';
+import { buildCspHeader } from './csp';
 
 interface HeaderRule {
   readonly source: string;
@@ -57,8 +58,17 @@ describe('the installable app under the site-wide policy', () => {
     expect(directive(csp, 'manifest-src')).toBeUndefined();
     expect(directive(csp, 'img-src')).toBe("img-src 'self' data: blob:");
     expect(directive(csp, 'connect-src')).toBe("connect-src 'self'");
+    expect(directive(csp, 'script-src')).not.toContain('unsafe-inline');
+    expect(directive(csp, 'script-src')).toContain("'sha256-");
     expect(csp).not.toContain('unsafe-eval');
     expect(csp).not.toMatch(/https?:\/\//);
+
+    const nonceCsp = buildCspHeader({ nonce: 'abc123', forceHttps: true });
+    expect(directive(nonceCsp, 'script-src')).toBe("script-src 'self' 'nonce-abc123' 'strict-dynamic'");
+    expect(nonceCsp).toContain('upgrade-insecure-requests');
+    expect(buildCspHeader({ nonce: 'abc123', forceHttps: false })).not.toContain(
+      'upgrade-insecure-requests',
+    );
   });
 
   it('names only same-origin paths in the manifest, and shares into /share', async () => {

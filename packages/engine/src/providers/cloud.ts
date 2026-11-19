@@ -93,6 +93,17 @@ function filenameFromUrl(rawUrl: string, fallback: string): string {
   }
 }
 
+const BLOCKED_CLOUD_CONTENT_TYPES = new Set([
+  'text/html',
+  'text/plain',
+  'application/xhtml+xml',
+  'image/svg+xml',
+  'application/javascript',
+  'text/javascript',
+  'application/xml',
+  'text/xml',
+]);
+
 function buildCloudMedia(options: {
   readonly providerId: string;
   readonly providerLabel: string;
@@ -104,7 +115,7 @@ function buildCloudMedia(options: {
   readonly maxFilesizeBytes: number;
 }): ResolvedMedia {
   const contentType = (options.contentType ?? '').split(';')[0]?.trim().toLowerCase() ?? '';
-  if (contentType === 'text/html' || contentType === 'text/plain') {
+  if (BLOCKED_CLOUD_CONTENT_TYPES.has(contentType)) {
     throw seraError('UNSUPPORTED_SOURCE', {
       message: "That link doesn't point to a downloadable file.",
       detail: `${options.providerId}: received ${contentType}`,
@@ -375,6 +386,12 @@ export class MediaFireProvider implements MediaProvider {
       directUrl = parseUserUrl(extracted, {
         allowPrivateAddresses: context.config.allowPrivateAddresses,
       }).url;
+      if (hostMatchesAny(directUrl.hostname, context.config.blockedHosts)) {
+        throw seraError('BLOCKED_ADDRESS', {
+          detail: `mediafire: blocked host ${directUrl.hostname}`,
+        });
+      }
+      context.allowUrl?.(directUrl);
     }
 
     const head = await context.head(directUrl);

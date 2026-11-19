@@ -42,10 +42,22 @@ export function sniffTextImposter(head: Uint8Array): 'html' | 'json' | 'xml' | u
 
   const text = Buffer.from(head.subarray(start)).toString('latin1').toLowerCase();
   if (!text) return undefined;
-  if (text.startsWith('<!doctype html') || text.startsWith('<html') || text.startsWith('<head')) {
+  if (
+    text.startsWith('<!doctype html') ||
+    text.startsWith('<html') ||
+    text.startsWith('<head') ||
+    text.startsWith('<script')
+  ) {
     return 'html';
   }
-  if (text.startsWith('<?xml')) return 'xml';
+  if (
+    text.startsWith('<?xml') ||
+    text.startsWith('<svg') ||
+    text.startsWith('<!doctype svg') ||
+    text.startsWith('<!doctype xml')
+  ) {
+    return 'xml';
+  }
   if (text.startsWith('{') || text.startsWith('[')) return 'json';
   return undefined;
 }

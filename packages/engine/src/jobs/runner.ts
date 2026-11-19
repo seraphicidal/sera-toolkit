@@ -46,6 +46,7 @@ import {
 import { hostMatchesAny } from '../security/url.js';
 import type { MediaResolver } from '../resolver.js';
 import type { RemoteExtraction } from '../extract/remote.js';
+import type { NetworkClass } from '../extract/router.js';
 import { mimeTypeFor, type Workspace, type WorkspaceManager } from '../storage/workspace.js';
 import {
   assertSafeFilename,
@@ -54,25 +55,6 @@ import {
   sanitizeStem,
 } from '../util/filename.js';
 import { createZip } from './zip.js';
-
-const MEDIA_IMAGE_EXTENSIONS = new Set([
-  'mp4',
-  'webm',
-  'mov',
-  'mkv',
-  'mp3',
-  'm4a',
-  'opus',
-  'wav',
-  'flac',
-  'ogg',
-  'jpg',
-  'jpeg',
-  'png',
-  'gif',
-  'webp',
-  'avif',
-]);
 
 export interface JobSelection {
   readonly itemIndex: number;
@@ -178,6 +160,19 @@ export class JobRunner {
     const remoteBackend = resolved.remoteBackend;
     if (remoteBackend && this.deps.remote) {
       report({ state: 'downloading', step: 'Downloading', progress: { percent: 0 } });
+      const needsInstagramSession =
+        remoteBackend === 'instagram-session' ||
+        (spec.provider === 'instagram' &&
+          (resolved.metadata?.source === 'web-api' ||
+            ((resolved.type === 'collection' ||
+              resolved.items.some((item) => item.kind === 'image')) &&
+              resolved.metadata?.source !== 'oembed')));
+      const networkClass = remoteNetworkClassFor(
+        remoteBackend,
+        spec.provider,
+        needsInstagramSession,
+        this.deps.remote,
+      );
       let files: readonly { name: string; mimeType: string; path: string }[] = [];
       try {
         files = await this.deps.remote.dispatchJob(
@@ -185,6 +180,8 @@ export class JobRunner {
             kind: 'job',
             url: spec.url,
             providerId: spec.provider,
+            ...(networkClass ? { networkClass } : {}),
+            ...(needsInstagramSession ? { requires: ['instagram-session'] } : {}),
             planKeys: matched.map(({ plan }) => planKey(plan)),
             items: matched.map(({ item }) => ({
               index: item.index,
@@ -211,6 +208,9 @@ export class JobRunner {
           },
         );
 
+        if (!files.length) {
+          throw seraError('MEDIA_UNAVAILABLE', { detail: 'remote task produced no files' });
+        }
         for (const file of files) {
           const safeName = assertSafeFilename(basename(file.name));
           const name = dedupeFilename(safeName, taken);
@@ -549,7 +549,9 @@ export class JobRunner {
 
     let loadInfoJsonPath: string | undefined;
     if (args.rawInfoJson) {
-      loadInfoJsonPath = join(scratch, 'info.json');
+      const infoDir = join(workspace.baseDir, `info-${index}`);
+      await mkdir(infoDir, { recursive: true });
+      loadInfoJsonPath = join(infoDir, 'info.json');
       await writeFile(loadInfoJsonPath, args.rawInfoJson, 'utf8');
     }
 
@@ -634,13 +636,15 @@ export class JobRunner {
       ? await this.deps.resolver.egressProxy(target, config.proxyFor(args.resolved.provider))
       : config.proxyFor(args.resolved.provider);
 
-    const runDownload = (
+    const runDownload = async (
       infoPath?: string,
       sections?: { start: number; end?: number; forceKeyframes: boolean },
       downloadSignal = signal,
       formatSelector = fetchPlan.selector,
     ) => {
       sawPostprocessor = undefined;
+      await rm(scratch, { recursive: true, force: true });
+      await mkdir(scratch, { recursive: true });
       return ytdlpDownload({
         binary: config.ytdlpPath,
         ffmpegPath: config.ffmpegPath,
@@ -796,11 +800,6 @@ export class JobRunner {
       );
     }
 
-    await rm(scratch, { recursive: true, force: true });
-    await mkdir(scratch, { recursive: true });
-    if (args.rawInfoJson && loadInfoJsonPath) {
-      await writeFile(loadInfoJsonPath, args.rawInfoJson, 'utf8');
-    }
     await download();
     const full = await findSingleFile(scratch);
     report({ state: 'converting', step: 'Trimming', progress: fileProgress(DOWNLOAD_SHARE) });
@@ -1111,6 +1110,7 @@ export class JobRunner {
     signal?: AbortSignal,
   ): Promise<void> {
     const { config } = this.deps;
+    let totalBytes = 0;
     for (const file of produced) {
       const info = await stat(file.path).catch(() => undefined);
       if (!info || info.size === 0) {
@@ -1126,6 +1126,14 @@ export class JobRunner {
           detail: `${info.size} bytes: ${file.name}`,
         });
       }
+      totalBytes += info.size;
+      if (totalBytes > config.maxFilesizeBytes) {
+        throw seraError('TOO_LARGE', {
+          message: 'The output exceeds the maximum allowed size.',
+          hint: 'Try a lower quality or fewer items.',
+          detail: `${totalBytes} total bytes across ${produced.length} items`,
+        });
+      }
 
       const extension = file.name.split('.').pop()?.toLowerCase() ?? '';
       if (extension !== 'srt' && extension !== 'vtt') {
@@ -1138,7 +1146,7 @@ export class JobRunner {
             detail: `${file.name} is ${imposter}, not media`,
           });
         }
-        if (MEDIA_IMAGE_EXTENSIONS.has(extension) && isExecutableHeader(head)) {
+        if (isExecutableHeader(head)) {
           throw seraError('MEDIA_UNAVAILABLE', {
             message: 'The source returned an unexpected file type instead of media.',
             detail: `${file.name} has an executable header`,
@@ -1316,26 +1324,34 @@ export function watchGrowth(directory: string, stallMs: number, onStall: () => v
   let size = -1;
   let since = Date.now();
   let checking = false;
+  let stopped = false;
   const timer = setInterval(
     () => {
-      if (checking) return;
+      if (stopped || checking) return;
       checking = true;
       void directorySize(directory)
         .then((current) => {
+          if (stopped) return;
           if (current !== size) {
             size = current;
             since = Date.now();
           } else if (Date.now() - since >= stallMs) {
+            stopped = true;
             clearInterval(timer);
             onStall();
           }
         })
-        .finally(() => (checking = false));
+        .finally(() => {
+          checking = false;
+        });
     },
     Math.min(1000, Math.max(10, stallMs / 4)),
   );
   timer.unref();
-  return () => clearInterval(timer);
+  return () => {
+    stopped = true;
+    clearInterval(timer);
+  };
 }
 
 async function directorySize(directory: string): Promise<number> {
@@ -1368,7 +1384,14 @@ export function sectionIsUsable(
 async function findSingleFile(directory: string): Promise<string> {
   const entries = await readdir(directory, { withFileTypes: true });
   const files = entries
-    .filter((entry) => entry.isFile() && !entry.name.endsWith('.part'))
+    .filter(
+      (entry) =>
+        entry.isFile() &&
+        !entry.name.endsWith('.part') &&
+        !entry.name.endsWith('.tmp') &&
+        entry.name !== 'info.json' &&
+        !entry.name.endsWith('.info.json'),
+    )
     .map((entry) => entry.name);
 
   if (!files.length) {
@@ -1502,8 +1525,8 @@ async function headOf(path: string): Promise<Buffer> {
     const handle = await open(path, 'r');
     try {
       const head = Buffer.alloc(SNIFF_BYTES);
-      await handle.read(head, 0, SNIFF_BYTES, 0);
-      return head;
+      const { bytesRead } = await handle.read(head, 0, SNIFF_BYTES, 0);
+      return head.subarray(0, bytesRead);
     } finally {
       await handle.close();
     }
@@ -1517,9 +1540,41 @@ async function renameToActualFormat(path: string, claimed: string): Promise<stri
   if (!head.length) return path;
 
   const actual = sniffContainer(head);
+  if (actual === 'exe' && claimed !== 'exe') {
+    throw seraError('MEDIA_UNAVAILABLE', {
+      message: 'The source returned an unexpected file type instead of media.',
+      detail: 'downloaded payload has executable PE header',
+    });
+  }
   if (!actual || !contradicts(claimed, actual)) return path;
 
   const corrected = path.replace(/\.[^.]+$/, `.${actual}`);
   await rename(path, corrected);
   return corrected;
+}
+
+function remoteNetworkClassFor(
+  remoteBackend: string,
+  providerId: string,
+  needsInstagramSession: boolean,
+  remote: RemoteExtraction,
+): NetworkClass | undefined {
+  if (
+    remoteBackend === 'residential' ||
+    remoteBackend === 'datacenter' ||
+    remoteBackend === 'unknown'
+  ) {
+    return remoteBackend;
+  }
+  if (!needsInstagramSession) return undefined;
+  const statuses = typeof remote.status === 'function' ? remote.status() : [];
+  const sessionNodes = statuses.filter(
+    (node) =>
+      node.healthy &&
+      (!node.providers.length || node.providers.includes(providerId)) &&
+      (node.features ?? []).includes('instagram-session'),
+  );
+  if (!sessionNodes.length) return 'residential';
+  const classes = new Set(sessionNodes.map((node) => node.networkClass));
+  return classes.size === 1 ? sessionNodes[0]!.networkClass : undefined;
 }

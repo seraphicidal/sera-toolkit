@@ -120,14 +120,22 @@ export function discoverMedia(html: string, pageUrl: URL): PageMedia {
     width: numericMeta('og:video:width'),
     height: numericMeta('og:video:height'),
   };
-  for (const property of ['og:video:secure_url', 'og:video:url', 'og:video']) {
-    const value = meta(property);
-    if (value) {
-      add(value, 'og:video', 'video', {
-        ...(ogVideoSize.width ? { width: ogVideoSize.width } : {}),
-        ...(ogVideoSize.height ? { height: ogVideoSize.height } : {}),
-        ...(meta('og:video:type') ? { mimeType: meta('og:video:type')! } : {}),
-      });
+  const ogVideoType = (meta('og:video:type') ?? '').split(';')[0]?.trim().toLowerCase() ?? '';
+  const skipOgVideo =
+    Boolean(ogVideoType) &&
+    (ogVideoType.startsWith('text/') ||
+      ogVideoType === 'application/xhtml+xml' ||
+      ogVideoType.includes('shockwave-flash'));
+  if (!skipOgVideo) {
+    for (const property of ['og:video:secure_url', 'og:video:url', 'og:video']) {
+      const value = meta(property);
+      if (value) {
+        add(value, 'og:video', 'video', {
+          ...(ogVideoSize.width ? { width: ogVideoSize.width } : {}),
+          ...(ogVideoSize.height ? { height: ogVideoSize.height } : {}),
+          ...(meta('og:video:type') ? { mimeType: meta('og:video:type')! } : {}),
+        });
+      }
     }
   }
   add(meta('twitter:player:stream'), 'twitter:player', 'video');
@@ -167,12 +175,14 @@ export function discoverMedia(html: string, pageUrl: URL): PageMedia {
   });
 
   const visitLd = (node: JsonLdNode, depth = 0): void => {
-    if (depth > 3) return;
+    if (!node || typeof node !== 'object' || depth > 3) return;
     const types = Array.isArray(node['@type']) ? node['@type'] : [node['@type']];
     if (types.some((t) => t === 'VideoObject' || t === 'AudioObject')) {
       add(node.contentUrl, 'json-ld', types.includes('AudioObject') ? 'audio' : 'video');
     }
-    for (const child of node['@graph'] ?? []) visitLd(child, depth + 1);
+    if (Array.isArray(node['@graph'])) {
+      for (const child of node['@graph']) visitLd(child, depth + 1);
+    }
     const nested = node.video;
     for (const child of Array.isArray(nested) ? nested : nested ? [nested] : []) {
       visitLd(child, depth + 1);
@@ -186,17 +196,20 @@ export function discoverMedia(html: string, pageUrl: URL): PageMedia {
   });
   add($('link[rel="image_src"]').attr('href'), 'link', 'image');
 
-  const ldTitle = jsonLd.find((n) => n.name)?.name;
+  const rawLdTitle = jsonLd.find((n) => typeof n.name === 'string' && n.name.trim())?.name;
+  const ldTitle = typeof rawLdTitle === 'string' ? rawLdTitle.trim() : undefined;
   const ldAuthor = jsonLd.find((n) => n.author)?.author;
 
   const title = meta('og:title') ?? ($('title').first().text().trim() || undefined);
   const description = meta('og:description') ?? meta('description');
   const siteName = meta('og:site_name');
-  const author =
-    meta('author') ??
-    (typeof ldAuthor === 'string' ? ldAuthor : ldAuthor?.name) ??
-    siteName ??
-    pageUrl.hostname;
+  const ldAuthorName =
+    typeof ldAuthor === 'string'
+      ? ldAuthor
+      : ldAuthor && typeof ldAuthor === 'object' && typeof ldAuthor.name === 'string'
+        ? ldAuthor.name
+        : undefined;
+  const author = meta('author') ?? ldAuthorName ?? siteName ?? pageUrl.hostname;
   const thumbnail = absolute(meta('og:image:secure_url') ?? meta('og:image'), pageUrl);
   const lowerHtml = html.toLowerCase();
   const drmProtected =
@@ -205,8 +218,9 @@ export function discoverMedia(html: string, pageUrl: URL): PageMedia {
       lowerHtml.includes('com.microsoft.playready') ||
       lowerHtml.includes('com.apple.fps'));
 
+  const finalTitle = title ?? ldTitle;
   return {
-    ...((title ?? ldTitle) ? { title: (title ?? ldTitle)!.trim() } : {}),
+    ...(finalTitle ? { title: finalTitle.trim() } : {}),
     ...(description ? { description: description.trim() } : {}),
     ...(siteName ? { siteName } : {}),
     ...(author ? { author } : {}),

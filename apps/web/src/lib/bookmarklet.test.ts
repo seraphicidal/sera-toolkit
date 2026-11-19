@@ -94,4 +94,8 @@ describe('buildBookmarklet', () => {
     expect(source).toContain('(?:p|reel|reels|tv)');
     expect(source).toContain('location.pathname.match');
   });
+
+  it('requires instagram.com or an instagram.com subdomain rather than substring indexOf', () => {
+    expect(source).toContain('/(?:^|\\.)instagram\\.com$/i.test(location.hostname)');
+  });
 });

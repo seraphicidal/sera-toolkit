@@ -168,10 +168,10 @@ export function buildVideoPlans(
     emit(video, bestAudio(audioOnly, preferred));
   }
 
-  if (!plans.length) {
-    for (const format of [...progressiveByHeight.values()].sort(
-      (a, b) => (b.height ?? 0) - (a.height ?? 0),
-    )) {
+  for (const format of [...progressiveByHeight.values()].sort(
+    (a, b) => (b.height ?? 0) - (a.height ?? 0),
+  )) {
+    if (format.height && !seen.has(format.height)) {
       emit(format, undefined);
     }
   }
@@ -253,12 +253,17 @@ export function buildAudioPlans(
 
     const isLossless = target.container === 'wav';
     const canCopy =
-      (target.container === 'm4a' && sourceCodec.startsWith('mp4a')) ||
+      (target.container === 'm4a' &&
+        (sourceCodec.startsWith('mp4a') || sourceCodec.startsWith('aac'))) ||
       (target.container === 'opus' && sourceCodec.startsWith('opus')) ||
       (target.container === 'mp3' && sourceCodec.startsWith('mp3'));
 
     const base = audioOnly.length ? 'bestaudio/best' : 'best';
-    const selector = canCopy && target.selectorPrefix ? `${target.selectorPrefix}/${base}` : base;
+    const m4aPrefix = sourceCodec.startsWith('aac')
+      ? 'bestaudio[acodec^=aac]'
+      : target.selectorPrefix;
+    const prefix = target.container === 'm4a' ? m4aPrefix : target.selectorPrefix;
+    const selector = canCopy && prefix ? `${prefix}/${base}` : base;
 
     const bitrate = isLossless || canCopy ? undefined : audioBitrateChoices(sourceAbr)[0];
 

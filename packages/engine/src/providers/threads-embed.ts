@@ -1,8 +1,9 @@
+import * as cheerio from 'cheerio';
 import { seraError } from '../errors.js';
+import { normalizeContainer as normalizeFormatContainer } from '../normalize/formats.js';
 import { ensureRecommendations } from '../normalize/plans.js';
 import { hostMatchesAny, urlExtension } from '../security/url.js';
 import { decodeHtmlEntities, nonEmpty, truncate } from '../util/format.js';
-import { normalizeContainer } from './direct.js';
 import type { DownloadPlan, ResolvedItem, ResolvedMedia } from './types.js';
 
 export const THREADS_EMBED_AGENT = 'SERA.toolkit (+https://github.com/seraphicidal/sera-toolkit)';
@@ -46,15 +47,19 @@ function mediaUrl(raw: string | undefined): string | undefined {
   const value = decodeEntities(raw);
   try {
     const url = new URL(value);
-    if (url.protocol !== 'https:' || !hostMatchesAny(url.hostname, MEDIA_HOSTS)) return undefined;
+    if (
+      url.protocol !== 'https:' ||
+      url.username ||
+      url.password ||
+      (url.port !== '' && url.port !== '443') ||
+      !hostMatchesAny(url.hostname, MEDIA_HOSTS)
+    ) {
+      return undefined;
+    }
     return url.toString();
   } catch {
     return undefined;
   }
-}
-
-function attribute(tag: string, name: string): string | undefined {
-  return new RegExp(`\\b${name}="([^"]*)"`).exec(tag)?.[1];
 }
 
 function focusedPost(html: string): string | undefined {
@@ -70,31 +75,34 @@ export function readEmbed(html: string): ThreadsEmbed | undefined {
   const post = focusedPost(html);
   if (post === undefined) return undefined;
 
+  const $ = cheerio.load(post);
   const media: ThreadsMedia[] = [];
   const seen = new Set<string>();
-  for (const match of post.matchAll(/<video\b[^>]*>[\s\S]*?<\/video>|<img\b[^>]*>/g)) {
-    const tag = match[0];
-    if (tag.startsWith('<video')) {
-      const source = /<source\b[^>]*>/.exec(tag)?.[0];
-      const url = mediaUrl((source && attribute(source, 'src')) ?? attribute(tag, 'src'));
-      if (!url || seen.has(url)) continue;
+
+  $('video, img').each((_, element) => {
+    const node = $(element);
+    if (element.tagName === 'video') {
+      const sourceSrc = node.find('source').first().attr('src');
+      const url = mediaUrl(sourceSrc ?? node.attr('src'));
+      if (!url || seen.has(url)) return;
       seen.add(url);
-      const poster = mediaUrl(attribute(tag, 'poster'));
+      const poster = mediaUrl(node.attr('poster'));
       media.push({ kind: 'video', url, ...(poster ? { poster } : {}) });
-      continue;
+      return;
     }
-    const url = mediaUrl(attribute(tag, 'src'));
-    if (!url || seen.has(url) || !/\/t51\.\d+-15\//.test(new URL(url).pathname)) continue;
+    const url = mediaUrl(node.attr('src'));
+    if (!url || seen.has(url) || !/\/t51\.\d+-15\//.test(new URL(url).pathname)) return;
     seen.add(url);
     media.push({ kind: 'image', url });
-  }
+  });
 
-  const body = /BodyTextContainer[^>]*>([\s\S]*?)<\/span>/.exec(post)?.[1];
-  const text = body
-    ? decodeEntities(body.replace(/<br\s*\/?>/gi, ' ').replace(/<[^>]+>/g, ''))
-        .replace(/\s+/g, ' ')
-        .trim()
-    : undefined;
+  const bodyNode = $('[class*="BodyTextContainer"]').first();
+  let text: string | undefined;
+  if (bodyNode.length) {
+    bodyNode.find('br').replaceWith(' ');
+    const cleaned = decodeEntities(bodyNode.text()).replace(/\s+/g, ' ').trim();
+    if (cleaned) text = cleaned;
+  }
   return { media, ...(text ? { text } : {}) };
 }
 
@@ -133,7 +141,7 @@ function videoItem(entry: ThreadsMedia, index: number): ResolvedItem {
 }
 
 function imageItem(entry: ThreadsMedia, index: number): ResolvedItem {
-  const container = normalizeContainer('', urlExtension(new URL(entry.url)) ?? 'jpg');
+  const container = normalizeFormatContainer(urlExtension(new URL(entry.url)) ?? 'jpg', 'jpg');
   return {
     sourceId: new URL(entry.url).pathname.split('/').pop() ?? String(index),
     index,

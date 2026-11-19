@@ -38,6 +38,8 @@ export function registerMetaRoutes(app: FastifyInstance, engine: SeraEngine): vo
           request.canary ||
           (!request.headers['x-forwarded-for'] &&
             !request.headers.forwarded &&
+            !request.headers['x-real-ip'] &&
+            !request.headers['cf-connecting-ip'] &&
             isLoopback(request.ip)),
       },
     },
@@ -56,7 +58,11 @@ export function registerMetaRoutes(app: FastifyInstance, engine: SeraEngine): vo
   app.get('/ready', metaRateLimit, async (request, reply) => {
     const report = await engine.health();
     const essential = report.checks.filter(
-      (check) => check.name === 'yt-dlp' || check.name === 'ffmpeg',
+      (check) =>
+        check.name === 'yt-dlp' ||
+        check.name === 'ffmpeg' ||
+        check.name === 'storage' ||
+        check.name === 'queue',
     );
     const ready = essential.every((check) => check.status === 'ok');
     const checks = isAuthorized(request, engine)

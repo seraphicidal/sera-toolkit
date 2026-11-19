@@ -1,15 +1,15 @@
 import type { MediaKind } from '@sera/contracts/types';
 import { locateTool } from '../config.js';
 import { seraError, SeraError } from '../errors.js';
+import { normalizeContainer as normalizeFormatContainer } from '../normalize/formats.js';
 import { ensureRecommendations } from '../normalize/plans.js';
-import { normalizeContainer } from '../providers/direct.js';
 import type {
   DownloadPlan,
   ProviderContext,
   ResolvedItem,
   ResolvedMedia,
 } from '../providers/types.js';
-import { hostMatchesAny, parseUserUrl, urlExtension } from '../security/url.js';
+import { hostMatchesAny, parseUserUrl, scrubCredentials, urlExtension } from '../security/url.js';
 import { truncate } from '../util/format.js';
 import { run } from '../util/spawn.js';
 
@@ -65,7 +65,7 @@ export function parseGalleryDlJson(
     const kind: MediaKind =
       ext === 'gif'
         ? 'gif'
-        : ['mp4', 'webm', 'mov', 'mkv', 'm4v'].includes(ext)
+        : ['mp4', 'webm', 'mov', 'mkv', 'm4v', 'm3u8', 'mpd'].includes(ext)
           ? 'video'
           : ['mp3', 'm4a', 'aac', 'opus', 'ogg', 'wav', 'flac'].includes(ext)
             ? 'audio'
@@ -131,6 +131,9 @@ export async function extractWithGalleryDl(
   context: ProviderContext,
   options: GalleryDlOptions = {},
 ): Promise<ResolvedMedia> {
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw seraError('BLOCKED_ADDRESS', { detail: `gallery-dl: protocol ${url.protocol}` });
+  }
   const binary = options.binary ?? locateTool('gallery-dl', process.env.SERA_GALLERYDL_PATH ?? '');
   const provider = options.providerId ?? 'generic';
   const upstream = options.proxy ?? context.config.proxyFor(provider);
@@ -161,7 +164,7 @@ export async function extractWithGalleryDl(
     });
     if (result.code !== 0) {
       throw seraError('UNSUPPORTED_SOURCE', {
-        detail: `gallery-dl exit ${result.code}: ${result.stderrTail.slice(-300)}`,
+        detail: `gallery-dl exit ${result.code}: ${scrubCredentials(result.stderrTail).slice(-300)}`,
       });
     }
     stdout = result.stdout;
@@ -198,7 +201,8 @@ export async function extractWithGalleryDl(
   }
 
   const items: ResolvedItem[] = selected.map((entry, index) => {
-    const container = normalizeContainer('', entry.extension ?? '');
+    const isManifest = entry.extension === 'm3u8' || entry.extension === 'mpd';
+    const container = isManifest ? 'mp4' : normalizeFormatContainer(entry.extension, 'jpg');
     const plans: DownloadPlan[] = [
       {
         kind: entry.kind === 'gif' ? 'gif' : entry.kind === 'unknown' ? 'image' : entry.kind,
@@ -209,7 +213,15 @@ export async function extractWithGalleryDl(
         ...(entry.height ? { height: entry.height } : {}),
         requiresConversion: false,
         recommended: true,
-        fetch: { via: 'direct', url: entry.url },
+        fetch: isManifest
+          ? {
+              via: 'ytdlp',
+              selector: 'bestvideo+bestaudio/best',
+              merge: 'mp4',
+              target: entry.url,
+              useExtractors: 'default',
+            }
+          : { via: 'direct', url: entry.url },
       },
     ];
     return {

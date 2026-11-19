@@ -59,9 +59,18 @@ export function codecLabel(codec: string | undefined): string | undefined {
   return codec.split('.')[0]?.toUpperCase();
 }
 
+export function sliceUtf16Safe(text: string, max: number): string {
+  if (max <= 0) return '';
+  if (text.length <= max) return text;
+  let end = max;
+  const last = text.charCodeAt(end - 1);
+  if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+  return text.slice(0, end);
+}
+
 export function truncate(text: string, max: number): string {
   if (text.length <= max) return text;
-  const cut = text.slice(0, max);
+  const cut = sliceUtf16Safe(text, max);
   const lastSpace = cut.lastIndexOf(' ');
   return `${(lastSpace > max * 0.6 ? cut.slice(0, lastSpace) : cut).trimEnd()}…`;
 }

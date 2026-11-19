@@ -22,47 +22,71 @@ COPY apps/worker/ apps/worker/
 RUN npm run build --workspace @sera/contracts \
  && npm run build --workspace @sera/engine \
  && npm run build --workspace @sera/api \
- && npm run build --workspace @sera/worker
-
-RUN npm prune --omit=dev --workspaces --include-workspace-root
+ && npm run build --workspace @sera/worker \
+ && npm prune --omit=dev --workspace @sera/contracts --workspace @sera/engine --workspace @sera/api --workspace @sera/worker --include-workspace-root \
+ && rm -rf apps/web node_modules/@sera/web
 
 FROM node:24.18.1-bookworm-slim AS runtime
-
-ARG YTDLP_VERSION=2026.10.26
-
-ARG TARGETARCH
-
-ENV NODE_ENV=production \
-    SERA_DATA_DIR=/data \
-    SERA_HOST=0.0.0.0 \
-    SERA_PORT=4000
 
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
         ffmpeg \
         ca-certificates \
-        curl \
         tini; \
+    rm -rf /var/lib/apt/lists/*; \
+    ffmpeg -version | head -n 1
+
+ARG YTDLP_VERSION=2026.10.26
+
+ARG TARGETARCH
+
+ENV NODE_ENV=production \
+    HOME=/tmp \
+    SERA_DATA_DIR=/data \
+    SERA_HOST=0.0.0.0 \
+    SERA_PORT=4000
+
+RUN set -eux; \
     case "${TARGETARCH}" in \
         amd64) YTDLP_ASSET=yt-dlp_linux ;; \
         arm64) YTDLP_ASSET=yt-dlp_linux_aarch64 ;; \
         *) echo "unsupported architecture: ${TARGETARCH}" >&2; exit 1 ;; \
     esac; \
-    curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 20 -o /usr/local/bin/yt-dlp \
-        "https://github.com/yt-dlp/yt-dlp/releases/download/${YTDLP_VERSION}/${YTDLP_ASSET}"; \
-    curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 20 -o /tmp/SHA2-256SUMS \
-        "https://github.com/yt-dlp/yt-dlp/releases/download/${YTDLP_VERSION}/SHA2-256SUMS"; \
-    EXPECTED="$(grep " ${YTDLP_ASSET}\$" /tmp/SHA2-256SUMS | cut -d' ' -f1)"; \
-    ACTUAL="$(sha256sum /usr/local/bin/yt-dlp | cut -d' ' -f1)"; \
-    test -n "${EXPECTED}"; \
-    test "${EXPECTED}" = "${ACTUAL}"; \
-    chmod 0755 /usr/local/bin/yt-dlp; \
-    rm -f /tmp/SHA2-256SUMS; \
-    apt-get purge -y --auto-remove curl; \
-    rm -rf /var/lib/apt/lists/*; \
-    yt-dlp --version; \
-    ffmpeg -version | head -n 1
+    YTDLP_VERSION="${YTDLP_VERSION}" YTDLP_ASSET="${YTDLP_ASSET}" node -e ' \
+      const { createHash } = require("node:crypto"); \
+      const { chmodSync, writeFileSync } = require("node:fs"); \
+      (async () => { \
+        const v = process.env.YTDLP_VERSION; \
+        const a = process.env.YTDLP_ASSET; \
+        const base = `https://github.com/yt-dlp/yt-dlp/releases/download/${v}`; \
+        const fetchWithRetry = async (u) => { \
+          for (let i = 0; i < 5; i += 1) { \
+            try { \
+              const r = await fetch(u, { signal: AbortSignal.timeout(60000) }); \
+              if (r.ok) return Buffer.from(await r.arrayBuffer()); \
+              throw new Error(`HTTP ${r.status}`); \
+            } catch (e) { \
+              if (i === 4) throw e; \
+              await new Promise((res) => setTimeout(res, 3000)); \
+            } \
+          } \
+        }; \
+        const [bin, sums] = await Promise.all([ \
+          fetchWithRetry(`${base}/${a}`), \
+          fetchWithRetry(`${base}/SHA2-256SUMS`), \
+        ]); \
+        const line = sums.toString("utf8").split("\n").find((l) => l.endsWith(` ${a}`)); \
+        const expected = line ? line.trim().split(/\s+/)[0].toLowerCase() : ""; \
+        const actual = createHash("sha256").update(bin).digest("hex"); \
+        if (!expected || actual !== expected) { \
+          throw new Error(`checksum mismatch for ${a}: expected ${expected}, got ${actual}`); \
+        } \
+        writeFileSync("/usr/local/bin/yt-dlp", bin); \
+        chmodSync("/usr/local/bin/yt-dlp", 0o755); \
+      })().catch((e) => { console.error(e); process.exit(1); }); \
+    '; \
+    yt-dlp --version
 
 WORKDIR /app
 
@@ -77,8 +101,9 @@ COPY --from=build /app/apps/api/dist ./apps/api/dist
 COPY --from=build /app/apps/worker/package.json ./apps/worker/
 COPY --from=build /app/apps/worker/dist ./apps/worker/dist
 COPY scripts/provider-cases.json ./scripts/provider-cases.json
+COPY scripts/tools.manifest.json ./scripts/tools.manifest.json
 
-RUN mkdir -p /data && chown -R node:node /data /app
+RUN mkdir -p /data && chown node:node /data
 USER node
 
 EXPOSE 4000

@@ -70,10 +70,13 @@ export function registerAdminRoutes(app: FastifyInstance, engine: SeraEngine): v
         return reply.header('cache-control', 'no-store').send({ reports: [], total: 0 });
       }
 
+      const reportTimestamp = (name: string): number => {
+        const match = /^rep_(\d+)_/.exec(name);
+        return match ? Number(match[1]) : 0;
+      };
       const jsonFiles = files
         .filter((f) => f.endsWith('.json'))
-        .sort()
-        .reverse();
+        .sort((a, b) => reportTimestamp(b) - reportTimestamp(a) || b.localeCompare(a));
       const total = jsonFiles.length;
       const paginatedFiles = jsonFiles.slice(offset, offset + limit);
 

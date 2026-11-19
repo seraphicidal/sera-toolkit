@@ -25,6 +25,7 @@ export class RedditProvider extends YtdlpProvider {
 
   private tokens: RedditTokenSource | undefined;
   private tokenCredsKey: string | undefined;
+  private readonly proxyAgents = new Map<string, ProxyAgent>();
 
   override readonly capabilities: ProviderCapabilities = declare({
     image: true,
@@ -103,7 +104,35 @@ export class RedditProvider extends YtdlpProvider {
 
     const upstream = context.config.proxyFor(this.id);
     const proxy = context.egressProxy ? await context.egressProxy(url, upstream) : upstream;
-    const proxyAgent = proxy ? new ProxyAgent(proxy) : undefined;
+    let proxyAgent: ProxyAgent | undefined;
+    if (proxy) {
+      let proxyProtocol: string;
+      try {
+        proxyProtocol = new URL(proxy).protocol;
+      } catch {
+        throw seraError('PROVIDER_CONFIGURATION_ERROR', {
+          detail: 'reddit: invalid egress proxy URL',
+        });
+      }
+      if (proxyProtocol !== 'http:' && proxyProtocol !== 'https:') {
+        throw seraError('PROVIDER_CONFIGURATION_ERROR', {
+          detail: `reddit: unsupported proxy scheme ${proxyProtocol}`,
+        });
+      }
+      proxyAgent = this.proxyAgents.get(proxy);
+      if (!proxyAgent) {
+        if (this.proxyAgents.size >= 8) {
+          const oldestKey = this.proxyAgents.keys().next().value;
+          if (oldestKey !== undefined) {
+            const oldest = this.proxyAgents.get(oldestKey);
+            this.proxyAgents.delete(oldestKey);
+            void oldest?.close().catch(() => undefined);
+          }
+        }
+        proxyAgent = new ProxyAgent(proxy);
+        this.proxyAgents.set(proxy, proxyAgent);
+      }
+    }
     const dispatcher: Dispatcher | undefined = proxyAgent ?? context.dispatcher;
     const redditFetch: typeof fetch | undefined = dispatcher
       ? (input, init) =>
@@ -113,12 +142,7 @@ export class RedditProvider extends YtdlpProvider {
           }) as unknown as Promise<Response>
       : undefined;
 
-    let post: RedditPost;
-    try {
-      post = await fetchPost(postId, this.tokens, credentials, redditFetch, context.signal);
-    } finally {
-      if (proxyAgent) await proxyAgent.close().catch(() => undefined);
-    }
+    const post = await fetchPost(postId, this.tokens, credentials, redditFetch, context.signal);
 
     const source = post.crosspost_parent_list?.[0] ?? post;
     const items = itemsFrom(source, context.config.maxItemsPerJob);
@@ -183,7 +207,20 @@ function httpsUrl(value: string | undefined): string | undefined {
   const raw = nonEmpty(value);
   if (!raw) return undefined;
   const unescaped = unescapeUrl(raw);
-  return unescaped.startsWith('https://') ? unescaped : undefined;
+  try {
+    const parsed = new URL(unescaped);
+    if (
+      parsed.protocol !== 'https:' ||
+      parsed.username ||
+      parsed.password ||
+      (parsed.port !== '' && parsed.port !== '443')
+    ) {
+      return undefined;
+    }
+    return parsed.toString();
+  } catch {
+    return undefined;
+  }
 }
 
 function imagePlan(url: string, container: ContainerFormat, width?: number, height?: number) {

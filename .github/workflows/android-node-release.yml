@@ -1,0 +1,459 @@
+name: Android Node Release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'android-node-v*'
+    paths:
+      - 'apps/android-node/**'
+  workflow_dispatch:
+    inputs:
+      version_code:
+        description: Optional versionCode override (positive integer)
+        required: false
+        type: string
+      version_name:
+        description: Optional versionName override
+        required: false
+        type: string
+      min_version_code:
+        description: Optional minimum supported versionCode
+        required: false
+        type: string
+      release_notes:
+        description: Optional release notes
+        required: false
+        type: string
+      prerelease:
+        description: Mark the GitHub Release as a prerelease
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: android-node-release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Test, build, and release Android node APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          build-root-directory: apps/android-node
+
+      - name: Resolve release metadata
+        id: meta
+        env:
+          INPUT_VERSION_CODE: ${{ inputs.version_code }}
+          INPUT_VERSION_NAME: ${{ inputs.version_name }}
+          INPUT_MIN_VERSION_CODE: ${{ inputs.min_version_code }}
+          INPUT_RELEASE_NOTES: ${{ inputs.release_notes }}
+          INPUT_PRERELEASE: ${{ inputs.prerelease }}
+          GITHUB_REF_TYPE: ${{ github.ref_type }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+          GITHUB_RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          node -e '
+            const crypto = require("node:crypto");
+            const fs = require("node:fs");
+            const { execFileSync } = require("node:child_process");
+
+            const gradle = fs.readFileSync("apps/android-node/app/build.gradle.kts", "utf8");
+            const defaultConfigSection = (/defaultConfig\s*\{([\s\S]*?)\n\s*\}/.exec(gradle) || ["", gradle])[1];
+            const codeMatch = /versionCode\s*=[\s\S]*?\?\:\s*(\d+)/.exec(defaultConfigSection);
+            const nameMatch = /versionName\s*=[\s\S]*?\?\:\s*"([^"]+)"/.exec(defaultConfigSection);
+            const baseCode = codeMatch ? Number.parseInt(codeMatch[1], 10) : 1;
+            const baseName = nameMatch ? nameMatch[1].trim() : "1.8.0";
+
+            const refType = process.env.GITHUB_REF_TYPE || "";
+            const refName = process.env.GITHUB_REF_NAME || "";
+            const runNumber = Number.parseInt(process.env.GITHUB_RUN_NUMBER || "1", 10);
+
+            const inputCode = (process.env.INPUT_VERSION_CODE || "").trim();
+            const inputName = (process.env.INPUT_VERSION_NAME || "").trim();
+            const inputMinCode = (process.env.INPUT_MIN_VERSION_CODE || "").trim();
+            const inputNotes = (process.env.INPUT_RELEASE_NOTES || "").trim();
+            const inputPrerelease = (process.env.INPUT_PRERELEASE || "").trim() === "true";
+
+            let versionCode;
+            if (inputCode) {
+              if (!/^[1-9]\d*$/.test(inputCode)) {
+                console.error("::error::version_code must be a positive integer.");
+                process.exit(1);
+              }
+              versionCode = Number.parseInt(inputCode, 10);
+            } else if (refType === "tag") {
+              const tagCode = /^android-node-v.*?\+(\d+)$/.exec(refName);
+              versionCode = tagCode ? Number.parseInt(tagCode[1], 10) : baseCode + runNumber;
+            } else {
+              versionCode = baseCode + runNumber;
+            }
+
+            if (!Number.isSafeInteger(versionCode) || versionCode <= 0 || versionCode > 2100000000) {
+              console.error("::error::Resolved versionCode out of Android range: " + versionCode);
+              process.exit(1);
+            }
+
+            let versionName;
+            if (inputName) {
+              versionName = inputName;
+            } else if (refType === "tag" && refName.startsWith("android-node-v")) {
+              versionName = refName.slice("android-node-v".length).replace(/\+\d+$/, "");
+            } else {
+              versionName = baseName;
+            }
+
+            if (!versionName || versionName.length > 64) {
+              console.error("::error::versionName must be 1..64 characters.");
+              process.exit(1);
+            }
+
+            let minVersionCode = "";
+            if (inputMinCode) {
+              if (!/^[1-9]\d*$/.test(inputMinCode)) {
+                console.error("::error::min_version_code must be a positive integer.");
+                process.exit(1);
+              }
+              minVersionCode = String(Number.parseInt(inputMinCode, 10));
+            }
+
+            const safeSegment = versionName.replace(/[^A-Za-z0-9._-]/g, "-");
+            const releaseTag = refType === "tag" ? refName : `android-node-v${safeSegment}-b${versionCode}`;
+            const isPrerelease =
+              inputPrerelease || /-(?:alpha|beta|rc)(?:[.-]?\d*)?$/i.test(versionName);
+
+            let releaseNotes = inputNotes.slice(0, 8000);
+            if (!releaseNotes) {
+              try {
+                releaseNotes = execFileSync("git", ["log", "-1", "--pretty=%s"], { encoding: "utf8" }).trim();
+              } catch {}
+            }
+
+            const appendLines = (file, pairs) => {
+              const lines = pairs.map(([k, v]) => {
+                const delim = "EOF_" + crypto.randomBytes(12).toString("hex");
+                return `${k}<<${delim}\n${v}\n${delim}`;
+              });
+              fs.appendFileSync(file, lines.join("\n") + "\n");
+            };
+
+            appendLines(process.env.GITHUB_OUTPUT, [
+              ["version_code", String(versionCode)],
+              ["version_name", versionName],
+              ["safe_version_name", safeSegment],
+              ["min_version_code", minVersionCode],
+              ["release_tag", releaseTag],
+              ["prerelease", String(isPrerelease)],
+              ["release_notes", releaseNotes],
+            ]);
+
+            appendLines(process.env.GITHUB_ENV, [
+              ["SERA_ANDROID_VERSION_CODE", String(versionCode)],
+              ["SERA_ANDROID_VERSION_NAME", versionName],
+            ]);
+          '
+
+      - name: Configure release signing
+        id: signing
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          GITHUB_REF_TYPE: ${{ github.ref_type }}
+        run: |
+          set_count=0
+          for val in "$KEYSTORE_B64" "$KEYSTORE_PASSWORD" "$KEY_ALIAS" "$KEY_PASSWORD"; do
+            if [ -n "$val" ]; then
+              set_count=$((set_count + 1))
+            fi
+          done
+
+          if [ "$set_count" -gt 0 ] && [ "$set_count" -lt 4 ]; then
+            echo "::error::Incomplete Android signing secrets. Set all four: ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD."
+            exit 1
+          fi
+
+          if [ "$set_count" -eq 0 ]; then
+            if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+              echo "::error::ANDROID_KEYSTORE_BASE64 and related signing secrets are required for tag releases."
+              exit 1
+            fi
+            echo "::warning::Release signing secrets are not configured; assembleRelease will fall back to debug signing per app/build.gradle.kts and create a draft release."
+            echo "mode=debug" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          keystore_path="$RUNNER_TEMP/release.keystore"
+          printf '%s' "$KEYSTORE_B64" | tr -d '\r\n ' | base64 --decode > "$keystore_path"
+          chmod 600 "$keystore_path"
+          test -s "$keystore_path"
+          keytool -list -keystore "$keystore_path" -storepass "$KEYSTORE_PASSWORD" -alias "$KEY_ALIAS" >/dev/null
+
+          delim=$(node -e "process.stdout.write(require('node:crypto').randomBytes(12).toString('hex'))")
+          {
+            echo "SERA_KEYSTORE_PATH=$keystore_path"
+            echo "SERA_KEYSTORE_PASSWORD<<$delim"
+            printf '%s\n' "$KEYSTORE_PASSWORD"
+            echo "$delim"
+            echo "SERA_KEY_ALIAS<<$delim"
+            printf '%s\n' "$KEY_ALIAS"
+            echo "$delim"
+            echo "SERA_KEY_PASSWORD<<$delim"
+            printf '%s\n' "$KEY_PASSWORD"
+            echo "$delim"
+          } >> "$GITHUB_ENV"
+          echo "mode=release" >> "$GITHUB_OUTPUT"
+
+      - name: Run Android unit tests
+        working-directory: apps/android-node
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:testDebugUnitTest --stacktrace
+
+      - name: Build release APK
+        working-directory: apps/android-node
+        run: >-
+          ./gradlew :app:assembleRelease
+          -PSERA_VERSION_CODE="${{ steps.meta.outputs.version_code }}"
+          -PSERA_VERSION_NAME="${{ steps.meta.outputs.version_name }}"
+          --stacktrace
+
+      - name: Package APK and generate manifest
+        id: pkg
+        env:
+          VERSION_CODE: ${{ steps.meta.outputs.version_code }}
+          VERSION_NAME: ${{ steps.meta.outputs.version_name }}
+          SAFE_VERSION_NAME: ${{ steps.meta.outputs.safe_version_name }}
+          MIN_VERSION_CODE: ${{ steps.meta.outputs.min_version_code }}
+          RELEASE_TAG: ${{ steps.meta.outputs.release_tag }}
+          RELEASE_NOTES: ${{ steps.meta.outputs.release_notes }}
+        run: |
+          node -e '
+            const crypto = require("node:crypto");
+            const fs = require("node:fs");
+            const path = require("node:path");
+
+            const apkDir = path.resolve("apps/android-node/app/build/outputs/apk/release");
+            const metaPath = path.join(apkDir, "output-metadata.json");
+            const meta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
+            const elements = Array.isArray(meta.elements) ? meta.elements : [];
+
+            const hasAbi = (el, abi) =>
+              Array.isArray(el.filters) &&
+              el.filters.some((f) => f && f.filterType === "ABI" && f.value === abi);
+
+            const selected =
+              elements.find((el) => hasAbi(el, "arm64-v8a")) ||
+              elements.find((el) => el && el.type === "UNIVERSAL") ||
+              elements.find((el) => el && typeof el.outputFile === "string" && el.outputFile.endsWith(".apk"));
+
+            if (!selected || !selected.outputFile) {
+              console.error("::error::No release APK element found in output-metadata.json");
+              process.exit(1);
+            }
+
+            const sourceApk = path.join(apkDir, selected.outputFile);
+            if (!fs.existsSync(sourceApk)) {
+              console.error("::error::APK file missing: " + sourceApk);
+              process.exit(1);
+            }
+
+            const expectedCode = Number.parseInt(process.env.VERSION_CODE, 10);
+            const expectedName = process.env.VERSION_NAME;
+            if (selected.versionCode !== expectedCode || selected.versionName !== expectedName) {
+              console.error(
+                `::error::APK metadata mismatch: got ${selected.versionName} (${selected.versionCode}), expected ${expectedName} (${expectedCode})`,
+              );
+              process.exit(1);
+            }
+
+            const buf = fs.readFileSync(sourceApk);
+            if (buf.length < 4 || buf[0] !== 0x50 || buf[1] !== 0x4b || buf[2] !== 0x03 || buf[3] !== 0x04) {
+              console.error("::error::Built APK failed ZIP magic header check");
+              process.exit(1);
+            }
+            if (buf.length > 256 * 1024 * 1024) {
+              console.error("::error::Built APK exceeds 256 MiB server proxy limit");
+              process.exit(1);
+            }
+
+            const sha256 = crypto.createHash("sha256").update(buf).digest("hex").toLowerCase();
+            const abiTag = hasAbi(selected, "arm64-v8a")
+              ? "arm64-v8a"
+              : selected.type === "UNIVERSAL"
+                ? "universal"
+                : "release";
+            const safeName = process.env.SAFE_VERSION_NAME;
+            const assetName = `sera-node-${safeName}-${abiTag}.apk`;
+
+            const outDir = path.join(process.env.RUNNER_TEMP, "release-assets");
+            fs.mkdirSync(outDir, { recursive: true });
+            const outApk = path.join(outDir, assetName);
+            fs.copyFileSync(sourceApk, outApk);
+
+            const serverUrl = (process.env.GITHUB_SERVER_URL || "https://github.com").replace(/\/+$/, "");
+            const repo = process.env.GITHUB_REPOSITORY;
+            const releaseTag = process.env.RELEASE_TAG;
+            const apkUrl = `${serverUrl}/${repo}/releases/download/${encodeURIComponent(releaseTag)}/${encodeURIComponent(assetName)}`;
+
+            const manifest = {
+              versionCode: expectedCode,
+              versionName: expectedName,
+              sha256,
+              assetName,
+              apkUrl,
+              proxyPath: "/internal/extraction/updates/apk",
+            };
+
+            const notes = (process.env.RELEASE_NOTES || "").trim();
+            if (notes) {
+              manifest.releaseNotes = notes.slice(0, 8000);
+            }
+            const minCode = (process.env.MIN_VERSION_CODE || "").trim();
+            if (minCode) {
+              manifest.minVersionCode = Number.parseInt(minCode, 10);
+            }
+
+            const outManifest = path.join(outDir, "android-node-manifest.json");
+            fs.writeFileSync(outManifest, JSON.stringify(manifest, null, 2) + "\n", "utf8");
+
+            const lines = [
+              `apk_path=${outApk}`,
+              `asset_name=${assetName}`,
+              `manifest_path=${outManifest}`,
+              `sha256=${sha256}`,
+              `size_bytes=${buf.length}`,
+              `abi=${abiTag}`,
+              `apk_url=${apkUrl}`,
+            ];
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, lines.join("\n") + "\n");
+          '
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.release_tag }}
+          path: |
+            ${{ steps.pkg.outputs.apk_path }}
+            ${{ steps.pkg.outputs.manifest_path }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          GITHUB_REF_TYPE: ${{ github.ref_type }}
+          RELEASE_TAG: ${{ steps.meta.outputs.release_tag }}
+          VERSION_NAME: ${{ steps.meta.outputs.version_name }}
+          VERSION_CODE: ${{ steps.meta.outputs.version_code }}
+          SIGNING_MODE: ${{ steps.signing.outputs.mode }}
+          PRERELEASE: ${{ steps.meta.outputs.prerelease }}
+          APK_PATH: ${{ steps.pkg.outputs.apk_path }}
+          MANIFEST_PATH: ${{ steps.pkg.outputs.manifest_path }}
+          RELEASE_NOTES: ${{ steps.meta.outputs.release_notes }}
+        run: |
+          title="SERA Android Node v${VERSION_NAME} (build ${VERSION_CODE})"
+          notes_file="$RUNNER_TEMP/release-notes.txt"
+          : > "$notes_file"
+
+          if [ "$SIGNING_MODE" = "debug" ]; then
+            title="$title [debug-signed]"
+            printf '%s\n\n' 'Built with ephemeral debug keystore fallback because ANDROID_KEYSTORE_* secrets are not configured.' >> "$notes_file"
+          fi
+
+          if [ -n "$RELEASE_NOTES" ]; then
+            printf '%s\n' "$RELEASE_NOTES" >> "$notes_file"
+          fi
+
+          if gh release view "$RELEASE_TAG" --repo "$REPO" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "$APK_PATH" "$MANIFEST_PATH" --repo "$REPO" --clobber
+            edit_args=(
+              "$RELEASE_TAG"
+              --repo "$REPO"
+              --title "$title"
+            )
+            if [ "$SIGNING_MODE" = "debug" ]; then
+              edit_args+=(--draft)
+            else
+              edit_args+=(--draft=false)
+            fi
+            if [ "$PRERELEASE" = "true" ] || [ "$SIGNING_MODE" = "debug" ]; then
+              edit_args+=(--prerelease)
+            else
+              edit_args+=(--prerelease=false)
+            fi
+            if [ -s "$notes_file" ]; then
+              edit_args+=(--notes-file "$notes_file")
+            fi
+            gh release edit "${edit_args[@]}"
+          else
+            create_args=(
+              "$RELEASE_TAG"
+              "$APK_PATH"
+              "$MANIFEST_PATH"
+              --repo "$REPO"
+              --title "$title"
+            )
+            if [ "$SIGNING_MODE" = "debug" ]; then
+              create_args+=(--draft --prerelease)
+            elif [ "$PRERELEASE" = "true" ]; then
+              create_args+=(--prerelease)
+            fi
+            if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+              create_args+=(--verify-tag)
+            else
+              create_args+=(--target "$GITHUB_SHA")
+            fi
+            if [ -s "$notes_file" ]; then
+              create_args+=(--notes-file "$notes_file")
+            else
+              create_args+=(--generate-notes)
+            fi
+            gh release create "${create_args[@]}"
+          fi
+
+      - name: Write build summary
+        if: steps.pkg.outputs.sha256 != ''
+        env:
+          SIGNING_MODE: ${{ steps.signing.outputs.mode }}
+          RELEASE_TAG: ${{ steps.meta.outputs.release_tag }}
+          VERSION_NAME: ${{ steps.meta.outputs.version_name }}
+          VERSION_CODE: ${{ steps.meta.outputs.version_code }}
+          ABI: ${{ steps.pkg.outputs.abi }}
+          ASSET_NAME: ${{ steps.pkg.outputs.asset_name }}
+          SIZE_BYTES: ${{ steps.pkg.outputs.size_bytes }}
+          SHA256: ${{ steps.pkg.outputs.sha256 }}
+        run: |
+          {
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Signing | $SIGNING_MODE |"
+            echo "| Release Tag | $RELEASE_TAG |"
+            echo "| Version | $VERSION_NAME ($VERSION_CODE) |"
+            echo "| ABI | $ABI |"
+            echo "| Asset | $ASSET_NAME |"
+            echo "| Size (bytes) | $SIZE_BYTES |"
+            echo "| SHA-256 | \`$SHA256\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Clean up keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.keystore"

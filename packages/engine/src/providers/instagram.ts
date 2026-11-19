@@ -15,6 +15,7 @@ import {
   titleFor,
   type InstagramNode,
 } from './instagram-media.js';
+import { validateProviderUrl } from '../security/url.js';
 import { nonEmpty } from '../util/format.js';
 import type { ProviderContext, ResolvedMedia } from './types.js';
 import { YtdlpProvider } from './ytdlp-base.js';
@@ -115,6 +116,11 @@ export class InstagramProvider extends YtdlpProvider {
     }
 
     const author = oembed.author_name;
+    const authorUrl = validateProviderUrl(oembed.author_url, {
+      allowPrivateAddresses: context.config.allowPrivateAddresses,
+      blockedHosts: context.config.blockedHosts,
+      ...(context.allowUrl ? { allowUrl: context.allowUrl } : {}),
+    });
     return {
       provider: this.id,
       providerLabel: this.label,
@@ -122,7 +128,7 @@ export class InstagramProvider extends YtdlpProvider {
       type: 'single',
       title: nonEmpty(oembed.title) ?? `Post by ${author ?? 'an Instagram account'}`,
       ...(author ? { author } : {}),
-      ...(oembed.author_url ? { authorUrl: oembed.author_url } : {}),
+      ...(authorUrl ? { authorUrl } : {}),
       thumbnailUrl: item.thumbnailUrl!,
       items: [item],
       metadata: { source: 'oembed', degraded: 'cover-image' },
@@ -148,6 +154,11 @@ export class InstagramProvider extends YtdlpProvider {
           'FORMAT_UNAVAILABLE',
           'LOGIN_REQUIRED',
           'AUTH_CONFIGURATION_ERROR',
+          'RATE_LIMITED',
+          'DATACENTER_BLOCKED',
+          'BOT_DETECTION',
+          'STREAM_403',
+          'EXTRACTOR_BUG',
         ],
         run: (target, ctx) => this.viaSession(target, ctx),
       },
@@ -165,7 +176,10 @@ export class InstagramProvider extends YtdlpProvider {
       return await super.resolve(url, context);
     } catch (error) {
       const failure = SeraError.from(error);
-      if (failure.code !== 'UNSUPPORTED_SOURCE') throw failure;
+      const noVideoFormats =
+        failure.code === 'MEDIA_UNAVAILABLE' &&
+        failure.detail?.toLowerCase().includes('no video formats found') === true;
+      if (failure.code !== 'UNSUPPORTED_SOURCE' && !noVideoFormats) throw failure;
       throw seraError('PROVIDER_AUTH_REQUIRED', {
         message: 'Instagram photo posts need an account, and this server does not have one.',
         hint: 'Reels and video posts work. A photo post can still be sent to SERA from your own browser, where you are already signed in to Instagram.',

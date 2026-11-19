@@ -1,9 +1,17 @@
 'use client';
 
-import { memo, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent,
+} from 'react';
 import type { MediaInfo, MediaItem } from '@sera/contracts/types';
 import { AudioIcon, CheckIcon, CloseIcon, GifIcon, ImageIcon, VideoIcon } from './icons';
-import { cx, formatDuration, KIND_LABELS, pluralize } from '@/lib/format';
+import { cx, formatDuration, isSafeDownloadPath, KIND_LABELS, pluralize } from '@/lib/format';
 import { filterMediaItems, selectItemRange, selectItemsUpToMax } from '@/lib/selection';
 
 const KIND_ICON = {
@@ -43,27 +51,30 @@ export function ItemPicker({
     [info.items, filterQuery],
   );
 
-  const applySelection = (nextSet: Set<string>): void => {
-    if (onSelectIds) {
-      onSelectIds(nextSet);
-      return;
-    }
-    if (nextSet.size === 0) {
-      onSelectAll(false);
-      return;
-    }
-    if (nextSet.size === info.items.length) {
-      onSelectAll(true);
-      return;
-    }
-    for (const item of info.items) {
-      const hasNow = selectedIds.has(item.id);
-      const shouldHave = nextSet.has(item.id);
-      if (hasNow !== shouldHave) {
-        onToggle(item.id);
+  const applySelection = useCallback(
+    (nextSet: Set<string>): void => {
+      if (onSelectIds) {
+        onSelectIds(nextSet);
+        return;
       }
-    }
-  };
+      if (nextSet.size === 0) {
+        onSelectAll(false);
+        return;
+      }
+      if (nextSet.size === info.items.length) {
+        onSelectAll(true);
+        return;
+      }
+      for (const item of info.items) {
+        const hasNow = selectedIds.has(item.id);
+        const shouldHave = nextSet.has(item.id);
+        if (hasNow !== shouldHave) {
+          onToggle(item.id);
+        }
+      }
+    },
+    [info.items, onSelectAll, onSelectIds, onToggle, selectedIds],
+  );
 
   const handleSelectAllVisible = (): void => {
     const next = selectItemsUpToMax(visibleItems, maxItems);
@@ -82,34 +93,37 @@ export function ItemPicker({
     applySelection(new Set());
   };
 
-  const handleTileClick = (item: MediaItem, event?: MouseEvent): void => {
-    if (event?.shiftKey && lastClickedIndex !== undefined) {
-      const rangeSet = selectItemRange(visibleItems, lastClickedIndex, item.index, maxItems);
-      const merged = selectItemsUpToMax(
-        visibleItems.filter((candidate) => rangeSet.has(candidate.id)),
-        maxItems,
-        selectedIds,
-      );
-      applySelection(merged);
+  const handleTileClick = useCallback(
+    (item: MediaItem, event?: MouseEvent): void => {
+      if (event?.shiftKey && lastClickedIndex !== undefined) {
+        const rangeSet = selectItemRange(visibleItems, lastClickedIndex, item.index, maxItems);
+        const merged = selectItemsUpToMax(
+          visibleItems.filter((candidate) => rangeSet.has(candidate.id)),
+          maxItems,
+          selectedIds,
+        );
+        applySelection(merged);
+        setLastClickedIndex(item.index);
+        return;
+      }
       setLastClickedIndex(item.index);
-      return;
-    }
-    setLastClickedIndex(item.index);
-    onToggle(item.id);
-  };
+      onToggle(item.id);
+    },
+    [applySelection, lastClickedIndex, maxItems, onToggle, selectedIds, visibleItems],
+  );
 
   const noneSelected = selectedIds.size === 0;
 
   return (
     <fieldset className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <legend className="text-xs font-medium tracking-wide text-[var(--color-ink-faint)] uppercase">
-          {pluralize(info.items.length, 'item')} found
-          {visibleItems.length !== info.items.length
-            ? ` · ${pluralize(visibleItems.length, 'match', 'matches')}`
-            : ''}
-        </legend>
+      <legend className="mb-1 text-xs font-medium tracking-wide text-[var(--color-ink-faint)] uppercase">
+        {pluralize(info.items.length, 'item')} found
+        {visibleItems.length !== info.items.length
+          ? ` · ${pluralize(visibleItems.length, 'match', 'matches')}`
+          : ''}
+      </legend>
 
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
@@ -191,7 +205,7 @@ export function ItemPicker({
               key={item.id}
               item={item}
               selected={selectedIds.has(item.id)}
-              onToggle={(event) => handleTileClick(item, event)}
+              onToggle={handleTileClick}
             />
           ))}
         </div>
@@ -219,13 +233,15 @@ const ItemTile = memo(function ItemTile({
 }: {
   readonly item: MediaItem;
   readonly selected: boolean;
-  readonly onToggle: (event?: MouseEvent) => void;
+  readonly onToggle: (item: MediaItem, event?: MouseEvent) => void;
 }) {
   const [retries, setRetries] = useState(0);
   const [thumbnailFailed, setThumbnailFailed] = useState(false);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const Icon = KIND_ICON[item.kind];
-  const showThumbnail = Boolean(item.thumbnail) && !thumbnailFailed;
+  const safeThumbnail =
+    item.thumbnail && isSafeDownloadPath(item.thumbnail) ? item.thumbnail : undefined;
+  const showThumbnail = Boolean(safeThumbnail) && !thumbnailFailed;
   const displayTitle = item.title ?? KIND_LABELS[item.kind === 'unknown' ? 'video' : item.kind];
 
   useEffect(() => {
@@ -238,14 +254,14 @@ const ItemTile = memo(function ItemTile({
     return () => {
       if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
     };
-  }, [item.thumbnail]);
+  }, [safeThumbnail]);
 
   return (
     <label
       onClick={(event) => {
         if (event.shiftKey) {
           event.preventDefault();
-          onToggle(event);
+          onToggle(item, event);
         }
       }}
       className={cx(
@@ -259,7 +275,7 @@ const ItemTile = memo(function ItemTile({
       <input
         type="checkbox"
         checked={selected}
-        onChange={() => onToggle()}
+        onChange={() => onToggle(item)}
         className="sr-only"
         aria-label={`Item ${item.index}, ${displayTitle}`}
       />
@@ -268,9 +284,9 @@ const ItemTile = memo(function ItemTile({
         {showThumbnail ? (
           <img
             src={
-              retries > 0 && item.thumbnail
-                ? `${item.thumbnail}${item.thumbnail.includes('?') ? '&' : '?'}retry=${retries}`
-                : item.thumbnail
+              retries > 0 && safeThumbnail
+                ? `${safeThumbnail}${safeThumbnail.includes('?') ? '&' : '?'}retry=${retries}`
+                : safeThumbnail
             }
             alt=""
             loading="lazy"

@@ -1,7 +1,8 @@
 @echo off
 
 for %%I in ("%~dp0..\..") do set "REPO=%%~fI"
-set "NODE=C:\Program Files\nodejs\node.exe"
+if not defined NODE for /f "delims=" %%N in ('where node.exe 2^>nul') do if not defined NODE set "NODE=%%N"
+if not defined NODE set "NODE=C:\Program Files\nodejs\node.exe"
 set "HERE=%~dp0"
 set "LOG=%HERE%node.log"
 

@@ -15,14 +15,12 @@ RUN --mount=type=cache,target=/root/.npm \
     npm ci --ignore-scripts --workspaces --include-workspace-root
 
 COPY tsconfig.base.json tsconfig.json ./
-COPY packages/ packages/
+COPY packages/contracts/ packages/contracts/
 COPY apps/web/ apps/web/
 
 RUN npm run build --workspace @sera/contracts
 
-ARG SERA_API_URL=http://api:4000
-ENV SERA_API_URL=${SERA_API_URL} \
-    NEXT_TELEMETRY_DISABLED=1
+ENV NEXT_TELEMETRY_DISABLED=1
 
 RUN npm run build --workspace @sera/web
 
@@ -31,7 +29,8 @@ FROM node:24.18.1-bookworm-slim AS runtime
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     PORT=3000 \
-    HOSTNAME=0.0.0.0
+    HOSTNAME=0.0.0.0 \
+    SERA_API_URL=http://api:4000
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends tini ca-certificates \

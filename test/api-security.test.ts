@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
+import { MAX_OPTIONS_PER_JOB } from '@sera/contracts';
 import type { Job, MediaInfo } from '@sera/contracts/types';
 import { loadConfig, SeraEngine } from '@sera/engine';
 import { buildServer } from '../apps/api/src/server.js';
@@ -150,7 +151,10 @@ describe('signed handles', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/api/jobs',
-      payload: { infoId: info.id, optionIds: Array.from({ length: 200 }, () => optionId) },
+      payload: {
+        infoId: info.id,
+        optionIds: Array.from({ length: MAX_OPTIONS_PER_JOB + 1 }, () => optionId),
+      },
     });
     expect(response.statusCode).toBe(400);
   });

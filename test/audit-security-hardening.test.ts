@@ -264,4 +264,70 @@ describe('Security Hardening: IDOR, Coalescing & Extractor Filtering', () => {
     });
     expect(thumbRes.json().error.code).toBe('UNSUPPORTED_SOURCE');
   });
+
+  it('enforces /health rate limits when x-real-ip or cf-connecting-ip headers are present on loopback', async () => {
+    for (let i = 0; i < 65; i += 1) {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/health',
+        headers: { 'x-real-ip': '198.51.100.77' },
+      });
+      if (res.statusCode === 429) {
+        expect(res.statusCode).toBe(429);
+        return;
+      }
+    }
+    throw new Error('expected /health to enforce rate limit when x-real-ip is present');
+  });
+
+  it('rejects prototype-polluting JSON keys in request validation', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/media/import',
+      headers: {
+        'content-type': 'application/json',
+        'x-forwarded-for': '198.51.100.213',
+      },
+      payload:
+        '{"url":"https://www.instagram.com/p/ZZ99yyXX11w","constructor":{"prototype":{"polluted":true}},"__proto__":{"polluted":true},"node":{}}',
+    });
+    expect(res.statusCode).toBeGreaterThanOrEqual(400);
+    expect(({} as { polluted?: unknown }).polluted).toBeUndefined();
+  });
+
+  it('flushes SSE error event cleanly when event stream throws mid-flight', async () => {
+    const jobId = '1234567890abcdef1234567890abcdef';
+    const jobs = engine.jobs as unknown as {
+      get: typeof engine.jobs.get;
+      events: typeof engine.jobs.events;
+    };
+    const originalGet = jobs.get.bind(engine.jobs);
+    const originalEvents = jobs.events.bind(engine.jobs);
+    jobs.get = (id, clientKey) =>
+      id === jobId
+        ? Promise.resolve({
+            id: jobId,
+          } as unknown as Awaited<ReturnType<typeof engine.jobs.get>>)
+        : originalGet(id, clientKey);
+    jobs.events = async function* (id, signal, clientKey) {
+      if (id === jobId) {
+        await Promise.resolve();
+        throw new Error('simulated sse failure');
+      }
+      yield* originalEvents(id, signal, clientKey);
+    };
+    try {
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/jobs/${jobId}/events`,
+        headers: { 'x-forwarded-for': '198.51.100.214' },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.body).toContain('event: error');
+      expect(res.body).toContain('"type":"error"');
+    } finally {
+      jobs.get = originalGet;
+      jobs.events = originalEvents;
+    }
+  });
 });

@@ -1,4 +1,5 @@
 import { seraError } from '../errors.js';
+import { stripWww } from '../security/url.js';
 import { YtdlpProvider } from './ytdlp-base.js';
 import type { ProviderContext, ResolvedMedia } from './types.js';
 
@@ -15,12 +16,15 @@ export class SnapchatProvider extends YtdlpProvider {
     const out = new URL(url.toString());
     out.protocol = 'https:';
     const spotlight = SnapchatProvider.CREATOR_SPOTLIGHT.exec(out.pathname);
-    if (spotlight) out.pathname = `/spotlight/${spotlight[1]}`;
+    if (spotlight) out.pathname = `/spotlight/${encodeURIComponent(spotlight[1]!)}`;
     return out;
   }
 
   override async resolve(url: URL, context: ProviderContext): Promise<ResolvedMedia> {
-    if (!SnapchatProvider.PUBLIC_PATH.test(url.pathname)) {
+    const isShortHost = stripWww(url.hostname.toLowerCase()) === 't.snapchat.com';
+    const isPublic =
+      SnapchatProvider.PUBLIC_PATH.test(url.pathname) || (isShortHost && url.pathname.length > 1);
+    if (!isPublic) {
       throw seraError('PRIVATE_CONTENT', {
         message: 'Only public Snapchat Spotlight posts can be processed.',
         detail: 'snapchat: path is not a public surface',

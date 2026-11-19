@@ -157,7 +157,14 @@ export async function readViaEmbed(
     };
   }
 
-  const { body: html } = await fetchText(embedUrlFor(url), 2 * 1024 * 1024, { headers });
+  const oembedUrl = new URL('https://www.reddit.com/oembed');
+  oembedUrl.searchParams.set('url', url.toString());
+  const [{ body: html }, oembed] = await Promise.all([
+    fetchText(embedUrlFor(url), 2 * 1024 * 1024, { headers }),
+    fetchText(oembedUrl, 256 * 1024, { headers })
+      .then(({ body }) => JSON.parse(body) as Oembed)
+      .catch(() => undefined),
+  ]);
   const screenview = screenviewFrom(html);
   const images = imagesFrom(html);
   const videoBase = videoBaseFrom(html);
@@ -176,12 +183,6 @@ export async function readViaEmbed(
       detail: `reddit: the embed named no media (type ${screenview?.post?.type ?? 'unknown'})`,
     });
   }
-
-  const oembedUrl = new URL('https://www.reddit.com/oembed');
-  oembedUrl.searchParams.set('url', url.toString());
-  const oembed = await fetchText(oembedUrl, 256 * 1024, { headers })
-    .then(({ body }) => JSON.parse(body) as Oembed)
-    .catch(() => undefined);
 
   const author = nonEmpty(oembed?.author_name);
   const title = nonEmpty(oembed?.title);

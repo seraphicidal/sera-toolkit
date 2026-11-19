@@ -46,7 +46,7 @@ async function main(): Promise<void> {
     logger.info({ signal }, 'stopping extraction node');
     stopReaper();
     node.stop();
-    setTimeout(() => process.exit(0), 2000).unref();
+    setTimeout(() => process.exit(0), 4000).unref();
   };
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));

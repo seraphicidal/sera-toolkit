@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DIR="${SERA_DIR:-/opt/sera}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DIR="${SERA_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 STATE_DIR=/var/lib/sera
 OUT="$STATE_DIR/canary.json"
 mkdir -p "$STATE_DIR"
 
-if ! grep -q '^SERA_CANARY_TOKEN=.' "$DIR/.env"; then
+canary_token=$(sed -n 's/^SERA_CANARY_TOKEN=//p' "$DIR/.env" 2>/dev/null | tail -n 1 | tr -d '"'"'"' \r' || true)
+if [ -z "$canary_token" ]; then
   echo "[canary] SERA_CANARY_TOKEN is not set in $DIR/.env; see deploy/ORACLE.md" >&2
   exit 2
 fi
@@ -18,7 +20,11 @@ if [ -z "$api" ]; then
 fi
 
 results=$(docker exec "$api" node apps/api/dist/canary-cli.js "$@")
-previous=$(cat "$OUT" 2>/dev/null || echo '[]')
+if [ -s "$OUT" ] && jq -e type "$OUT" >/dev/null 2>&1; then
+  previous=$(cat "$OUT")
+else
+  previous='[]'
+fi
 
 jq -n --argjson now "$results" --argjson prev "$previous" '
   ($now | map(. as $r

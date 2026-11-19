@@ -1,8 +1,8 @@
 import type { ProviderCapabilities } from '@sera/contracts/types';
-import { seraError } from '../errors.js';
+import { SeraError, seraError } from '../errors.js';
 import type { ExtractionStrategy } from '../extract/strategy.js';
 import { ensureRecommendations } from '../normalize/plans.js';
-import { normalizeContainer } from './direct.js';
+import { isSafeProviderMediaUrl, normalizeContainer } from './direct.js';
 import { urlExtension } from '../security/url.js';
 import { nonEmpty, truncate } from '../util/format.js';
 import type { DownloadPlan, ProviderContext, ResolvedItem, ResolvedMedia } from './types.js';
@@ -60,11 +60,17 @@ export class BlueskyProvider extends YtdlpProvider {
     try {
       const did = actor.startsWith('did:') ? actor : await this.resolveHandle(actor, context);
       post = await this.readPost(did, rkey, context);
-    } catch {
+    } catch (error) {
+      if (
+        error instanceof SeraError &&
+        (error.code === 'CANCELLED' || error.code === 'TIMEOUT' || error.code === 'BLOCKED_ADDRESS')
+      ) {
+        throw error;
+      }
       throw original;
     }
 
-    const images = imagesIn(post);
+    const images = imagesIn(post, context);
     if (!images.length) throw original;
 
     const author = nonEmpty(post.author?.displayName) ?? post.author?.handle;
@@ -102,12 +108,13 @@ export class BlueskyProvider extends YtdlpProvider {
           },
         ];
 
+        const thumb = isSafeProviderMediaUrl(image.thumb, context) ? image.thumb : image.fullsize;
         return {
           sourceId: image.fullsize.split('/').pop() ?? String(index),
           index,
           kind: 'image' as const,
           title: image.alt?.trim() ? truncate(image.alt.trim(), 120) : `Image ${index + 1}`,
-          thumbnailUrl: image.thumb ?? image.fullsize,
+          thumbnailUrl: thumb,
           ...(image.aspectRatio?.width ? { width: image.aspectRatio.width } : {}),
           ...(image.aspectRatio?.height ? { height: image.aspectRatio.height } : {}),
           container,
@@ -174,10 +181,9 @@ interface BlueskyPost {
   readonly embed?: BlueskyEmbed;
 }
 
-function imagesIn(post: BlueskyPost): readonly BlueskyImage[] {
+function imagesIn(post: BlueskyPost, context: ProviderContext): readonly BlueskyImage[] {
   const candidates = post.embed?.images ?? post.embed?.media?.images ?? [];
-  return candidates.filter(
-    (image): image is BlueskyImage =>
-      typeof image?.fullsize === 'string' && image.fullsize.startsWith('https://'),
+  return candidates.filter((image): image is BlueskyImage =>
+    isSafeProviderMediaUrl(image?.fullsize, context),
   );
 }

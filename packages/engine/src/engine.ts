@@ -118,9 +118,9 @@ export class SeraEngine {
       registry,
       denylist,
       remoteBackends: () => (config.extractionNodes.enabled ? remoteBackends(remote) : []),
-      sessionBackend: (feature) =>
-        config.extractionNodes.enabled && remote.hasFeature(feature)
-          ? sessionBackend(remote, feature)
+      sessionBackend: (feature, providerId) =>
+        config.extractionNodes.enabled && remote.hasFeature(feature, providerId)
+          ? sessionBackend(remote, feature, providerId)
           : undefined,
       ...(options.dispatcher ? { dispatcher: options.dispatcher } : {}),
       ...(options.probe ? { probe: options.probe } : {}),
@@ -183,12 +183,10 @@ export class SeraEngine {
 
   private withNodeSessions(providers: ServiceInfo['providers']): ServiceInfo['providers'] {
     if (!this.config.extractionNodes.enabled) return providers;
+    const remote = this.remote ?? this.extractionNodes;
     return providers.map((summary) => {
       const provider = this.registry.get(summary.id);
-      if (
-        !provider?.nodeSession ||
-        !this.extractionNodes.hasFeature(provider.nodeSession, summary.id)
-      ) {
+      if (!provider?.nodeSession || !remote.hasFeature(provider.nodeSession, summary.id)) {
         return summary;
       }
       const { authRequiredFor: _unlocked, ...capabilities } = {
@@ -224,23 +222,21 @@ export class SeraEngine {
   }
 
   private async computeHealth(): Promise<HealthReport> {
-    const checks: HealthCheck[] = [];
-
-    checks.push(
-      await checkTool('yt-dlp', () => ytdlpVersion(this.config.ytdlpPath)),
-      await checkTool('ffmpeg', () => ffmpegVersion(this.config.ffmpegPath)),
-      await checkTool('storage', async () => {
+    const checks: HealthCheck[] = await Promise.all([
+      checkTool('yt-dlp', () => ytdlpVersion(this.config.ytdlpPath)),
+      checkTool('ffmpeg', () => ffmpegVersion(this.config.ffmpegPath)),
+      checkTool('storage', async () => {
         const usage = await this.workspaces.usage();
         return `${usage.workspaces} workspaces, ${Math.round(usage.bytes / 1048576)} MB`;
       }),
-      await checkTool('queue', async () => {
+      checkTool('queue', async () => {
         const waiting = await this.backend.waitingCount();
         return `${this.backend.driver}, ${waiting} waiting`;
       }),
-    );
+    ]);
 
     if (this.config.extractionNodes.enabled) {
-      const nodes = this.extractionNodes.status();
+      const nodes = (this.remote ?? this.extractionNodes).status();
       const healthy = nodes.filter((node) => node.healthy);
       checks.push({
         name: 'extraction-nodes',

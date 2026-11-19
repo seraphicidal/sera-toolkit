@@ -337,7 +337,7 @@ export type JobEvent =
   | { readonly type: 'state'; readonly job: Job }
   | { readonly type: 'progress'; readonly job: Job }
   | { readonly type: 'done'; readonly job: Job }
-  | { readonly type: 'error'; readonly job: Job }
+  | { readonly type: 'error'; readonly job?: Job; readonly message?: string }
   | { readonly type: 'ping' };
 
 export interface ProviderCapabilities {
@@ -415,4 +415,235 @@ export interface LegalReportResponse {
   readonly receivedAt: string;
   readonly status: 'received' | 'action_taken';
   readonly mitigated?: boolean;
+}
+
+export type NodeNetworkClass = 'datacenter' | 'residential' | 'unknown';
+
+export type NodeTransport = 'wifi' | 'cellular' | 'other';
+
+export type NodeFeature = 'trim' | 'subtitles' | 'items' | 'instagram-session';
+
+export type RemoteTaskKind = 'resolve' | 'job';
+
+export interface RemoteTaskItem {
+  readonly index: number;
+  readonly sourceId?: string;
+}
+
+export interface RemoteTaskSubtitles {
+  readonly lang: string;
+  readonly auto: boolean;
+  readonly format: SubtitleFormat;
+  readonly only: boolean;
+}
+
+export interface RemoteTask {
+  readonly id: string;
+  readonly kind: RemoteTaskKind;
+  readonly url: string;
+  readonly providerId: string;
+  readonly networkClass?: NodeNetworkClass;
+  readonly planKeys?: readonly string[];
+  readonly items?: readonly RemoteTaskItem[];
+  readonly filename?: string;
+  readonly trim?: TrimRange;
+  readonly requires?: readonly NodeFeature[];
+  readonly avoid?: readonly string[];
+  readonly subtitles?: RemoteTaskSubtitles;
+  readonly createdAt: number;
+}
+
+export interface ExtractionNodeClaim {
+  readonly nodeId: string;
+  readonly providers: readonly string[];
+  readonly capacity: number;
+  readonly networkClass: NodeNetworkClass;
+  readonly features: readonly string[];
+  readonly transport?: NodeTransport;
+  readonly appVersion?: string;
+  readonly ytdlpVersion?: string;
+  readonly ffmpegVersion?: string;
+}
+
+export interface ExtractionNodeDispatch {
+  readonly kind: RemoteTaskKind;
+  readonly url: string;
+  readonly providerId: string;
+  readonly planKeys?: readonly string[];
+  readonly items?: readonly RemoteTaskItem[];
+  readonly filename?: string;
+  readonly networkClass?: NodeNetworkClass;
+  readonly trim?: TrimRange;
+  readonly requires?: readonly NodeFeature[];
+  readonly avoid?: readonly string[];
+  readonly subtitles?: RemoteTaskSubtitles;
+}
+
+export interface RemoteProgress {
+  readonly percent: number;
+  readonly step: string;
+  readonly bytesDownloaded?: number;
+  readonly bytesTotal?: number;
+}
+
+export interface ExtractionNodeFailed {
+  readonly code: string;
+  readonly message?: string;
+  readonly detail?: string;
+}
+
+export interface NodeStatus {
+  readonly id: string;
+  readonly providers: readonly string[];
+  readonly networkClass: NodeNetworkClass;
+  readonly capacity: number;
+  readonly features?: readonly string[];
+  readonly transport?: NodeTransport;
+  readonly appVersion?: string;
+  readonly ytdlpVersion?: string;
+  readonly ffmpegVersion?: string;
+  readonly inFlight: number;
+  readonly lastSeenMs: number;
+  readonly healthy: boolean;
+}
+
+export type RemoteResolvedFetchPlan =
+  | {
+      readonly via: 'ytdlp';
+      readonly selector: string;
+      readonly merge?: string;
+      readonly audio?: { readonly format: string; readonly quality?: string };
+      readonly remux?: string;
+      readonly extractorArgs?: readonly string[];
+      readonly target?: string;
+      readonly useExtractors?: string;
+    }
+  | {
+      readonly via: 'direct';
+      readonly url: string;
+    };
+
+export type RemoteResolvedConvertSpec =
+  | { readonly kind: 'remux'; readonly container: 'mp4' | 'webm' | 'mov' | 'mkv' }
+  | { readonly kind: 'video'; readonly container: 'mp4' | 'webm' }
+  | {
+      readonly kind: 'audio';
+      readonly container: 'mp3' | 'm4a' | 'opus' | 'wav' | 'flac';
+      readonly bitrateKbps?: number;
+    }
+  | { readonly kind: 'gif'; readonly maxWidth?: number; readonly fps?: number };
+
+export interface RemoteResolvedPlan {
+  readonly kind: 'video' | 'audio' | 'image' | 'gif';
+  readonly container: string;
+  readonly label: string;
+  readonly detail?: string;
+  readonly width?: number;
+  readonly height?: number;
+  readonly fps?: number;
+  readonly audioBitrateKbps?: number;
+  readonly videoCodec?: string;
+  readonly audioCodec?: string;
+  readonly filesizeBytes?: number;
+  readonly filesizeIsApproximate?: boolean;
+  readonly requiresConversion: boolean;
+  readonly recommended: boolean;
+  readonly fetch: RemoteResolvedFetchPlan;
+  readonly convert?: RemoteResolvedConvertSpec;
+}
+
+export interface RemoteResolvedSubtitleTrack {
+  readonly lang: string;
+  readonly label: string;
+  readonly auto?: boolean;
+}
+
+export interface RemoteResolvedTags {
+  readonly artist?: string;
+  readonly album?: string;
+  readonly track?: string;
+}
+
+export interface RemoteResolvedItem {
+  readonly sourceId?: string;
+  readonly index: number;
+  readonly kind: MediaKind;
+  readonly title?: string;
+  readonly thumbnailUrl?: string;
+  readonly thumbnailFallbackUrl?: string;
+  readonly subtitles?: readonly RemoteResolvedSubtitleTrack[];
+  readonly tags?: RemoteResolvedTags;
+  readonly width?: number;
+  readonly height?: number;
+  readonly duration?: number;
+  readonly container?: string;
+  readonly filesizeBytes?: number;
+  readonly isLive?: boolean;
+  readonly plans: readonly RemoteResolvedPlan[];
+}
+
+export interface RemoteResolvedMedia {
+  readonly provider: string;
+  readonly providerLabel: string;
+  readonly url: string;
+  readonly type: MediaInfoType;
+  readonly title: string;
+  readonly description?: string;
+  readonly author?: string;
+  readonly authorUrl?: string;
+  readonly thumbnailUrl?: string;
+  readonly duration?: number;
+  readonly createdAt?: string;
+  readonly remoteBackend?: string;
+  readonly items: readonly RemoteResolvedItem[];
+  readonly metadata?: Readonly<Record<string, string | number | boolean>>;
+}
+
+export interface RemoteResolvedBody {
+  readonly media: RemoteResolvedMedia;
+}
+
+export interface YtdlpUpdateInfo {
+  readonly version: string;
+  readonly assetName: string;
+  readonly sha256?: string;
+  readonly url: string;
+  readonly proxyPath: string;
+}
+
+export interface AndroidNodeAppUpdateInfo {
+  readonly versionCode: number;
+  readonly versionName: string;
+  readonly sha256: string;
+  readonly apkUrl: string;
+  readonly proxyPath: string;
+  readonly releaseNotes?: string;
+  readonly minVersionCode?: number;
+}
+
+export interface YoutubeHotConfig {
+  readonly playerClients: readonly string[];
+  readonly extraArgs: readonly string[];
+  readonly remoteComponents: readonly string[];
+  readonly potProviderUrl?: string;
+}
+
+export interface InstagramHotConfig {
+  readonly webApiAppId: string;
+  readonly userAgent: string;
+  readonly cdnHosts: readonly string[];
+  readonly strategyOrder: readonly ('ytdlp' | 'web-api' | 'oembed')[];
+}
+
+export interface ProviderHotConfig {
+  readonly youtube: YoutubeHotConfig;
+  readonly instagram: InstagramHotConfig;
+}
+
+export interface NodeUpdateManifest {
+  readonly manifestHash: string;
+  readonly generatedAt: string;
+  readonly ytdlp: YtdlpUpdateInfo;
+  readonly androidNodeApp?: AndroidNodeAppUpdateInfo;
+  readonly providerConfig: ProviderHotConfig;
 }

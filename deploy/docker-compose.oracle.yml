@@ -74,7 +74,7 @@ services:
       SERA_RATE_LIMIT_RESOLVE_PER_MINUTE: ${SERA_RATE_LIMIT_RESOLVE_PER_MINUTE:-20}
       SERA_RATE_LIMIT_JOBS_PER_MINUTE: ${SERA_RATE_LIMIT_JOBS_PER_MINUTE:-8}
       SERA_MAX_CONCURRENT_JOBS_PER_CLIENT: ${SERA_MAX_CONCURRENT_JOBS_PER_CLIENT:-2}
-      SERA_TRUST_PROXY: 'true'
+      SERA_TRUST_PROXY: ${SERA_TRUST_PROXY:-127.0.0.1/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7}
       SERA_REDDIT_CLIENT_ID: ${SERA_REDDIT_CLIENT_ID:-}
       SERA_REDDIT_CLIENT_SECRET: ${SERA_REDDIT_CLIENT_SECRET:-}
       SERA_YOUTUBE_POT_PROVIDER_URL: ${SERA_YOUTUBE_POT_PROVIDER_URL:-}
@@ -102,6 +102,9 @@ services:
       - '4000'
     volumes:
       - media:/data
+    read_only: true
+    tmpfs:
+      - /tmp
     depends_on:
       redis:
         condition: service_healthy
@@ -167,6 +170,9 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-info}
     volumes:
       - media:/data
+    read_only: true
+    tmpfs:
+      - /tmp
     depends_on:
       redis:
         condition: service_healthy

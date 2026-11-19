@@ -4,7 +4,7 @@ import { SeraError, seraError } from '../errors.js';
 import { extractWithGalleryDl } from '../extract/gallerydl.js';
 import { discoverMedia, type DiscoveredMedia } from '../extract/html.js';
 import { ensureRecommendations } from '../normalize/plans.js';
-import { isAllowed, parseRobots } from '../security/robots.js';
+import { isAllowed, parseRobots, type RobotsRules } from '../security/robots.js';
 import { hostMatchesAny, MEDIA_EXTENSIONS, parseUserUrl, urlExtension } from '../security/url.js';
 import { truncate } from '../util/format.js';
 import { normalizeContainer } from './direct.js';
@@ -46,7 +46,8 @@ export class GenericProvider implements MediaProvider {
     await assertRobotsAllows(url, context);
 
     if (hostMatchesAny(url.hostname, context.config.extraAllowedHosts)) {
-      return this.delegate.resolve(url, context);
+      const resolved = await this.delegate.resolve(url, context);
+      return sameOriginUrl(resolved, url);
     }
 
     const directExt = urlExtension(url);
@@ -122,7 +123,8 @@ export class GenericProvider implements MediaProvider {
     }
 
     try {
-      return await this.delegate.resolve(url, context);
+      const resolved = await this.delegate.resolve(url, context);
+      return sameOriginUrl(resolved, url);
     } catch (delegateError) {
       if (
         delegateError instanceof SeraError &&
@@ -136,7 +138,12 @@ export class GenericProvider implements MediaProvider {
     try {
       return await extractWithGalleryDl(url, context);
     } catch (galleryError) {
-      if (galleryError instanceof SeraError && galleryError.code === 'BLOCKED_ADDRESS') {
+      if (
+        galleryError instanceof SeraError &&
+        (galleryError.code === 'BLOCKED_ADDRESS' ||
+          galleryError.code === 'CANCELLED' ||
+          galleryError.code === 'TIMEOUT')
+      ) {
         throw galleryError;
       }
     }
@@ -168,6 +175,31 @@ export class GenericProvider implements MediaProvider {
   }
 }
 
+const ROBOTS_CACHE_TTL_MS = 60_000;
+const ROBOTS_CACHE_MAX_ORIGINS = 200;
+const robotsCacheByConfig = new WeakMap<
+  object,
+  Map<string, { readonly rules: RobotsRules; readonly expiresAt: number }>
+>();
+
+function sameOriginUrl(resolved: ResolvedMedia, originalUrl: URL): ResolvedMedia {
+  try {
+    if (new URL(resolved.url).origin === originalUrl.origin) return resolved;
+  } catch {}
+  return { ...resolved, url: originalUrl.toString() };
+}
+
+function getRobotsCache(
+  config: ProviderContext['config'],
+): Map<string, { readonly rules: RobotsRules; readonly expiresAt: number }> {
+  let cache = robotsCacheByConfig.get(config);
+  if (!cache) {
+    cache = new Map();
+    robotsCacheByConfig.set(config, cache);
+  }
+  return cache;
+}
+
 export async function assertRobotsAllows(url: URL, context: ProviderContext): Promise<void> {
   const allowPrivateAddresses = context.config.allowPrivateAddresses;
   parseUserUrl(url.toString(), { allowPrivateAddresses });
@@ -177,30 +209,46 @@ export async function assertRobotsAllows(url: URL, context: ProviderContext): Pr
   const robotsUrl = new URL('/robots.txt', url);
   parseUserUrl(robotsUrl.toString(), { allowPrivateAddresses });
 
-  let response: { body: string; url: string };
-  try {
-    response = await context.fetchText(robotsUrl, 512 * 1024);
-  } catch (error) {
-    if (error instanceof SeraError && error.code === 'BLOCKED_ADDRESS') {
-      throw error;
+  const originCache = getRobotsCache(context.config);
+  const now = Date.now();
+  const cached = originCache.get(url.origin);
+  let rules: RobotsRules | undefined;
+  if (cached && cached.expiresAt > now) {
+    rules = cached.rules;
+  } else {
+    let response: { body: string; url: string };
+    try {
+      response = await context.fetchText(robotsUrl, 512 * 1024);
+    } catch (error) {
+      if (error instanceof SeraError && error.code === 'BLOCKED_ADDRESS') {
+        throw error;
+      }
+      return;
     }
-    return;
+
+    if (response.url) {
+      const redirected = parseUserUrl(response.url, { allowPrivateAddresses });
+      if (hostMatchesAny(redirected.url.hostname, context.config.blockedHosts)) {
+        throw seraError('BLOCKED_ADDRESS', {
+          detail: `redirect to blocked host ${redirected.url.hostname}`,
+        });
+      }
+    }
+
+    rules = parseRobots(response.body, 'sera-toolkit');
+    if (originCache.size >= ROBOTS_CACHE_MAX_ORIGINS) {
+      const oldest = originCache.keys().next().value;
+      if (oldest !== undefined) originCache.delete(oldest);
+    }
+    originCache.set(url.origin, { rules, expiresAt: now + ROBOTS_CACHE_TTL_MS });
   }
 
-  if (response.url) {
-    const redirected = parseUserUrl(response.url, { allowPrivateAddresses });
-    if (hostMatchesAny(redirected.url.hostname, context.config.blockedHosts)) {
-      throw seraError('BLOCKED_ADDRESS', {
-        detail: `redirect to blocked host ${redirected.url.hostname}`,
-      });
-    }
-  }
-
-  if (!isAllowed(parseRobots(response.body, 'sera-toolkit'), url.pathname)) {
+  const targetPath = `${url.pathname}${url.search}`;
+  if (!isAllowed(rules, targetPath)) {
     throw seraError('UNSUPPORTED_SOURCE', {
       message: 'This site asks not to be read automatically.',
       hint: 'Try a direct link to the media file instead.',
-      detail: `robots.txt disallows ${url.pathname}`,
+      detail: `robots.txt disallows ${targetPath}`,
     });
   }
 }

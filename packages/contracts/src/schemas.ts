@@ -1,15 +1,37 @@
 import { z } from 'zod';
 import { checkTrim, TIMECODE_PATTERN } from './types.js';
 import type {
+  AndroidNodeAppUpdateInfo,
   ContainerFormat,
   CreateJobRequest,
   DownloadOption,
+  ExtractionNodeClaim,
+  ExtractionNodeDispatch,
+  ExtractionNodeFailed,
   ImportRequest,
+  InstagramHotConfig,
   JobError,
   MediaInfoType,
   MediaKind,
+  NodeFeature,
+  NodeNetworkClass,
+  NodeStatus,
+  NodeTransport,
+  NodeUpdateManifest,
   PackagingMode,
+  ProviderHotConfig,
+  RemoteProgress,
+  RemoteResolvedBody,
+  RemoteResolvedItem,
+  RemoteResolvedMedia,
+  RemoteResolvedPlan,
+  RemoteTask,
+  RemoteTaskItem,
+  RemoteTaskKind,
+  RemoteTaskSubtitles,
   ResolveRequest,
+  YoutubeHotConfig,
+  YtdlpUpdateInfo,
 } from './types.js';
 
 export const mediaKindSchema = z.enum(['video', 'audio', 'image', 'gif', 'unknown']);
@@ -112,7 +134,7 @@ export const MAX_INFO_TOKEN_LENGTH = 40_000;
 
 export const MAX_IMPORTED_ITEMS = 50;
 
-export const MAX_OPTIONS_PER_JOB = 64;
+export const MAX_OPTIONS_PER_JOB = 200;
 
 export const resolveRequestSchema = z.object({
   url: z.string().trim().min(1, 'Enter a link.').max(MAX_URL_LENGTH, 'That link is too long.'),
@@ -120,12 +142,15 @@ export const resolveRequestSchema = z.object({
 
 function stripNulls(value: unknown, depth: number): unknown {
   if (value === null) return undefined;
-  if (depth > 8) return value;
+  if (depth > 8) return undefined;
   if (Array.isArray(value)) return value.map((item) => stripNulls(item, depth + 1));
   if (typeof value === 'object') {
     return Object.fromEntries(
       Object.entries(value as Record<string, unknown>)
-        .filter(([key, entry]) => key !== '__proto__' && entry !== null)
+        .filter(
+          ([key, entry]) =>
+            key !== '__proto__' && key !== 'constructor' && key !== 'prototype' && entry !== null,
+        )
         .map(([key, entry]) => [key, stripNulls(entry, depth + 1)]),
     );
   }
@@ -172,6 +197,7 @@ export const importRequestSchema = z.object({
 
 const timecode = z
   .string()
+  .trim()
   .max(9)
   .regex(TIMECODE_PATTERN, 'Use m:ss or h:mm:ss for the trim times.');
 
@@ -215,7 +241,12 @@ export const legalReportCategorySchema = z.enum([
 ]);
 
 export const legalReportRequestSchema = z.object({
-  targetUrl: z.string().url().max(2048),
+  targetUrl: z
+    .string()
+    .trim()
+    .url()
+    .max(2048)
+    .refine((value) => /^https?:\/\//i.test(value), 'Enter an http:// or https:// URL.'),
   category: legalReportCategorySchema,
   explanation: z.string().min(10).max(10000),
   notifierName: z.string().min(2).max(256),
@@ -229,6 +260,271 @@ export const legalReportResponseSchema = z.object({
   receivedAt: z.string(),
   status: z.enum(['received', 'action_taken']),
   mitigated: z.boolean().optional(),
+});
+
+const httpUrlSchema = z
+  .string()
+  .url()
+  .max(MAX_URL_LENGTH)
+  .refine((u) => /^https?:\/\//i.test(u), 'URL must use http or https.');
+
+export const nodeNetworkClassSchema = z.enum(['datacenter', 'residential', 'unknown']);
+
+export const nodeTransportSchema = z.enum(['wifi', 'cellular', 'other']);
+
+export const nodeFeatureSchema = z.enum(['trim', 'subtitles', 'items', 'instagram-session']);
+
+export const remoteTaskKindSchema = z.enum(['resolve', 'job']);
+
+export const remoteTaskItemSchema = z.object({
+  index: z.number().int().min(0).max(1000),
+  sourceId: z.string().min(1).max(200).optional(),
+});
+
+export const remoteTaskSubtitlesSchema = z.object({
+  lang: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/),
+  auto: z.boolean(),
+  format: z.enum(['srt', 'vtt', 'embed']),
+  only: z.boolean(),
+});
+
+export const remoteTrimRangeSchema = z.object({
+  start: z.number().min(0),
+  end: z.number().positive().optional(),
+});
+
+export const remoteTaskSchema = z.object({
+  id: z.string().min(1).max(64),
+  kind: remoteTaskKindSchema,
+  url: httpUrlSchema,
+  providerId: z.string().min(1).max(32),
+  networkClass: nodeNetworkClassSchema.optional(),
+  planKeys: z.array(z.string().min(1).max(200)).max(100).optional(),
+  items: z.array(remoteTaskItemSchema).max(100).optional(),
+  filename: z.string().max(200).optional(),
+  trim: remoteTrimRangeSchema.optional(),
+  requires: z.array(nodeFeatureSchema).max(5).optional(),
+  avoid: z.array(z.string().min(1).max(64)).max(20).optional(),
+  subtitles: remoteTaskSubtitlesSchema.optional(),
+  createdAt: z.number().nonnegative(),
+});
+
+export const claimSchema = z.object({
+  nodeId: z.string().min(1).max(64),
+  providers: z.array(z.string().min(1).max(32)).max(50),
+  capacity: z.coerce.number().int().min(1).max(8).default(1),
+  networkClass: nodeNetworkClassSchema.default('residential'),
+  features: z.array(z.string().min(1).max(32)).max(20).default([]),
+  transport: nodeTransportSchema.optional(),
+  appVersion: z.string().min(1).max(64).optional(),
+  ytdlpVersion: z.string().min(1).max(64).optional(),
+  ffmpegVersion: z.string().min(1).max(64).optional(),
+});
+
+export const dispatchSchema = z.object({
+  kind: remoteTaskKindSchema,
+  url: httpUrlSchema,
+  providerId: z.string().min(1).max(32),
+  planKeys: z.array(z.string().min(1).max(200)).max(100).optional(),
+  items: z.array(remoteTaskItemSchema).max(100).optional(),
+  filename: z.string().max(200).optional(),
+  networkClass: nodeNetworkClassSchema.optional(),
+  trim: remoteTrimRangeSchema.optional(),
+  requires: z.array(nodeFeatureSchema).max(5).optional(),
+  avoid: z.array(z.string().min(1).max(64)).max(20).optional(),
+  subtitles: remoteTaskSubtitlesSchema.optional(),
+});
+
+export const progressSchema = z.object({
+  percent: z.coerce.number().min(0).max(100),
+  step: z.string().min(1).max(120),
+  bytesDownloaded: z.coerce.number().int().min(0).optional(),
+  bytesTotal: z.coerce.number().int().min(0).optional(),
+});
+
+export const failedSchema = z.object({
+  code: z.string().min(1).max(64),
+  message: z.string().max(500).optional(),
+  detail: z.string().max(2000).optional(),
+});
+
+export const nodeStatusSchema = z.object({
+  id: z.string().min(1).max(64),
+  providers: z.array(z.string().min(1).max(32)).max(50),
+  networkClass: nodeNetworkClassSchema,
+  capacity: z.number().int().min(1).max(8),
+  features: z.array(z.string().min(1).max(32)).max(20).optional(),
+  transport: nodeTransportSchema.optional(),
+  appVersion: z.string().min(1).max(64).optional(),
+  ytdlpVersion: z.string().min(1).max(64).optional(),
+  ffmpegVersion: z.string().min(1).max(64).optional(),
+  inFlight: z.number().int().nonnegative(),
+  lastSeenMs: z.number().nonnegative(),
+  healthy: z.boolean(),
+});
+
+export const resolvedPlanSchema = z.object({
+  kind: z.enum(['video', 'audio', 'image', 'gif']),
+  container: z.string().min(1).max(16),
+  label: z.string().min(1).max(64),
+  detail: z.string().max(500).optional(),
+  width: z.number().int().positive().optional(),
+  height: z.number().int().positive().optional(),
+  fps: z.number().positive().optional(),
+  audioBitrateKbps: z.number().positive().optional(),
+  videoCodec: z.string().max(32).optional(),
+  audioCodec: z.string().max(32).optional(),
+  filesizeBytes: z.number().int().nonnegative().optional(),
+  filesizeIsApproximate: z.boolean().optional(),
+  requiresConversion: z.boolean(),
+  recommended: z.boolean(),
+  fetch: z.discriminatedUnion('via', [
+    z.object({
+      via: z.literal('ytdlp'),
+      selector: z.string().min(1).max(500),
+      merge: z.string().max(16).optional(),
+      audio: z
+        .object({
+          format: z.string().min(1).max(16),
+          quality: z.string().max(16).optional(),
+        })
+        .optional(),
+      remux: z.string().max(16).optional(),
+      extractorArgs: z.array(z.string().max(200)).max(20).optional(),
+      target: httpUrlSchema.optional(),
+      useExtractors: z.string().max(100).optional(),
+    }),
+    z.object({
+      via: z.literal('direct'),
+      url: httpUrlSchema,
+    }),
+  ]),
+  convert: z
+    .discriminatedUnion('kind', [
+      z.object({
+        kind: z.literal('remux'),
+        container: z.enum(['mp4', 'webm', 'mov', 'mkv']),
+      }),
+      z.object({
+        kind: z.literal('video'),
+        container: z.enum(['mp4', 'webm']),
+      }),
+      z.object({
+        kind: z.literal('audio'),
+        container: z.enum(['mp3', 'm4a', 'opus', 'wav', 'flac']),
+        bitrateKbps: z.number().int().min(32).max(512).optional(),
+      }),
+      z.object({
+        kind: z.literal('gif'),
+        maxWidth: z.number().int().min(32).max(2048).optional(),
+        fps: z.number().int().min(1).max(60).optional(),
+      }),
+    ])
+    .optional(),
+});
+
+export const resolvedItemSchema = z.object({
+  sourceId: z.string().max(200).optional(),
+  index: z.number().int().nonnegative(),
+  kind: mediaKindSchema,
+  title: z.string().max(500).optional(),
+  thumbnailUrl: httpUrlSchema.optional(),
+  thumbnailFallbackUrl: httpUrlSchema.optional(),
+  subtitles: z
+    .array(
+      z.object({
+        lang: z.string().max(40),
+        label: z.string().max(100),
+        auto: z.boolean().optional(),
+      }),
+    )
+    .max(100)
+    .optional(),
+  tags: z
+    .object({
+      artist: z.string().max(200).optional(),
+      album: z.string().max(200).optional(),
+      track: z.string().max(200).optional(),
+    })
+    .optional(),
+  width: z.number().int().positive().optional(),
+  height: z.number().int().positive().optional(),
+  duration: z.number().nonnegative().optional(),
+  container: z.string().max(16).optional(),
+  filesizeBytes: z.number().nonnegative().optional(),
+  isLive: z.boolean().optional(),
+  plans: z.array(resolvedPlanSchema).min(1).max(64),
+});
+
+export const resolvedMediaSchema = z.object({
+  provider: z.string().min(1).max(32),
+  providerLabel: z.string().min(1).max(64),
+  url: httpUrlSchema,
+  type: mediaInfoTypeSchema,
+  title: z.string().max(500),
+  description: z.string().max(5000).optional(),
+  author: z.string().max(200).optional(),
+  authorUrl: httpUrlSchema.optional(),
+  thumbnailUrl: httpUrlSchema.optional(),
+  duration: z.number().nonnegative().optional(),
+  createdAt: z.string().max(64).optional(),
+  remoteBackend: z.string().max(64).optional(),
+  items: z.array(resolvedItemSchema).min(1).max(200),
+  metadata: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
+});
+
+export const resolvedBodySchema = z.object({
+  media: resolvedMediaSchema,
+});
+
+const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/i);
+
+export const ytdlpUpdateInfoSchema = z.object({
+  version: z.string().min(1).max(64),
+  assetName: z.string().min(1).max(128),
+  sha256: sha256Schema.optional(),
+  url: httpUrlSchema,
+  proxyPath: z.string().min(1).max(256),
+});
+
+export const androidNodeAppUpdateInfoSchema = z.object({
+  versionCode: z.number().int().positive(),
+  versionName: z.string().min(1).max(64),
+  sha256: sha256Schema,
+  apkUrl: httpUrlSchema,
+  proxyPath: z.string().min(1).max(256),
+  releaseNotes: z.string().max(8000).optional(),
+  minVersionCode: z.number().int().positive().optional(),
+});
+
+export const youtubeHotConfigSchema = z.object({
+  playerClients: z.array(z.string().min(1).max(64)).max(20),
+  extraArgs: z.array(z.string().min(1).max(500)).max(50),
+  remoteComponents: z.array(z.string().min(1).max(128)).max(20),
+  potProviderUrl: httpUrlSchema.optional(),
+});
+
+export const instagramHotConfigSchema = z.object({
+  webApiAppId: z.string().min(1).max(64),
+  userAgent: z.string().min(1).max(512),
+  cdnHosts: z.array(z.string().min(1).max(256)).min(1).max(50),
+  strategyOrder: z
+    .array(z.enum(['ytdlp', 'web-api', 'oembed']))
+    .min(1)
+    .max(10),
+});
+
+export const providerHotConfigSchema = z.object({
+  youtube: youtubeHotConfigSchema,
+  instagram: instagramHotConfigSchema,
+});
+
+export const nodeUpdateManifestSchema = z.object({
+  manifestHash: z.string().min(1).max(128),
+  generatedAt: z.string().min(1).max(64),
+  ytdlp: ytdlpUpdateInfoSchema,
+  androidNodeApp: androidNodeAppUpdateInfoSchema.optional(),
+  providerConfig: providerHotConfigSchema,
 });
 
 type Exact<A, B> =
@@ -278,3 +574,70 @@ type _CreateJobMatches = Assert<
 type _ImportFits = Assert<z.infer<typeof importRequestSchema> extends ImportRequest ? true : false>;
 
 type Writable<T> = { -readonly [K in keyof T]: T[K] };
+
+type DeepMutable<T> = T extends readonly (infer U)[]
+  ? DeepMutable<U>[]
+  : T extends object
+    ? { -readonly [K in keyof T]: DeepMutable<T[K]> }
+    : T;
+
+type _NodeNetworkClassMatches = Assert<
+  Exact<z.infer<typeof nodeNetworkClassSchema>, NodeNetworkClass>
+>;
+type _NodeTransportMatches = Assert<Exact<z.infer<typeof nodeTransportSchema>, NodeTransport>>;
+type _NodeFeatureMatches = Assert<Exact<z.infer<typeof nodeFeatureSchema>, NodeFeature>>;
+type _RemoteTaskKindMatches = Assert<Exact<z.infer<typeof remoteTaskKindSchema>, RemoteTaskKind>>;
+type _RemoteTaskItemMatches = Assert<
+  SameShape<z.infer<typeof remoteTaskItemSchema>, DeepMutable<RemoteTaskItem>>
+>;
+type _RemoteTaskSubtitlesMatches = Assert<
+  SameShape<z.infer<typeof remoteTaskSubtitlesSchema>, DeepMutable<RemoteTaskSubtitles>>
+>;
+type _RemoteTaskMatches = Assert<
+  SameShape<z.infer<typeof remoteTaskSchema>, DeepMutable<RemoteTask>>
+>;
+type _ClaimMatches = Assert<
+  SameShape<z.infer<typeof claimSchema>, DeepMutable<ExtractionNodeClaim>>
+>;
+type _DispatchMatches = Assert<
+  SameShape<z.infer<typeof dispatchSchema>, DeepMutable<ExtractionNodeDispatch>>
+>;
+type _ProgressMatches = Assert<
+  SameShape<z.infer<typeof progressSchema>, DeepMutable<RemoteProgress>>
+>;
+type _FailedMatches = Assert<
+  SameShape<z.infer<typeof failedSchema>, DeepMutable<ExtractionNodeFailed>>
+>;
+type _NodeStatusMatches = Assert<
+  SameShape<z.infer<typeof nodeStatusSchema>, DeepMutable<NodeStatus>>
+>;
+type _ResolvedPlanMatches = Assert<
+  SameShape<z.infer<typeof resolvedPlanSchema>, DeepMutable<RemoteResolvedPlan>>
+>;
+type _ResolvedItemMatches = Assert<
+  SameShape<z.infer<typeof resolvedItemSchema>, DeepMutable<RemoteResolvedItem>>
+>;
+type _ResolvedMediaMatches = Assert<
+  SameShape<z.infer<typeof resolvedMediaSchema>, DeepMutable<RemoteResolvedMedia>>
+>;
+type _ResolvedBodyMatches = Assert<
+  SameShape<z.infer<typeof resolvedBodySchema>, DeepMutable<RemoteResolvedBody>>
+>;
+type _YtdlpUpdateInfoMatches = Assert<
+  SameShape<z.infer<typeof ytdlpUpdateInfoSchema>, DeepMutable<YtdlpUpdateInfo>>
+>;
+type _AndroidNodeAppUpdateInfoMatches = Assert<
+  SameShape<z.infer<typeof androidNodeAppUpdateInfoSchema>, DeepMutable<AndroidNodeAppUpdateInfo>>
+>;
+type _YoutubeHotConfigMatches = Assert<
+  SameShape<z.infer<typeof youtubeHotConfigSchema>, DeepMutable<YoutubeHotConfig>>
+>;
+type _InstagramHotConfigMatches = Assert<
+  SameShape<z.infer<typeof instagramHotConfigSchema>, DeepMutable<InstagramHotConfig>>
+>;
+type _ProviderHotConfigMatches = Assert<
+  SameShape<z.infer<typeof providerHotConfigSchema>, DeepMutable<ProviderHotConfig>>
+>;
+type _NodeUpdateManifestMatches = Assert<
+  SameShape<z.infer<typeof nodeUpdateManifestSchema>, DeepMutable<NodeUpdateManifest>>
+>;

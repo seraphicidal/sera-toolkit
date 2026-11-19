@@ -1,4 +1,5 @@
 import { basename, extname } from 'node:path';
+import { sliceUtf16Safe } from './format.js';
 
 const ILLEGAL = /[\u0000-\u001f\u007f<>:"/\\|?*]/g;
 const RESERVED_WINDOWS =
@@ -16,10 +17,9 @@ export function sanitizeStem(input: string, fallback = 'media'): string {
 
   if (out.length > MAX_STEM_LENGTH) {
     out =
-      out
-        .slice(0, MAX_STEM_LENGTH)
+      sliceUtf16Safe(out, MAX_STEM_LENGTH)
         .replace(/\s+\S*$/, '')
-        .trim() || out.slice(0, MAX_STEM_LENGTH);
+        .trim() || sliceUtf16Safe(out, MAX_STEM_LENGTH);
   }
   out = out.replace(/[.\-\s]+$/, '').trim();
 
@@ -93,8 +93,19 @@ export function assertSafeFilename(name: string): string {
   return name;
 }
 
+function toWellFormedString(value: string): string {
+  return value.replace(
+    /(?<![\ud800-\udbff])[\udc00-\udfff]|[\ud800-\udbff](?![\udc00-\udfff])/g,
+    '\ufffd',
+  );
+}
+
 export function contentDispositionValue(filename: string): string {
-  const ascii = filename.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
-  const encoded = encodeURIComponent(filename);
+  const safe = toWellFormedString(filename);
+  const ascii = safe.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
+  const encoded = encodeURIComponent(safe).replace(
+    /[!'()*]/g,
+    (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
   return `attachment; filename="${ascii}"; filename*=UTF-8''${encoded}`;
 }

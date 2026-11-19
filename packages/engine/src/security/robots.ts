@@ -22,7 +22,7 @@ export function parseRobots(text: string, userAgent: string): RobotsRules {
         current = { agents: [], allow: [], disallow: [] };
         groups.push(current);
       }
-      current.agents.push(value.toLowerCase());
+      if (value) current.agents.push(value.toLowerCase());
       lastLineWasAgent = true;
       continue;
     }

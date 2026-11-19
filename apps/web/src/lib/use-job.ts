@@ -6,7 +6,8 @@ import { ApiError, getJob } from './api';
 import { isRunning } from './format';
 
 const STREAM_GRACE_MS = 6_000;
-const POLL_INTERVAL_MS = 700;
+const POLL_INTERVAL_MS = 1_500;
+const MAX_POLL_INTERVAL_MS = 4_000;
 
 export interface UseJobResult {
   readonly job: Job | undefined;
@@ -55,17 +56,50 @@ export function useJob(jobId: string | undefined, initial?: Job): UseJobResult {
     let sawStreamEvent = false;
     const controller = new AbortController();
 
+    let pollDelayMs = POLL_INTERVAL_MS;
+    let waitingVisibility = false;
+
     const finish = (): void => {
       stopped = true;
       setFollowing(false);
       source?.close();
       if (pollTimer) clearTimeout(pollTimer);
       if (graceTimer) clearTimeout(graceTimer);
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisibilityChange);
+      }
       controller.abort();
     };
 
+    const schedulePoll = (delayMs: number): void => {
+      if (stopped || jobId !== activeId.current) return;
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+        waitingVisibility = true;
+        return;
+      }
+      const jitter = 0.85 + Math.random() * 0.3;
+      pollTimer = setTimeout(poll, Math.round(delayMs * jitter));
+    };
+
+    const onVisibilityChange = (): void => {
+      if (stopped || !polling) return;
+      if (document.visibilityState !== 'hidden' && waitingVisibility) {
+        waitingVisibility = false;
+        pollDelayMs = POLL_INTERVAL_MS;
+        poll();
+      }
+    };
+
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisibilityChange);
+    }
+
     const poll = (): void => {
       if (stopped || jobId !== activeId.current) return;
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+        waitingVisibility = true;
+        return;
+      }
       void getJob(jobId, controller.signal)
         .then((next) => {
           if (stopped || jobId !== activeId.current) return;
@@ -74,7 +108,8 @@ export function useJob(jobId: string | undefined, initial?: Job): UseJobResult {
             finish();
             return;
           }
-          pollTimer = setTimeout(poll, POLL_INTERVAL_MS);
+          pollDelayMs = Math.min(Math.round(pollDelayMs * 1.25), MAX_POLL_INTERVAL_MS);
+          schedulePoll(pollDelayMs);
         })
         .catch((caught: unknown) => {
           if (stopped || jobId !== activeId.current) return;
@@ -97,7 +132,8 @@ export function useJob(jobId: string | undefined, initial?: Job): UseJobResult {
             finish();
             return;
           }
-          pollTimer = setTimeout(poll, POLL_INTERVAL_MS * 2);
+          pollDelayMs = Math.min(pollDelayMs * 2, MAX_POLL_INTERVAL_MS);
+          schedulePoll(pollDelayMs);
         });
     };
 
@@ -153,6 +189,9 @@ export function useJob(jobId: string | undefined, initial?: Job): UseJobResult {
       source?.close();
       if (pollTimer) clearTimeout(pollTimer);
       if (graceTimer) clearTimeout(graceTimer);
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisibilityChange);
+      }
       controller.abort();
     };
   }, [jobId, apply]);

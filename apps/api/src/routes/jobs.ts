@@ -53,8 +53,7 @@ export function registerJobRoutes(app: FastifyInstance, engine: SeraEngine): voi
     '/api/jobs/:id',
     jobStatusRateLimit,
     async (request, reply) => {
-      const clientKey = request.canary ? undefined : request.clientKey;
-      const job = await engine.jobs.get(assertJobId(request.params.id), clientKey);
+      const job = await engine.jobs.get(assertJobId(request.params.id), request.clientKeys);
       if (!job) throw seraError('NOT_FOUND', { message: 'That download has expired.' });
       return reply.header('cache-control', 'no-store').send(job);
     },
@@ -65,8 +64,7 @@ export function registerJobRoutes(app: FastifyInstance, engine: SeraEngine): voi
     jobStatusRateLimit,
     async (request, reply) => {
       const id = assertJobId(request.params.id);
-      const clientKey = request.canary ? undefined : request.clientKey;
-      const deleted = await engine.jobs.delete(id, clientKey);
+      const deleted = await engine.jobs.delete(id, request.clientKeys);
       if (!deleted) throw seraError('NOT_FOUND', { message: 'That download has expired.' });
       return reply
         .header('cache-control', 'no-store')
@@ -80,8 +78,7 @@ export function registerJobRoutes(app: FastifyInstance, engine: SeraEngine): voi
     jobStatusRateLimit,
     async (request, reply) => {
       const id = assertJobId(request.params.id);
-      const clientKey = request.canary ? undefined : request.clientKey;
-      const existingJob = await engine.jobs.get(id, clientKey);
+      const existingJob = await engine.jobs.get(id, request.clientKeys);
       if (!existingJob) throw seraError('NOT_FOUND', { message: 'That download has expired.' });
 
       const signal = clientAbortSignal(request, reply);
@@ -90,6 +87,10 @@ export function registerJobRoutes(app: FastifyInstance, engine: SeraEngine): voi
       for (const [key, value] of Object.entries(reply.getHeaders())) {
         if (value !== undefined) existingHeaders[key] = value;
       }
+      reply.hijack();
+      reply.raw.on('error', () => {
+        if (!reply.raw.destroyed) reply.raw.destroy();
+      });
       reply.raw.writeHead(200, {
         ...existingHeaders,
         'content-type': 'text/event-stream; charset=utf-8',
@@ -111,19 +112,28 @@ export function registerJobRoutes(app: FastifyInstance, engine: SeraEngine): voi
       writeSse('retry: 3000\n\n');
 
       try {
-        for await (const event of engine.jobs.events(id, signal, clientKey)) {
+        for await (const event of engine.jobs.events(id, signal, request.clientKeys)) {
           if (signal.aborted) break;
-          writeSse(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+          if (event.type === 'ping') {
+            writeSse(': ping\n\n');
+          } else {
+            writeSse(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+          }
         }
       } catch (error) {
-        const message =
-          error instanceof SeraError ? error.message : 'Something went wrong on our side.';
-        writeSse(`event: error\ndata: ${JSON.stringify({ type: 'error', message })}\n\n`);
+        if (!signal.aborted) {
+          const message =
+            error instanceof SeraError ? error.message : 'Something went wrong on our side.';
+          writeSse(`event: error\ndata: ${JSON.stringify({ type: 'error', message })}\n\n`);
+        }
       } finally {
-        if (!reply.raw.writableEnded) reply.raw.end();
-        if (!reply.raw.destroyed) reply.raw.destroy();
+        if (signal.aborted && !reply.raw.destroyed) {
+          reply.raw.destroy();
+        } else if (!reply.raw.writableEnded && !reply.raw.destroyed) {
+          reply.raw.end();
+        }
       }
-      return reply;
+      return;
     },
   );
 
@@ -133,8 +143,7 @@ export function registerJobRoutes(app: FastifyInstance, engine: SeraEngine): voi
     ...jobStatusRateLimit,
     handler: async (request, reply) => {
       const id = assertJobId(request.params.id);
-      const clientKey = request.canary ? undefined : request.clientKey;
-      const job = await engine.jobs.get(id, clientKey);
+      const job = await engine.jobs.get(id, request.clientKeys);
       if (!job) throw seraError('NOT_FOUND', { message: 'That download has expired.' });
       const manifest = await engine.workspaces.readManifest(id);
       if (!manifest) {
@@ -151,8 +160,7 @@ export function registerJobRoutes(app: FastifyInstance, engine: SeraEngine): voi
     ...jobStatusRateLimit,
     handler: async (request, reply) => {
       const id = assertJobId(request.params.id);
-      const clientKey = request.canary ? undefined : request.clientKey;
-      const job = await engine.jobs.get(id, clientKey);
+      const job = await engine.jobs.get(id, request.clientKeys);
       if (!job) throw seraError('NOT_FOUND', { message: 'That download has expired.' });
       const manifest = await engine.workspaces.readManifest(id);
       if (!manifest) {
@@ -238,6 +246,32 @@ async function sendFile(
   const ifRange = Array.isArray(rawIfRange) ? rawIfRange[0] : rawIfRange;
   const hasRange = typeof rangeHeader === 'string' && matchesIfRange(ifRange, etag, lastModified);
 
+  const wireDownloadStream = (
+    stream: ReturnType<typeof createReadStream>,
+    expectedBytes: number,
+  ) => {
+    const release = engine.workspaces.acquireDownload(jobId);
+    let recorded = false;
+    const finalize = () => {
+      release();
+      if (!counted || recorded) return;
+      recorded = true;
+      const bytes = Math.min(expectedBytes, stream.bytesRead);
+      if (bytes <= 0) return;
+      void engine.usage
+        .record({
+          source: provider || 'other',
+          kind: 'bytes',
+          bytes,
+        })
+        .catch(() => undefined);
+    };
+    stream.once('close', finalize);
+    stream.once('error', release);
+    reply.raw.once('close', finalize);
+    return stream;
+  };
+
   if (hasRange) {
     const range = parseRange(rangeHeader, info.size);
     if (range === 'unsatisfiable') {
@@ -246,36 +280,16 @@ async function sendFile(
     if (range) {
       const { start, end } = range;
       const chunkSize = end - start + 1;
-      if (counted) {
-        reply.raw.once('finish', () => {
-          void engine.usage
-            .record({
-              source: provider || 'other',
-              kind: 'bytes',
-              bytes: chunkSize,
-            })
-            .catch(() => undefined);
-        });
-      }
       return reply
         .status(206)
         .header('content-range', `bytes ${start}-${end}/${info.size}`)
         .header('content-length', chunkSize)
-        .send(createReadStream(path, { start, end }));
+        .send(wireDownloadStream(createReadStream(path, { start, end }), chunkSize));
     }
   }
 
-  if (counted) {
-    reply.raw.once('finish', () => {
-      void engine.usage
-        .record({
-          source: provider || 'other',
-          kind: 'bytes',
-          bytes: info.size,
-        })
-        .catch(() => undefined);
-    });
-  }
-
-  return reply.status(200).header('content-length', info.size).send(createReadStream(path));
+  return reply
+    .status(200)
+    .header('content-length', info.size)
+    .send(wireDownloadStream(createReadStream(path), info.size));
 }

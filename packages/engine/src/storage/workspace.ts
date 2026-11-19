@@ -1,4 +1,4 @@
-import { lstat, mkdir, readdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readdir, readFile, rm, stat, unlink, utimes, writeFile } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 import type { Logger } from '../logging.js';
 import { seraError } from '../errors.js';
@@ -18,11 +18,14 @@ export interface JobManifest {
 }
 
 const MANIFEST_NAME = 'manifest.json';
+const ACTIVE_LEASE_NAME = '.active';
+const MAX_ACTIVE_LEASE_SECONDS = 3600;
 const OUTPUT_DIR = 'out';
 const SCRATCH_DIR = 'work';
 
 export class WorkspaceManager {
   private readonly activeJobs = new Set<string>();
+  private readonly activeDownloads = new Map<string, number>();
 
   constructor(
     private readonly rootDir: string,
@@ -32,10 +35,26 @@ export class WorkspaceManager {
 
   markActive(jobId: string): void {
     this.activeJobs.add(jobId);
+    void writeFile(join(this.jobDir(jobId), ACTIVE_LEASE_NAME), String(process.pid)).catch(
+      () => undefined,
+    );
   }
 
   markInactive(jobId: string): void {
     this.activeJobs.delete(jobId);
+    void unlink(join(this.jobDir(jobId), ACTIVE_LEASE_NAME)).catch(() => undefined);
+  }
+
+  acquireDownload(jobId: string): () => void {
+    this.activeDownloads.set(jobId, (this.activeDownloads.get(jobId) ?? 0) + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const next = (this.activeDownloads.get(jobId) ?? 1) - 1;
+      if (next <= 0) this.activeDownloads.delete(jobId);
+      else this.activeDownloads.set(jobId, next);
+    };
   }
 
   async touch(jobId: string): Promise<void> {
@@ -57,6 +76,9 @@ export class WorkspaceManager {
     const output = join(base, OUTPUT_DIR);
     await mkdir(scratch, { recursive: true });
     await mkdir(output, { recursive: true });
+    if (this.activeJobs.has(jobId)) {
+      await writeFile(join(base, ACTIVE_LEASE_NAME), String(process.pid)).catch(() => undefined);
+    }
     return new Workspace(jobId, base, scratch, output);
   }
 
@@ -105,12 +127,23 @@ export class WorkspaceManager {
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
       if (!/^(?:remote-)?[a-f0-9]{16,64}$/i.test(entry.name)) continue;
-      if (this.activeJobs.has(entry.name)) continue;
+      if (this.activeJobs.has(entry.name) || this.activeDownloads.has(entry.name)) continue;
 
       const path = join(this.rootDir, entry.name);
       try {
+        const lease = await stat(join(path, ACTIVE_LEASE_NAME)).catch(() => undefined);
+        if (
+          lease &&
+          (now - lease.mtimeMs) / 1000 < Math.max(this.retentionSeconds, MAX_ACTIVE_LEASE_SECONDS)
+        ) {
+          continue;
+        }
         const info = await stat(path);
-        const ageSeconds = (now - info.mtimeMs) / 1000;
+        let newestMs = info.mtimeMs;
+        if (entry.name.startsWith('remote-')) {
+          newestMs = Math.max(newestMs, await latestEntryMtime(path));
+        }
+        const ageSeconds = (now - newestMs) / 1000;
         if (ageSeconds < this.retentionSeconds) continue;
         await rm(path, { recursive: true, force: true });
         removed += 1;
@@ -156,30 +189,47 @@ export class WorkspaceManager {
   }
 
   private async computeUsage(): Promise<{ workspaces: number; bytes: number }> {
-    let workspaces = 0;
-    let bytes = 0;
     const entries = await readdir(this.rootDir, { withFileTypes: true }).catch(() => []);
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      workspaces += 1;
-      bytes += await directorySize(join(this.rootDir, entry.name));
-    }
-    return { workspaces, bytes };
+    const dirs = entries.filter((entry) => entry.isDirectory());
+    const sizes = await Promise.all(dirs.map((entry) => directorySize(join(this.rootDir, entry.name))));
+    return {
+      workspaces: dirs.length,
+      bytes: sizes.reduce((sum, size) => sum + size, 0),
+    };
   }
 }
 
-async function directorySize(dir: string): Promise<number> {
-  let total = 0;
+async function latestEntryMtime(dir: string): Promise<number> {
+  let newest = 0;
   const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
-  for (const entry of entries) {
-    const path = join(dir, entry.name);
-    if (entry.isDirectory()) total += await directorySize(path);
-    else if (entry.isFile())
-      total += await lstat(path)
-        .then((s) => (s.isFile() ? s.size : 0))
-        .catch(() => 0);
+  const mtimes = await Promise.all(
+    entries.map((entry) =>
+      stat(join(dir, entry.name))
+        .then((s) => s.mtimeMs)
+        .catch(() => 0),
+    ),
+  );
+  for (const ms of mtimes) {
+    if (ms > newest) newest = ms;
   }
-  return total;
+  return newest;
+}
+
+async function directorySize(dir: string): Promise<number> {
+  const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+  const sizes = await Promise.all(
+    entries.map((entry) => {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) return directorySize(path);
+      if (entry.isFile()) {
+        return lstat(path)
+          .then((s) => (s.isFile() ? s.size : 0))
+          .catch(() => 0);
+      }
+      return Promise.resolve(0);
+    }),
+  );
+  return sizes.reduce((sum, size) => sum + size, 0);
 }
 
 export class Workspace {

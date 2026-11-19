@@ -20,6 +20,18 @@ export const errorHandlerPlugin = fp(function errorHandlerPlugin(
       return;
     }
 
+    if (error instanceof Error && error.name === 'AbortError') {
+      const body: ApiErrorBody = {
+        error: {
+          code: 'CANCELLED',
+          message: 'That request was cancelled.',
+          retryable: false,
+        },
+      };
+      void reply.status(499).send(body);
+      return;
+    }
+
     if (error instanceof ZodError) {
       const first = error.issues[0];
       const body: ApiErrorBody = {

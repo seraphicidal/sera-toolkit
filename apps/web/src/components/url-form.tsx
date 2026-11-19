@@ -68,11 +68,13 @@ export function UrlForm({
     if (event.key !== 'Enter') return;
     if (event.metaKey || event.ctrlKey) {
       event.preventDefault();
+      event.stopPropagation();
       submitValue(value);
       return;
     }
     if (!event.shiftKey && !isMultiLine) {
       event.preventDefault();
+      event.stopPropagation();
       submitValue(value);
     }
   };

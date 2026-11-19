@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import type { MediaInfo } from '@sera/contracts/types';
 import { AudioIcon, GifIcon, ImageIcon, VideoIcon } from './icons';
-import { cx, formatDuration, pluralize } from '@/lib/format';
+import { cx, formatDuration, isSafeDownloadPath, pluralize } from '@/lib/format';
 
 const KIND_ICON = {
   video: VideoIcon,
@@ -17,7 +17,9 @@ export function MediaPreview({ info }: { readonly info: MediaInfo }) {
   const [failedThumbnail, setFailedThumbnail] = useState<string>();
   const primary = info.items[0];
   const Icon = KIND_ICON[primary?.kind ?? 'unknown'];
-  const showThumbnail = Boolean(info.thumbnail) && failedThumbnail !== info.thumbnail;
+  const safeThumbnail =
+    info.thumbnail && isSafeDownloadPath(info.thumbnail) ? info.thumbnail : undefined;
+  const showThumbnail = Boolean(safeThumbnail) && failedThumbnail !== safeThumbnail;
 
   const subtitle = [
     info.author,
@@ -41,11 +43,11 @@ export function MediaPreview({ info }: { readonly info: MediaInfo }) {
         >
           {showThumbnail ? (
             <img
-              src={info.thumbnail}
+              src={safeThumbnail}
               alt=""
               loading="lazy"
               decoding="async"
-              onError={() => setFailedThumbnail(info.thumbnail)}
+              onError={() => setFailedThumbnail(safeThumbnail)}
               className="size-full object-cover"
             />
           ) : (

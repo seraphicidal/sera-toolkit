@@ -6,8 +6,6 @@ services:
     build:
       context: .
       dockerfile: docker/web.Dockerfile
-      args:
-        SERA_API_URL: http://api:4000
     environment:
       SERA_API_URL: http://api:4000
       OPERATOR_NAME: ${OPERATOR_NAME:-${NEXT_PUBLIC_OPERATOR_NAME:-}}
@@ -88,10 +86,13 @@ services:
       SERA_ENABLED_PROVIDERS: ${SERA_ENABLED_PROVIDERS:-}
       SERA_DISABLED_PROVIDERS: ${SERA_DISABLED_PROVIDERS:-}
       SERA_ALLOW_PRIVATE_ADDRESSES: ${SERA_ALLOW_PRIVATE_ADDRESSES:-false}
-      SERA_TRUST_PROXY: 'true'
+      SERA_TRUST_PROXY: ${SERA_TRUST_PROXY:-127.0.0.1/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     volumes:
       - media:/data
+    read_only: true
+    tmpfs:
+      - /tmp
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true

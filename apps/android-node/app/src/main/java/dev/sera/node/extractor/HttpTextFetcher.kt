@@ -1,0 +1,332 @@
+package dev.sera.node.extractor
+
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
+import java.io.ByteArrayOutputStream
+import java.io.File
+import java.io.FileOutputStream
+import java.io.IOException
+import java.io.InterruptedIOException
+import java.net.UnknownHostException
+import java.util.concurrent.TimeUnit
+import kotlin.math.max
+
+private const val DEFAULT_MAX_REDIRECTS = 5
+private val ALLOWED_PORTS = setOf(80, 443)
+
+class OkHttpFetcher(
+    private val baseClient: OkHttpClient,
+) : HttpFetcher {
+
+    override suspend fun fetchText(
+        url: HttpUrl,
+        maxBytes: Long,
+        headers: Map<String, String>,
+        keepCookies: Boolean,
+        allowPrivateAddresses: Boolean,
+        timeoutMs: Long,
+        userAgent: String,
+        isCancelled: () -> Boolean,
+    ): HttpTextResponse = withContext(Dispatchers.IO) {
+        val opened = openWithRedirects(
+            initialUrl = url,
+            headers = headers,
+            keepCookies = keepCookies,
+            allowPrivateAddresses = allowPrivateAddresses,
+            timeoutMs = timeoutMs,
+            userAgent = userAgent,
+            allowUrl = { true },
+            isCancelled = isCancelled,
+        )
+        opened.response.use { response ->
+            if (response.code >= 400) {
+                throw seraError(
+                    if (response.code == 404) SeraErrorCode.MEDIA_UNAVAILABLE else SeraErrorCode.NETWORK_ERROR,
+                    detail = "GET ${response.code}",
+                )
+            }
+            val body = response.body ?: return@use HttpTextResponse("", opened.finalUrl.toString())
+            val declared = body.contentLength()
+            if (declared > maxBytes) {
+                throw seraError(SeraErrorCode.TOO_LARGE, detail = "content-length $declared > $maxBytes")
+            }
+            val out = ByteArrayOutputStream()
+            val buf = ByteArray(16 * 1024)
+            var total = 0L
+            body.byteStream().use { stream ->
+                while (true) {
+                    if (isCancelled()) throw seraError(SeraErrorCode.CANCELLED)
+                    val read = stream.read(buf)
+                    if (read < 0) break
+                    total += read
+                    if (total > maxBytes) {
+                        throw seraError(SeraErrorCode.TOO_LARGE, detail = "body exceeded $maxBytes bytes")
+                    }
+                    out.write(buf, 0, read)
+                }
+            }
+            HttpTextResponse(
+                body = String(out.toByteArray(), Charsets.UTF_8),
+                url = opened.finalUrl.toString(),
+            )
+        }
+    }
+
+    override suspend fun downloadDirect(
+        url: String,
+        destination: File,
+        maxBytes: Long,
+        timeoutMs: Long,
+        allowPrivateAddresses: Boolean,
+        allowUrl: (HttpUrl) -> Boolean,
+        isCancelled: () -> Boolean,
+        onProgress: (DirectDownloadProgress) -> Unit,
+    ): DirectDownloadResult = withContext(Dispatchers.IO) {
+        val parsed = url.toHttpUrlOrNull()
+            ?: throw seraError(SeraErrorCode.INVALID_URL, detail = "invalid url: $url")
+
+        val opened = openWithRedirects(
+            initialUrl = parsed,
+            headers = emptyMap(),
+            keepCookies = false,
+            allowPrivateAddresses = allowPrivateAddresses,
+            timeoutMs = timeoutMs,
+            userAgent = dev.sera.node.model.DEFAULT_INSTAGRAM_USER_AGENT,
+            allowUrl = allowUrl,
+            isCancelled = isCancelled,
+        )
+
+        try {
+            opened.response.use { response ->
+                if (response.code >= 400) {
+                    throw seraError(
+                        if (response.code == 404) SeraErrorCode.MEDIA_UNAVAILABLE else SeraErrorCode.NETWORK_ERROR,
+                        detail = "GET ${response.code}",
+                    )
+                }
+                val body = response.body
+                    ?: throw seraError(SeraErrorCode.MEDIA_UNAVAILABLE, detail = "server returned an empty body")
+                val declared = body.contentLength().takeIf { it > 0L }
+                if (declared != null && declared > maxBytes) {
+                    throw seraError(SeraErrorCode.TOO_LARGE, detail = "content-length $declared > $maxBytes")
+                }
+
+                destination.parentFile?.mkdirs()
+                var received = 0L
+                val startedAt = System.currentTimeMillis()
+                var lastReport = 0L
+                val buffer = ByteArray(64 * 1024)
+
+                body.byteStream().use { input ->
+                    FileOutputStream(destination).use { output ->
+                        while (true) {
+                            if (isCancelled()) throw seraError(SeraErrorCode.CANCELLED)
+                            val read = input.read(buffer)
+                            if (read < 0) break
+                            received += read
+                            if (received > maxBytes) {
+                                throw seraError(SeraErrorCode.TOO_LARGE, detail = "body exceeded $maxBytes bytes")
+                            }
+                            output.write(buffer, 0, read)
+                            val now = System.currentTimeMillis()
+                            if (now - lastReport >= 250L) {
+                                lastReport = now
+                                val elapsed = (now - startedAt) / 1000.0
+                                val speed = if (elapsed > 0.0) received / elapsed else null
+                                val eta = if (speed != null && speed > 0.0 && declared != null) {
+                                    max(0.0, (declared - received) / speed)
+                                } else {
+                                    null
+                                }
+                                onProgress(
+                                    DirectDownloadProgress(
+                                        bytesDownloaded = received,
+                                        bytesTotal = declared,
+                                        speedBytesPerSecond = speed,
+                                        etaSeconds = eta,
+                                    ),
+                                )
+                            }
+                        }
+                        output.flush()
+                    }
+                }
+
+                if (received == 0L) {
+                    destination.delete()
+                    throw seraError(SeraErrorCode.MEDIA_UNAVAILABLE, detail = "server returned an empty file")
+                }
+
+                onProgress(
+                    DirectDownloadProgress(
+                        bytesDownloaded = received,
+                        bytesTotal = declared,
+                    ),
+                )
+
+                DirectDownloadResult(
+                    bytes = received,
+                    contentType = response.header("content-type"),
+                    url = opened.finalUrl.toString(),
+                )
+            }
+        } catch (error: Throwable) {
+            destination.delete()
+            if (error is SeraException) throw error
+            if (isCancelled()) throw seraError(SeraErrorCode.CANCELLED, cause = error)
+            if (error is InterruptedIOException) throw seraError(SeraErrorCode.TIMEOUT, cause = error)
+            throw seraError(SeraErrorCode.NETWORK_ERROR, detail = error.message ?: "stream to disk failed", cause = error)
+        }
+    }
+
+    private data class OpenedHttp(
+        val response: Response,
+        val finalUrl: HttpUrl,
+    )
+
+    private fun openWithRedirects(
+        initialUrl: HttpUrl,
+        headers: Map<String, String>,
+        keepCookies: Boolean,
+        allowPrivateAddresses: Boolean,
+        timeoutMs: Long,
+        userAgent: String,
+        allowUrl: (HttpUrl) -> Boolean,
+        isCancelled: () -> Boolean,
+    ): OpenedHttp {
+        val client = baseClient.newBuilder()
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .callTimeout(timeoutMs.coerceAtLeast(1_000L), TimeUnit.MILLISECONDS)
+            .build()
+
+        val initialOrigin = originOf(initialUrl)
+        val jar = parseCookieJar(headers.entries.firstOrNull { it.key.equals("cookie", ignoreCase = true) }?.value)
+        var current = initialUrl
+
+        for (hop in 0..DEFAULT_MAX_REDIRECTS) {
+            if (isCancelled()) throw seraError(SeraErrorCode.CANCELLED)
+            if (current.scheme != "http" && current.scheme != "https") {
+                throw seraError(SeraErrorCode.BLOCKED_ADDRESS, detail = "redirect to ${current.scheme}:")
+            }
+            if (current.encodedUsername.isNotEmpty() || current.encodedPassword.isNotEmpty()) {
+                throw seraError(SeraErrorCode.BLOCKED_ADDRESS, detail = "credentials in url")
+            }
+            val bareHost = current.host.lowercase().trimEnd('.')
+            if (!allowPrivateAddresses && isIpLiteral(bareHost) && !isPublicAddress(bareHost)) {
+                throw seraError(SeraErrorCode.BLOCKED_ADDRESS, detail = "non-public address $bareHost")
+            }
+            if (!allowPrivateAddresses && current.port !in ALLOWED_PORTS) {
+                throw seraError(SeraErrorCode.BLOCKED_ADDRESS, detail = "port ${current.port}")
+            }
+            if (hop > 0 && current.port !in ALLOWED_PORTS && current.port != initialUrl.port) {
+                throw seraError(SeraErrorCode.BLOCKED_ADDRESS, detail = "redirect to port ${current.port}")
+            }
+            if (!allowUrl(current)) {
+                throw seraError(
+                    SeraErrorCode.BLOCKED_ADDRESS,
+                    detail = if (hop == 0) {
+                        "destination is not on the allowed hosts"
+                    } else {
+                        "redirect $hop left the allowed hosts"
+                    },
+                )
+            }
+
+            val reqBuilder = Request.Builder().url(current).get()
+            reqBuilder.header("User-Agent", userAgent)
+            reqBuilder.header("Accept-Language", "en-US,en;q=0.9")
+            reqBuilder.header("Accept", "*/*")
+
+            val currentOrigin = originOf(current)
+            val crossOrigin = currentOrigin != initialOrigin
+            for ((key, value) in headers) {
+                val lower = key.lowercase()
+                if (lower == "cookie") continue
+                if (crossOrigin && (lower == "authorization" || lower == "proxy-authorization" || lower == "x-api-key")) {
+                    continue
+                }
+                reqBuilder.header(key, value)
+            }
+            if (jar.isNotEmpty() && !crossOrigin) {
+                reqBuilder.header("cookie", jar.entries.joinToString("; ") { "${it.key}=${it.value}" })
+            }
+
+            val call = client.newCall(reqBuilder.build())
+            val response = try {
+                if (isCancelled()) {
+                    call.cancel()
+                    throw seraError(SeraErrorCode.CANCELLED)
+                }
+                call.execute()
+            } catch (error: SeraException) {
+                throw error
+            } catch (error: UnknownHostException) {
+                throw seraError(
+                    SeraErrorCode.INVALID_URL,
+                    message = "We couldn't find that site.",
+                    hint = "Check the address and try again.",
+                    detail = error.message,
+                    cause = error,
+                )
+            } catch (error: InterruptedIOException) {
+                if (isCancelled()) throw seraError(SeraErrorCode.CANCELLED, cause = error)
+                throw seraError(SeraErrorCode.TIMEOUT, cause = error)
+            } catch (error: IOException) {
+                if (isCancelled()) throw seraError(SeraErrorCode.CANCELLED, cause = error)
+                throw seraError(SeraErrorCode.NETWORK_ERROR, detail = error.message, cause = error)
+            }
+
+            if (response.code in 300..399) {
+                val location = response.header("location")
+                val setCookies = response.headers("set-cookie")
+                response.close()
+                if (location.isNullOrBlank()) {
+                    throw seraError(SeraErrorCode.NETWORK_ERROR, detail = "redirect ${response.code} without location")
+                }
+                if (keepCookies && currentOrigin == initialOrigin) {
+                    keepSetCookies(jar, setCookies)
+                }
+                current = current.resolve(location)
+                    ?: throw seraError(SeraErrorCode.NETWORK_ERROR, detail = "invalid redirect location")
+                continue
+            }
+
+            return OpenedHttp(response = response, finalUrl = current)
+        }
+
+        throw seraError(SeraErrorCode.NETWORK_ERROR, detail = "redirect loop")
+    }
+
+    private fun originOf(url: HttpUrl): String = "${url.scheme}://${url.host.lowercase()}:${url.port}"
+
+    private fun parseCookieJar(cookieHeader: String?): MutableMap<String, String> {
+        val jar = LinkedHashMap<String, String>()
+        if (cookieHeader.isNullOrBlank()) return jar
+        for (pair in cookieHeader.split(';')) {
+            val eq = pair.indexOf('=')
+            if (eq > 0) {
+                jar[pair.substring(0, eq).trim()] = pair.substring(eq + 1).trim()
+            }
+        }
+        return jar
+    }
+
+    private fun keepSetCookies(jar: MutableMap<String, String>, setCookies: List<String>) {
+        for (line in setCookies) {
+            val pair = line.substringBefore(';')
+            val eq = pair.indexOf('=')
+            if (eq <= 0) continue
+            val name = pair.substring(0, eq).trim()
+            val value = pair.substring(eq + 1).trim()
+            if (value.isNotEmpty() && value != "\"\"") {
+                jar[name] = value
+            }
+        }
+    }
+}

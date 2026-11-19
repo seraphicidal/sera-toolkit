@@ -11,6 +11,7 @@ export function bookmarkletSource(seraOrigin: string): string {
 
   return `(function(){
   var SERA=${origin};
+  if(!/(?:^|\\.)instagram\\.com$/i.test(location.hostname)){alert('Open an Instagram post on instagram.com first.');return;}
   var m=location.pathname.match(/^\\/(?:[^/]+\\/)?((?:p|reel|reels|tv))\\/([A-Za-z0-9_-]+)/);
   if(!m){alert('Open a single Instagram post, reel or video first.');return;}
   var kind=m[1];

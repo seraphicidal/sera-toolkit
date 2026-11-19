@@ -27,7 +27,19 @@ async function main(): Promise<void> {
     /\/+$/,
     '',
   );
-  const id = value('--id') ?? args.find((a) => !a.startsWith('-'));
+  const positionalId = (() => {
+    for (let i = 0; i < args.length; i += 1) {
+      const arg = args[i]!;
+      if (arg === '--json') continue;
+      if (arg === '--api' || arg === '--id' || arg === '--limit') {
+        i += 1;
+        continue;
+      }
+      if (!arg.startsWith('-')) return arg;
+    }
+    return undefined;
+  })();
+  const id = value('--id') ?? positionalId;
   const jsonOutput = args.includes('--json');
 
   if (id) {

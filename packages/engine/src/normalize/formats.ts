@@ -1,5 +1,43 @@
+import type { ContainerFormat } from '@sera/contracts/types';
 import type { YtdlpFormat, YtdlpInfo } from '../extract/ytdlp-types.js';
 import { num, str } from '../extract/ytdlp-types.js';
+
+const KNOWN_CONTAINERS: ReadonlySet<string> = new Set([
+  'mp4',
+  'webm',
+  'mov',
+  'mkv',
+  'mp3',
+  'm4a',
+  'aac',
+  'opus',
+  'ogg',
+  'wav',
+  'flac',
+  'gif',
+  'jpg',
+  'png',
+  'webp',
+  'avif',
+  'pdf',
+  'iso',
+  'zip',
+  'tar',
+  '7z',
+  'apk',
+  'dmg',
+  'exe',
+  'epub',
+]);
+
+export function normalizeContainer(
+  ext: string | undefined,
+  fallback: ContainerFormat = 'bin',
+): ContainerFormat {
+  const raw = (ext ?? '').trim().toLowerCase().replace(/^\./, '');
+  const mapped = raw === 'jpeg' ? 'jpg' : raw === 'm4v' ? 'mp4' : raw === 'oga' ? 'ogg' : raw;
+  return KNOWN_CONTAINERS.has(mapped) ? (mapped as ContainerFormat) : fallback;
+}
 
 export const IMAGE_EXTENSIONS: ReadonlySet<string> = new Set([
   'jpg',

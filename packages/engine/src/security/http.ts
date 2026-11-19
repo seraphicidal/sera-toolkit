@@ -368,3 +368,41 @@ function describe(error: unknown): string {
   }
   return String(error);
 }
+
+export async function readBoundedJson<T>(
+  response: Response,
+  maxBytes = 16 * 1024 * 1024,
+  errorDetail = 'invalid JSON response',
+  errorCode: 'PROVIDER_UNAVAILABLE' | 'INTERNAL' = 'PROVIDER_UNAVAILABLE',
+): Promise<T> {
+  const contentLength = Number(response.headers.get('content-length') ?? 0);
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    await response.body?.cancel().catch(() => undefined);
+    throw seraError(errorCode, { detail: `${errorDetail}: payload exceeds ${maxBytes} bytes` });
+  }
+  try {
+    const reader = response.body?.getReader() as ReadableStreamDefaultReader<Uint8Array> | undefined;
+    if (!reader) {
+      const text = await response.text();
+      if (Buffer.byteLength(text, 'utf8') > maxBytes) {
+        throw new Error(`response exceeded ${maxBytes} bytes`);
+      }
+      return JSON.parse(text) as T;
+    }
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw new Error(`response exceeded ${maxBytes} bytes`);
+      }
+      chunks.push(value);
+    }
+    return JSON.parse(Buffer.concat(chunks).toString('utf8')) as T;
+  } catch (error) {
+    throw seraError(errorCode, { detail: errorDetail, cause: error });
+  }
+}

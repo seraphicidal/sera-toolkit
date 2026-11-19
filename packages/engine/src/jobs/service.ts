@@ -206,10 +206,10 @@ export class JobService {
     }
   }
 
-  async get(id: string, clientKey?: string): Promise<Job | undefined> {
+  async get(id: string, clientKey?: string | readonly string[]): Promise<Job | undefined> {
     const record = await this.deps.backend.get(id);
     if (!record) return undefined;
-    if (clientKey && record.clientKey !== clientKey) return undefined;
+    if (!matchesClientKey(record.clientKey, clientKey)) return undefined;
     return toPublicJob(record);
   }
 
@@ -250,11 +250,11 @@ export class JobService {
     return settled;
   }
 
-  async cancel(id: string, clientKey?: string): Promise<boolean> {
+  async cancel(id: string, clientKey?: string | readonly string[]): Promise<boolean> {
     const record = await this.deps.backend.get(id);
     if (
       !record ||
-      (clientKey && record.clientKey !== clientKey) ||
+      !matchesClientKey(record.clientKey, clientKey) ||
       isTerminalJobState(record.state)
     ) {
       return false;
@@ -267,21 +267,29 @@ export class JobService {
     return true;
   }
 
-  async delete(id: string, clientKey?: string): Promise<boolean> {
+  async delete(id: string, clientKey?: string | readonly string[]): Promise<boolean> {
     const record = await this.deps.backend.get(id);
-    if (!record || (clientKey && record.clientKey !== clientKey)) return false;
+    if (!record || !matchesClientKey(record.clientKey, clientKey)) return false;
 
+    const isLocalOrIdle =
+      this.inFlight.has(id) ||
+      this.deps.backend.driver === 'memory' ||
+      isTerminalJobState(record.state);
     let settled = true;
     if (!isTerminalJobState(record.state)) {
       settled = await this.abortAndWait(id);
     }
-    if (settled) {
+    if (settled && isLocalOrIdle) {
       await this.deps.workspaces.destroy(id);
     }
     return true;
   }
 
-  async *events(id: string, signal?: AbortSignal, clientKey?: string): AsyncGenerator<JobEvent> {
+  async *events(
+    id: string,
+    signal?: AbortSignal,
+    clientKey?: string | readonly string[],
+  ): AsyncGenerator<JobEvent> {
     const queue: JobEvent[] = [];
     let notify: (() => void) | undefined;
     const push = (event: JobEvent): void => {
@@ -290,7 +298,7 @@ export class JobService {
     };
 
     const unsubscribe = this.deps.backend.subscribe(id, (updated) => {
-      if (clientKey && updated.clientKey !== clientKey) return;
+      if (!matchesClientKey(updated.clientKey, clientKey)) return;
       const job = toPublicJob(updated);
       push({ type: eventTypeFor(job), job });
     });
@@ -299,7 +307,7 @@ export class JobService {
 
     try {
       const record = await this.deps.backend.get(id);
-      if (!record || (clientKey && record.clientKey !== clientKey)) {
+      if (!record || !matchesClientKey(record.clientKey, clientKey)) {
         throw seraError('NOT_FOUND', { message: 'That download has expired.' });
       }
 
@@ -348,8 +356,6 @@ export class JobService {
 
   private async execute(record: JobRecord): Promise<void> {
     const { backend, logger, workspaces } = this.deps;
-    const current = await backend.get(record.id);
-    if (!current || isTerminalJobState(current.state)) return;
 
     const cancelController = new AbortController();
     const timeoutController = new AbortController();
@@ -364,6 +370,14 @@ export class JobService {
       if (updated.state === 'cancelled') cancelController.abort();
     });
 
+    const current = await backend.get(record.id);
+    if (!current || isTerminalJobState(current.state)) {
+      unwatch();
+      this.inFlight.delete(record.id);
+      markDone();
+      return;
+    }
+
     const timeout = setTimeout(
       () => timeoutController.abort(),
       this.deps.config.jobTimeoutSeconds * 1000,
@@ -375,6 +389,17 @@ export class JobService {
     let pending:
       { state: JobRecord['state']; step: string; progress: JobRecord['progress'] } | undefined;
     let inFlightFlush: Promise<void> | undefined;
+    let trailingTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const triggerFlush = () => {
+      if (trailingTimer) {
+        clearTimeout(trailingTimer);
+        trailingTimer = undefined;
+      }
+      lastPatch = Date.now();
+      if (pending) lastFlushedState = pending.state;
+      inFlightFlush = (inFlightFlush ?? Promise.resolve()).then(() => flush());
+    };
 
     const flush = async (): Promise<void> => {
       while (pending) {
@@ -394,13 +419,20 @@ export class JobService {
           const now = Date.now();
           const stateChanged = update.state !== lastFlushedState;
           if (stateChanged || now - lastPatch >= PROGRESS_THROTTLE_MS) {
-            lastPatch = now;
-            inFlightFlush = (inFlightFlush ?? Promise.resolve()).then(() => flush());
+            triggerFlush();
+          } else if (!trailingTimer) {
+            const delay = Math.max(10, PROGRESS_THROTTLE_MS - (now - lastPatch));
+            trailingTimer = setTimeout(() => {
+              trailingTimer = undefined;
+              if (pending) triggerFlush();
+            }, delay);
+            trailingTimer.unref();
           }
         },
         combinedSignal,
       );
 
+      if (trailingTimer) clearTimeout(trailingTimer);
       pending = undefined;
       await inFlightFlush;
       const totalFiles = record.spec.selections.length;
@@ -415,9 +447,14 @@ export class JobService {
       });
       this.count(record, { ok: true });
     } catch (error) {
+      if (trailingTimer) clearTimeout(trailingTimer);
       pending = undefined;
       await inFlightFlush;
       const isTimeout = timeoutController.signal.aborted;
+      const isCancelled = cancelController.signal.aborted;
+      if (isCancelled) {
+        void workspaces.destroy(record.id).catch(() => undefined);
+      }
       const rawErr = SeraError.from(error);
       const seraErr = isTimeout
         ? seraError('TIMEOUT', {
@@ -457,6 +494,15 @@ export class JobService {
       markDone();
     }
   }
+}
+
+function matchesClientKey(
+  recordKey: string,
+  expected?: string | readonly string[],
+): boolean {
+  if (!expected) return true;
+  if (typeof expected === 'string') return recordKey === expected;
+  return expected.includes(recordKey);
 }
 
 function eventTypeFor(job: Job): JobEvent['type'] {

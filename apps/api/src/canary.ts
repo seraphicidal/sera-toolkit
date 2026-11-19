@@ -92,10 +92,14 @@ async function download(
 ): Promise<number> {
   const call = options.fetch ?? fetch;
   const base = options.apiUrl.replace(/\/+$/, '');
-  const headers = { 'content-type': 'application/json', 'x-sera-canary': options.token };
+  const baseHeaders = { 'x-sera-canary': options.token };
 
   const json = async <T>(path: string, init: RequestInit = {}): Promise<T> => {
-    const response = await call(`${base}${path}`, { ...init, headers, signal });
+    const requestHeaders =
+      init.body !== undefined
+        ? { 'content-type': 'application/json', ...baseHeaders }
+        : baseHeaders;
+    const response = await call(`${base}${path}`, { ...init, headers: requestHeaders, signal });
     const body = (await response.json().catch(() => undefined)) as
       (T & { error?: { code?: string } }) | undefined;
     if (!response.ok) {
@@ -125,7 +129,7 @@ async function download(
     if (!['ready', 'failed', 'cancelled', 'expired'].includes(job.state)) {
       await call(`${base}/api/jobs/${job.id}`, {
         method: 'DELETE',
-        headers,
+        headers: baseHeaders,
         signal: AbortSignal.timeout(5_000),
       }).catch(() => undefined);
     }
@@ -134,7 +138,7 @@ async function download(
     throw new CanaryFailure(job.error?.code ?? job.state.toUpperCase());
   }
 
-  const response = await call(`${base}${job.result.downloadPath}`, { headers, signal });
+  const response = await call(`${base}${job.result.downloadPath}`, { headers: baseHeaders, signal });
   if (!response.ok || !response.body) {
     throw new CanaryFailure(`HTTP_${String(response.status)}`);
   }

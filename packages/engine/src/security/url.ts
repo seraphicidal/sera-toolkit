@@ -125,7 +125,7 @@ export function stripWww(host: string): string {
 
 export function normalizeUrl(url: URL): URL {
   const out = new URL(url.toString());
-  out.hostname = out.hostname.toLowerCase();
+  out.hostname = out.hostname.toLowerCase().replace(/\.+$/, '');
   const cleanHost = stripWww(out.hostname);
   if (cleanHost !== 'mega.nz' && cleanHost !== 'mega.co.nz') {
     out.hash = '';
@@ -151,8 +151,8 @@ export function normalizeUrl(url: URL): URL {
 
 export function hostMatches(host: string, domain: string): boolean {
   const h = stripWww(host.toLowerCase());
-  const d = domain.toLowerCase().replace(/\.+$/, '');
-  return h === d || h.endsWith(`.${d}`);
+  const d = stripWww(domain.toLowerCase());
+  return Boolean(d) && (h === d || h.endsWith(`.${d}`));
 }
 
 export function hostMatchesAny(host: string, domains: Iterable<string>): boolean {
@@ -210,4 +210,55 @@ export function urlExtension(url: URL): string | undefined {
   } catch {}
   const match = /\.([a-z0-9]{1,5})$/i.exec(pathname);
   return match?.[1]?.toLowerCase();
+}
+
+export interface ProviderUrlValidationOptions {
+  readonly allowPrivateAddresses?: boolean;
+  readonly blockedHosts?: readonly string[];
+  readonly allowUrl?: (url: string | URL) => URL;
+}
+
+export function validateProviderUrl(
+  raw: unknown,
+  options: ProviderUrlValidationOptions = {},
+): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const trimmed = raw.trim();
+  if (!trimmed || hasForbiddenUrlChar(trimmed)) return undefined;
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return undefined;
+  }
+  if (!ALLOWED_PROTOCOLS.has(parsed.protocol)) return undefined;
+  if (parsed.username || parsed.password) return undefined;
+  if (!options.allowPrivateAddresses && !ALLOWED_PORTS.has(parsed.port)) return undefined;
+  const rawHost = parsed.hostname.toLowerCase().replace(/\.+$/, '');
+  if (!rawHost) return undefined;
+  if (!options.allowPrivateAddresses && isIpLiteral(rawHost)) {
+    const bare = rawHost.startsWith('[') ? rawHost.slice(1, -1) : rawHost;
+    if (!isPublicAddress(bare)) return undefined;
+  }
+  const cleanHost = stripWww(rawHost);
+  if (options.blockedHosts?.length && hostMatchesAny(cleanHost, options.blockedHosts)) {
+    return undefined;
+  }
+  if (options.allowUrl) {
+    try {
+      return options.allowUrl(parsed).toString();
+    } catch {
+      return undefined;
+    }
+  }
+  return parsed.toString();
+}
+
+export function scrubCredentials(text: string): string {
+  return text
+    .replace(/([a-z][a-z0-9+.-]{0,15}:\/\/)[^\s/@]+@/gi, '$1[redacted]@')
+    .replace(
+      /([?&](?:token|access_token|auth|key|apikey|api_key|sig|signature|password)=)[^&\s]+/gi,
+      '$1[redacted]',
+    );
 }

@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { legalReportRequestSchema } from '@sera/contracts';
@@ -61,6 +61,17 @@ export function registerLegalRoutes(app: FastifyInstance, engine: SeraEngine): v
         const reportDir = join(engine.config.dataDir, 'reports');
         try {
           await mkdir(reportDir, { recursive: true });
+          const existing = await readdir(reportDir).catch(() => [] as string[]);
+          const MAX_STORED_REPORTS = 5000;
+          if (existing.length >= MAX_STORED_REPORTS) {
+            const stale = existing
+              .filter((f) => f.endsWith('.json'))
+              .sort((a, b) => reportTimestamp(a) - reportTimestamp(b))
+              .slice(0, Math.max(1, existing.length - MAX_STORED_REPORTS + 1));
+            await Promise.all(
+              stale.map((f) => rm(join(reportDir, f), { force: true }).catch(() => undefined)),
+            );
+          }
           const filePath = join(reportDir, `${reportId}.json`);
           await writeFile(
             filePath,
@@ -102,16 +113,10 @@ export function registerLegalRoutes(app: FastifyInstance, engine: SeraEngine): v
       if (topic.length > 0) {
         const domain =
           (engine.config.domain.length > 0 ? engine.config.domain : process.env.SERA_DOMAIN) ?? '';
-        const orgInfo = report.notifierOrganization ? ` (${report.notifierOrganization})` : '';
         const body = [
           `Category: ${report.category}`,
-          `Target: ${report.targetUrl}`,
           `Report ID: ${reportId}`,
-          `Notifier: ${report.notifierName} <${report.notifierEmail}>${orgInfo}`,
           `Action: ${mitigated ? 'Mitigated (denylisted)' : 'Pending Review'}`,
-          '',
-          'Explanation:',
-          report.explanation,
         ].join('\n');
 
         const headers: Record<string, string> = {
@@ -128,9 +133,18 @@ export function registerLegalRoutes(app: FastifyInstance, engine: SeraEngine): v
           headers,
           body,
           signal: AbortSignal.timeout(5_000),
-        }).catch((err: unknown) => {
-          engine.logger.warn({ err, reportId }, 'failed to send ntfy legal report notification');
-        });
+        })
+          .then((res) => {
+            if (!res.ok) {
+              engine.logger.warn(
+                { status: res.status, reportId },
+                'ntfy legal report notification rejected',
+              );
+            }
+          })
+          .catch((err: unknown) => {
+            engine.logger.warn({ err, reportId }, 'failed to send ntfy legal report notification');
+          });
       }
 
       const response: LegalReportResponse = {
@@ -143,4 +157,9 @@ export function registerLegalRoutes(app: FastifyInstance, engine: SeraEngine): v
       return reply.status(201).send(response);
     },
   );
+}
+
+function reportTimestamp(filename: string): number {
+  const match = /^rep_(\d+)_/.exec(filename);
+  return match ? Number(match[1]) : 0;
 }

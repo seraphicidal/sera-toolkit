@@ -14,7 +14,13 @@ import {
 
 const TICK_MS = 30_000;
 
-export function RecentDownloads({ onAgain }: { readonly onAgain: (url: string) => void }) {
+export function RecentDownloads({
+  onAgain,
+  disabled = false,
+}: {
+  readonly onAgain: (url: string) => void;
+  readonly disabled?: boolean;
+}) {
   const [entries, setEntries] = useState<HistoryEntry[]>([]);
   const [now, setNow] = useState(() => Date.now());
 
@@ -85,8 +91,9 @@ export function RecentDownloads({ onAgain }: { readonly onAgain: (url: string) =
                 <button
                   type="button"
                   onClick={() => onAgain(entry.url)}
+                  disabled={disabled}
                   aria-label={`Download again: ${entry.title}`}
-                  className="shrink-0 cursor-pointer rounded-lg border border-[var(--color-line)] px-2.5 py-1.5 text-xs font-medium transition-colors hover:bg-[var(--color-sunken)]"
+                  className="shrink-0 cursor-pointer rounded-lg border border-[var(--color-line)] px-2.5 py-1.5 text-xs font-medium transition-colors hover:bg-[var(--color-sunken)] disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Download again
                 </button>

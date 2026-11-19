@@ -14,6 +14,25 @@ const booleanish = z
     typeof v === 'boolean' ? v : ['1', 'true', 'yes', 'on'].includes(v.trim().toLowerCase()),
   );
 
+const trustProxyValue = z
+  .union([z.boolean(), z.number(), z.string()])
+  .default(false)
+  .transform((v): boolean | number | string | string[] => {
+    if (typeof v === 'boolean') return v;
+    if (typeof v === 'number') return Number.isInteger(v) && v >= 0 ? v : false;
+    const trimmed = v.trim();
+    if (!trimmed) return false;
+    const lower = trimmed.toLowerCase();
+    if (['true', 'yes', 'on'].includes(lower)) return true;
+    if (['false', 'no', 'off'].includes(lower)) return false;
+    if (/^\d+$/.test(trimmed)) return Number(trimmed);
+    const list = trimmed
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    return list.length === 1 ? list[0]! : list;
+  });
+
 const csv = z
   .string()
   .default('')
@@ -84,7 +103,7 @@ const envSchema = z.object({
   SERA_RATE_LIMIT_JOBS_PER_MINUTE: z.coerce.number().int().min(1).default(10),
   SERA_RATE_LIMIT_THUMB_PER_MINUTE: z.coerce.number().int().min(1).optional(),
   SERA_MAX_CONCURRENT_JOBS_PER_CLIENT: z.coerce.number().int().min(1).default(3),
-  SERA_TRUST_PROXY: booleanish.default(false),
+  SERA_TRUST_PROXY: trustProxyValue,
 
   SERA_YTDLP_PATH: z.string().default(''),
   SERA_FFMPEG_PATH: z.string().default(''),
@@ -174,7 +193,7 @@ export interface EngineConfig {
   readonly rateLimitJobsPerMinute: number;
   readonly rateLimitThumbnailsPerMinute: number;
   readonly maxConcurrentJobsPerClient: number;
-  readonly trustProxy: boolean;
+  readonly trustProxy: boolean | number | string | string[];
 
   readonly ytdlpPath: string;
   readonly ffmpegPath: string;
@@ -274,6 +293,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): EngineConfig {
     e.SERA_ADMIN_TOKEN.trim();
   const nodesEnabled = nodeTokens.size > 0 || legacyToken.length > 0;
 
+  const extractionProxy = e.SERA_EXTRACTION_PROXY_URL.trim();
+  const extractionProxyProviders = new Set(
+    e.SERA_EXTRACTION_PROXY_PROVIDERS.split(',')
+      .map((entry) => entry.trim().toLowerCase())
+      .filter(Boolean),
+  );
+
   return {
     nodeEnv: e.NODE_ENV,
     isProduction,
@@ -331,12 +357,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): EngineConfig {
     networkClass: e.SERA_NETWORK_CLASS,
 
     proxyFor(providerId: string): string | undefined {
-      const proxy = e.SERA_EXTRACTION_PROXY_URL.trim();
-      if (!proxy) return undefined;
-      const only = e.SERA_EXTRACTION_PROXY_PROVIDERS.split(',')
-        .map((entry) => entry.trim())
-        .filter(Boolean);
-      return only.length === 0 || only.includes(providerId) ? proxy : undefined;
+      if (!extractionProxy) return undefined;
+      if (extractionProxyProviders.size === 0) return extractionProxy;
+      return extractionProxyProviders.has(providerId.trim().toLowerCase())
+        ? extractionProxy
+        : undefined;
     },
     apiUrl: e.SERA_API_URL.replace(/\/+$/, ''),
 

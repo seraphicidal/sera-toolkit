@@ -83,11 +83,13 @@ export function BookmarkletLink() {
         >
           {copied ? 'Copied ✓' : 'Copy code'}
         </button>
-        {nudge && !copied && !manual && (
-          <span className="text-[0.75rem] text-[var(--color-ink-faint)]">
-            Drag to your bookmarks bar, or copy the code.
-          </span>
-        )}
+        <span aria-live="polite" className="text-[0.75rem] text-[var(--color-ink-faint)]">
+          {copied
+            ? 'Bookmarklet code copied.'
+            : nudge && !manual
+              ? 'Drag to your bookmarks bar, or copy the code.'
+              : ''}
+        </span>
       </span>
 
       {manual && (

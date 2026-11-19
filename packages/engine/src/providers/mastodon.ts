@@ -2,9 +2,9 @@ import type { ProviderCapabilities } from '@sera/contracts/types';
 import { seraError } from '../errors.js';
 import type { ExtractionStrategy } from '../extract/strategy.js';
 import { ensureRecommendations } from '../normalize/plans.js';
-import { hostMatchesAny, parseUserUrl, urlExtension } from '../security/url.js';
+import { hostMatchesAny, urlExtension } from '../security/url.js';
 import { decodeHtmlEntities, nonEmpty, truncate } from '../util/format.js';
-import { normalizeContainer } from './direct.js';
+import { isSafeProviderMediaUrl, normalizeContainer } from './direct.js';
 import type { DownloadPlan, ProviderContext, ResolvedItem, ResolvedMedia } from './types.js';
 import { YtdlpProvider } from './ytdlp-base.js';
 import { declare } from './capabilities.js';
@@ -128,7 +128,7 @@ export class MastodonProvider extends YtdlpProvider {
     if (!status || typeof status !== 'object') return undefined;
 
     const attachments = (status.media_attachments ?? []).filter((a) =>
-      isSafeAttachmentUrl(a?.url, context),
+      isSafeProviderMediaUrl(a?.url, context),
     );
     if (!attachments.length) return undefined;
 
@@ -246,7 +246,7 @@ function toItem(
     index,
     kind,
     title: describe(attachment.description) ?? `Attachment ${index + 1}`,
-    ...(isSafeAttachmentUrl(attachment.preview_url, context)
+    ...(isSafeProviderMediaUrl(attachment.preview_url, context)
       ? { thumbnailUrl: attachment.preview_url }
       : {}),
     ...(width ? { width } : {}),
@@ -254,19 +254,6 @@ function toItem(
     container,
     plans: ensureRecommendations(plans),
   };
-}
-
-function isSafeAttachmentUrl(raw: unknown, context: ProviderContext): raw is string {
-  if (typeof raw !== 'string') return false;
-  try {
-    const { url } = parseUserUrl(raw, {
-      allowPrivateAddresses: context.config.allowPrivateAddresses,
-    });
-    if (url.protocol !== 'https:') return false;
-    return !hostMatchesAny(url.hostname, context.config.blockedHosts);
-  } catch {
-    return false;
-  }
 }
 
 function atHandle(acct: string | undefined): string | undefined {

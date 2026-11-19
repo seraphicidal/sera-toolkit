@@ -43,6 +43,9 @@ export async function createZip(request: CreateZipRequest): Promise<{ sizeBytes:
 
     for (const [index, entry] of request.entries.entries()) {
       if (request.signal?.aborted) throw seraError('CANCELLED');
+      if (output.destroyed || output.errored) {
+        throw output.errored ?? seraError('CONVERSION_FAILED', { detail: 'zip output closed early' });
+      }
 
       const name = assertSafeFilename(entry.name);
       const unique = dedupeFilename(name, taken);
@@ -63,6 +66,11 @@ export async function createZip(request: CreateZipRequest): Promise<{ sizeBytes:
     zip.end();
     await finished;
   } catch (error) {
+    zip.outputStream.unpipe(output);
+    const stream = zip.outputStream as unknown as { destroy?: () => void };
+    if (typeof stream.destroy === 'function') {
+      stream.destroy();
+    }
     output.destroy();
     await finished.catch(() => undefined);
     await rm(request.destination, { force: true }).catch(() => undefined);

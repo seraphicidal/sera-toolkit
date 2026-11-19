@@ -4,6 +4,13 @@ set -euo pipefail
 
 REPO="${SERA_REPO:-https://github.com/seraphicidal/sera-toolkit.git}"
 INSTALL_DIR="${SERA_DIR:-/opt/sera}"
+case "$INSTALL_DIR" in
+  /*) ;;
+  *) echo "SERA_DIR must be an absolute path" >&2; exit 1 ;;
+esac
+case "$INSTALL_DIR" in
+  *'#'*|*'&'*|*$'\n'*|*' '*|*"'"*|*'"'*) echo "SERA_DIR contains unsupported characters" >&2; exit 1 ;;
+esac
 COMPOSE_FILE="deploy/docker-compose.oracle.yml"
 
 COMPOSE=(
@@ -72,6 +79,11 @@ else
   fi
   git clone --depth 1 "$REPO" "$INSTALL_DIR"
 fi
+for tool in curl jq; do
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    if [ "$PKG" = apt ]; then apt-get install -y -qq "$tool"; else dnf install -y -q "$tool"; fi
+  fi
+done
 cd "$INSTALL_DIR"
 
 if [ ! -f .env ]; then
@@ -129,6 +141,7 @@ fi
 log "Installing the sera command"
 cat > /usr/local/bin/sera <<WRAPPER
 #!/usr/bin/env bash
+export SERA_DIR="$INSTALL_DIR"
 if [ "\${1:-}" = stats ]; then shift; exec bash "$INSTALL_DIR/deploy/stats.sh" "\$@"; fi
 if [ "\${1:-}" = reports ]; then shift; exec bash "$INSTALL_DIR/deploy/reports.sh" "\$@"; fi
 exec docker compose --project-directory "$INSTALL_DIR" --env-file "$INSTALL_DIR/.env" -f "$INSTALL_DIR/$COMPOSE_FILE" "\$@"
