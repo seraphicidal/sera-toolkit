@@ -250,7 +250,7 @@ jobs:
             const fs = require("node:fs");
             const path = require("node:path");
 
-            const apkDir = path.resolve("apps/android-node/app/build/outputs/apk/release");
+            const apkDir = path.resolve("app/build/outputs/apk/release");
             const metaPath = path.join(apkDir, "output-metadata.json");
             const meta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
             const elements = Array.isArray(meta.elements) ? meta.elements : [];
