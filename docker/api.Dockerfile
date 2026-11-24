@@ -37,7 +37,7 @@ RUN set -eux; \
     rm -rf /var/lib/apt/lists/*; \
     ffmpeg -version | head -n 1
 
-ARG YTDLP_VERSION=2026.10.26
+ARG YTDLP_VERSION=2026.11.23
 
 ARG TARGETARCH
 
