@@ -14,6 +14,7 @@ import {
 } from '@/lib/health';
 
 const POLL_MS = 60_000;
+const INITIAL_RETRY_MS = 5_000;
 const REQUEST_TIMEOUT_MS = 10_000;
 
 const DOT: Record<HealthLight, string> = {
@@ -23,11 +24,11 @@ const DOT: Record<HealthLight, string> = {
   red: 'bg-[var(--color-danger)]',
 };
 
-async function observe() {
+async function observe(signal: AbortSignal) {
   try {
     const response = await fetch('/health', {
       cache: 'no-store',
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal: AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]),
     });
     const body: unknown = await response.json();
     return isHealthReport(body) ? { ok: true as const, report: body } : { ok: false as const };
@@ -39,13 +40,27 @@ async function observe() {
 export function HealthIndicator() {
   const [state, dispatch] = useReducer(nextHealth, initialHealth);
   const [open, setOpen] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const lastPoll = useRef(0);
   const root = useRef<HTMLDivElement>(null);
+  const abortRef = useRef<AbortController | undefined>(undefined);
+  const seqRef = useRef(0);
   const panelId = useId();
 
   const poll = useCallback(async () => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const seq = ++seqRef.current;
     lastPoll.current = Date.now();
-    dispatch(await observe());
+    setRefreshing(true);
+    try {
+      const observation = await observe(controller.signal);
+      if (controller.signal.aborted || seq !== seqRef.current) return;
+      dispatch(observation);
+    } finally {
+      if (seq === seqRef.current) setRefreshing(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -56,7 +71,7 @@ export function HealthIndicator() {
       timer = setInterval(() => void poll(), POLL_MS);
     };
     const stop = () => {
-      clearInterval(timer);
+      if (timer) clearInterval(timer);
       timer = undefined;
     };
     const onVisibility = () => (document.visibilityState === 'visible' ? start() : stop());
@@ -65,12 +80,21 @@ export function HealthIndicator() {
     document.addEventListener('visibilitychange', onVisibility);
     return () => {
       stop();
+      abortRef.current?.abort();
       document.removeEventListener('visibilitychange', onVisibility);
     };
   }, [poll]);
 
   useEffect(() => {
-    if (!open) return;
+    if (state.light !== 'unknown' || state.failures !== 1) return undefined;
+    const retryTimer = setTimeout(() => {
+      if (document.visibilityState === 'visible') void poll();
+    }, INITIAL_RETRY_MS);
+    return () => clearTimeout(retryTimer);
+  }, [state.light, state.failures, poll]);
+
+  useEffect(() => {
+    if (!open) return undefined;
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault();
@@ -95,7 +119,15 @@ export function HealthIndicator() {
   const lines = describeHealth(state);
 
   return (
-    <div ref={root} className="sm:relative">
+    <div
+      ref={root}
+      className="sm:relative"
+      onBlur={(event) => {
+        if (open && !root.current?.contains(event.relatedTarget as Node | null)) {
+          setOpen(false);
+        }
+      }}
+    >
       <button
         type="button"
         aria-label={summary}
@@ -103,14 +135,14 @@ export function HealthIndicator() {
         aria-expanded={open}
         aria-controls={panelId}
         onClick={() => setOpen((value) => !value)}
-        className="grid size-8 cursor-pointer place-items-center rounded-full transition-colors hover:bg-[var(--color-sunken)]"
+        className="grid size-9 cursor-pointer place-items-center rounded-full transition-colors hover:bg-[var(--color-sunken)]"
       >
         <span
           aria-hidden
           className={cx(
             'block size-2.5 rounded-full transition-[background-color,opacity] duration-300',
             DOT[state.light],
-            !showsLight(state) && 'opacity-0',
+            !showsLight(state) && 'opacity-40',
           )}
         />
       </button>
@@ -122,7 +154,17 @@ export function HealthIndicator() {
           aria-label="Service status"
           className="absolute top-full right-0 left-0 z-40 mt-2 rounded-[var(--radius-panel)] border border-[var(--color-line)] bg-[var(--color-surface)] p-3 text-sm shadow-[var(--shadow-lift)] sm:left-auto sm:w-72"
         >
-          <p className="px-1 pb-2 font-medium">{headline}</p>
+          <div className="flex items-center justify-between gap-2 px-1 pb-2">
+            <p className="font-medium">{headline}</p>
+            <button
+              type="button"
+              disabled={refreshing}
+              onClick={() => void poll()}
+              className="cursor-pointer rounded-md px-2 py-0.5 text-xs font-medium text-[var(--color-accent)] transition-colors hover:bg-[var(--color-sunken)] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {refreshing ? 'Checking…' : 'Refresh'}
+            </button>
+          </div>
           <ul className="space-y-1.5">
             {lines.map((line) => (
               <li key={line.label} className="flex items-start gap-2.5 px-1">

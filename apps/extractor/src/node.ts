@@ -1,5 +1,8 @@
 import { createReadStream } from 'node:fs';
+import { stat } from 'node:fs/promises';
 import { Readable, Transform } from 'node:stream';
+import { safeExtractorArgSchema } from '@sera/contracts';
+import type { RemoteProgress } from '@sera/contracts/types';
 import {
   hostMatchesAny,
   type JobRunner,
@@ -127,6 +130,31 @@ const CLAIM_TIMEOUT_MS = 60_000;
 
 const REQUEST_TIMEOUT_MS = 30_000;
 const UPLOAD_TIMEOUT_MS = 10 * 60_000;
+const MAX_UPLOAD_ATTEMPTS = 3;
+const UPLOAD_RETRY_BASE_MS = 1_000;
+
+function sanitizeResolvedForWire(media: ResolvedMedia): ResolvedMedia {
+  return {
+    ...media,
+    items: media.items.map((item) => ({
+      ...item,
+      plans: item.plans.map((plan) => {
+        if (plan.fetch.via !== 'ytdlp' || !plan.fetch.extractorArgs?.length) return plan;
+        const safeArgs = plan.fetch.extractorArgs.filter(
+          (arg) => safeExtractorArgSchema.safeParse(arg).success,
+        );
+        const { extractorArgs: _dropped, ...restFetch } = plan.fetch;
+        return {
+          ...plan,
+          fetch: {
+            ...restFetch,
+            ...(safeArgs.length ? { extractorArgs: safeArgs } : {}),
+          },
+        };
+      }),
+    })),
+  };
+}
 
 export class ExtractionNode {
   private readonly apiUrl: string;
@@ -228,6 +256,7 @@ export class ExtractionNode {
         controller.signal,
       );
       if (response.status === 204) {
+        await response.body?.cancel().catch(() => undefined);
         if (!this.stopping && Date.now() - startedAt < 5_000) await sleep(IDLE_BACKOFF_MS);
         return undefined;
       }
@@ -276,50 +305,51 @@ export class ExtractionNode {
     const started = Date.now();
     const abort = new AbortController();
     this.taskAbort = abort;
-    let currentPercent = 0;
-    let currentStep = 'Working';
-    let currentBytesDownloaded: number | undefined;
-    let currentBytesTotal: number | undefined;
+    let currentProgress: RemoteProgress = { percent: 0, step: 'Working' };
     let lastSentAt = 0;
-    let heartbeatInFlight = false;
-    let progressChain: Promise<void> = Promise.resolve();
-    const enqueueProgress = (
-      percent: number,
-      step: string,
-      bytesDownloaded?: number,
-      bytesTotal?: number,
-    ): void => {
-      progressChain = progressChain.then(() =>
-        this.progress(task.id, percent, step, abort, bytesDownloaded, bytesTotal),
-      );
+    let finished = false;
+    let progressInFlight = false;
+    let pendingProgress: RemoteProgress | undefined;
+
+    const flushProgress = (): void => {
+      if (progressInFlight || finished || abort.signal.aborted || !pendingProgress) return;
+      progressInFlight = true;
+      void (async () => {
+        try {
+          while (!finished && !abort.signal.aborted && pendingProgress) {
+            const next = pendingProgress;
+            pendingProgress = undefined;
+            lastSentAt = Date.now();
+            await this.progress(task.id, next, abort);
+          }
+        } finally {
+          progressInFlight = false;
+          if (!finished && !abort.signal.aborted && pendingProgress) {
+            flushProgress();
+          }
+        }
+      })();
+    };
+
+    const scheduleProgress = (update: RemoteProgress): void => {
+      if (finished || abort.signal.aborted) return;
+      pendingProgress = update;
+      flushProgress();
     };
 
     const heartbeat = setInterval(() => {
-      if (heartbeatInFlight || abort.signal.aborted) return;
-      heartbeatInFlight = true;
-      lastSentAt = Date.now();
-      enqueueProgress(currentPercent, currentStep, currentBytesDownloaded, currentBytesTotal);
-      void progressChain.finally(() => {
-        heartbeatInFlight = false;
-      });
+      if (finished || abort.signal.aborted || progressInFlight) return;
+      if (Date.now() - lastSentAt < PROGRESS_INTERVAL_MS - 100) return;
+      scheduleProgress(currentProgress);
     }, PROGRESS_INTERVAL_MS);
     heartbeat.unref();
 
-    const onProgress = (
-      percent: number,
-      step: string,
-      bytesDownloaded?: number,
-      bytesTotal?: number,
-    ): void => {
-      const stepChanged = step !== currentStep;
-      currentPercent = percent;
-      currentStep = step;
-      currentBytesDownloaded = bytesDownloaded;
-      currentBytesTotal = bytesTotal;
+    const onProgress = (update: RemoteProgress): void => {
+      const stepChanged = update.step !== currentProgress.step;
+      currentProgress = update;
       const now = Date.now();
       if (stepChanged || now - lastSentAt >= PROGRESS_THROTTLE_MS) {
-        lastSentAt = now;
-        enqueueProgress(currentPercent, currentStep, bytesDownloaded, bytesTotal);
+        scheduleProgress(update);
       }
     };
 
@@ -328,7 +358,11 @@ export class ExtractionNode {
 
       if (task.kind === 'resolve') {
         const media = await this.resolver.resolveCanonical(url, task.providerId, abort.signal);
-        await this.report(`/internal/extraction/${task.id}/resolved`, { media }, abort.signal);
+        await this.report(
+          `/internal/extraction/${task.id}/resolved`,
+          { media: sanitizeResolvedForWire(media) },
+          abort.signal,
+        );
         this.logger.info(
           {
             task: task.id,
@@ -358,12 +392,15 @@ export class ExtractionNode {
         { task: task.id, kind: task.kind, failureClass: failure.code, detail: failure.detail },
         'task failed',
       );
-      await this.post(`/internal/extraction/${task.id}/failed`, {
+      const failRes = await this.post(`/internal/extraction/${task.id}/failed`, {
         code: failure.code,
         message: failure.message,
         ...(failure.detail ? { detail: failure.detail } : {}),
       }).catch(() => undefined);
+      await failRes?.body?.cancel().catch(() => undefined);
     } finally {
+      finished = true;
+      pendingProgress = undefined;
       clearInterval(heartbeat);
       if (this.taskAbort === abort) this.taskAbort = undefined;
     }
@@ -373,12 +410,7 @@ export class ExtractionNode {
     task: RemoteTask,
     url: URL,
     abort: AbortController,
-    onProgress: (
-      percent: number,
-      step: string,
-      bytesDownloaded?: number,
-      bytesTotal?: number,
-    ) => void,
+    onProgress: (update: RemoteProgress) => void,
   ): Promise<void> {
     const jobId = newJobId();
     const media: ResolvedMedia = await this.resolver.resolveCanonical(
@@ -412,12 +444,22 @@ export class ExtractionNode {
         spec,
         (update) => {
           const downloadPercent = Math.min(85, Math.round((update.progress.percent / 100) * 85));
-          onProgress(
-            downloadPercent,
-            update.step,
-            update.progress.bytesDownloaded,
-            update.progress.bytesTotal,
-          );
+          onProgress({
+            percent: downloadPercent,
+            step: update.step,
+            ...(update.progress.bytesDownloaded !== undefined
+              ? { bytesDownloaded: update.progress.bytesDownloaded }
+              : {}),
+            ...(update.progress.bytesTotal !== undefined
+              ? { bytesTotal: update.progress.bytesTotal }
+              : {}),
+            ...(update.progress.speedBytesPerSecond !== undefined
+              ? { speedBytesPerSecond: update.progress.speedBytesPerSecond }
+              : {}),
+            ...(update.progress.etaSeconds !== undefined
+              ? { etaSeconds: update.progress.etaSeconds }
+              : {}),
+          });
         },
         abort.signal,
       );
@@ -426,9 +468,10 @@ export class ExtractionNode {
       if (!manifest) throw new Error('the job produced no manifest');
 
       const totalBytes = manifest.files.reduce((sum, file) => sum + file.sizeBytes, 0);
-      let uploadedBytes = 0;
+      const uploadedByFile = new Map<string, number>();
+      const uploadStartedAt = Date.now();
 
-      onProgress(85, 'Uploading', 0, totalBytes);
+      onProgress({ percent: 85, step: 'Uploading', bytesDownloaded: 0, bytesTotal: totalBytes });
 
       const queue = [...manifest.files];
       let uploadError: unknown;
@@ -439,12 +482,35 @@ export class ExtractionNode {
           if (!file) break;
           try {
             const path = await this.workspaces.resolveFile(jobId, file.name);
-            await this.upload(task.id, file.name, file.mimeType, path, abort, (chunkBytes) => {
-              uploadedBytes += chunkBytes;
-              const uploadFrac = totalBytes > 0 ? uploadedBytes / totalBytes : 1;
-              const percent = Math.min(99, Math.round(85 + uploadFrac * 14));
-              onProgress(percent, 'Uploading', uploadedBytes, totalBytes);
-            });
+            await this.upload(
+              task.id,
+              file.name,
+              file.mimeType,
+              path,
+              abort,
+              (sentBytesForFile) => {
+                uploadedByFile.set(file.name, sentBytesForFile);
+                let uploadedBytes = 0;
+                for (const value of uploadedByFile.values()) uploadedBytes += value;
+                const uploadFrac = totalBytes > 0 ? Math.min(1, uploadedBytes / totalBytes) : 1;
+                const percent = Math.min(99, Math.round(85 + uploadFrac * 14));
+                const elapsedSec = (Date.now() - uploadStartedAt) / 1000;
+                const speed =
+                  elapsedSec > 0.25 && uploadedBytes > 0 ? uploadedBytes / elapsedSec : undefined;
+                const eta =
+                  speed && speed > 0 && totalBytes > uploadedBytes
+                    ? (totalBytes - uploadedBytes) / speed
+                    : undefined;
+                onProgress({
+                  percent,
+                  step: 'Uploading',
+                  bytesDownloaded: uploadedBytes,
+                  bytesTotal: totalBytes,
+                  ...(speed !== undefined ? { speedBytesPerSecond: speed } : {}),
+                  ...(eta !== undefined ? { etaSeconds: eta } : {}),
+                });
+              },
+            );
           } catch (error) {
             uploadError ??= error;
             abort.abort();
@@ -461,88 +527,192 @@ export class ExtractionNode {
     }
   }
 
+  private async queryUploadedOffset(
+    taskId: string,
+    name: string,
+    signal: AbortSignal,
+  ): Promise<{ complete: boolean; sizeBytes: number }> {
+    const query = new URLSearchParams({ name });
+    const timeoutSignal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+    try {
+      const response = await fetch(
+        `${this.apiUrl}/internal/extraction/${taskId}/file?${query.toString()}`,
+        {
+          method: 'GET',
+          headers: { authorization: `Bearer ${this.token}` },
+          signal: AbortSignal.any([signal, timeoutSignal]),
+        },
+      );
+      if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
+        return { complete: false, sizeBytes: 0 };
+      }
+      const data = (await response.json().catch(() => undefined)) as
+        { exists?: boolean; complete?: boolean; sizeBytes?: number } | undefined;
+      return {
+        complete: Boolean(data?.complete),
+        sizeBytes:
+          typeof data?.sizeBytes === 'number' &&
+          Number.isSafeInteger(data.sizeBytes) &&
+          data.sizeBytes > 0
+            ? data.sizeBytes
+            : 0,
+      };
+    } catch {
+      return { complete: false, sizeBytes: 0 };
+    }
+  }
+
   private async upload(
     taskId: string,
     name: string,
     mimeType: string,
     path: string,
     abort: AbortController,
-    onProgress?: (chunkLength: number) => void,
+    onProgress?: (sentBytesForFile: number) => void,
   ): Promise<void> {
-    const query = new URLSearchParams({ name, mime: mimeType });
-    const stream = createReadStream(path);
-    let trackingStream: Transform | undefined;
-    let bodyStream: ReadableStream<Uint8Array>;
-    if (onProgress) {
-      trackingStream = new Transform({
-        transform(chunk: Buffer, _encoding, callback) {
-          onProgress(chunk.length);
-          callback(null, chunk);
-        },
-      });
-      stream.once('error', (error) => {
-        if (!trackingStream?.destroyed) trackingStream?.destroy(error);
-      });
-      trackingStream.once('close', () => {
-        if (!stream.destroyed) stream.destroy();
-      });
-      bodyStream = Readable.toWeb(stream.pipe(trackingStream)) as ReadableStream<Uint8Array>;
-    } else {
-      bodyStream = Readable.toWeb(stream) as ReadableStream<Uint8Array>;
-    }
-    const timeoutSignal = AbortSignal.timeout(UPLOAD_TIMEOUT_MS);
-    const combinedSignal = AbortSignal.any([abort.signal, timeoutSignal]);
-    try {
-      const response = await fetch(
-        `${this.apiUrl}/internal/extraction/${taskId}/file?${query.toString()}`,
-        {
-          method: 'POST',
-          headers: {
-            authorization: `Bearer ${this.token}`,
-            'content-type': 'application/octet-stream',
+    const fileInfo = await stat(path);
+    const totalSize = fileInfo.size;
+    let offset = 0;
+    let lastError: Error | undefined;
+
+    for (let attempt = 0; attempt < MAX_UPLOAD_ATTEMPTS; attempt += 1) {
+      if (abort.signal.aborted) throw seraError('CANCELLED');
+
+      if (attempt > 0) {
+        await sleep(UPLOAD_RETRY_BASE_MS * attempt);
+        if (abort.signal.aborted) throw seraError('CANCELLED');
+        const status = await this.queryUploadedOffset(taskId, name, abort.signal);
+        if (status.complete) {
+          onProgress?.(totalSize);
+          return;
+        }
+        offset = Math.min(status.sizeBytes, totalSize);
+      }
+
+      const query = new URLSearchParams({ name, mime: mimeType });
+      if (offset > 0) query.set('offset', String(offset));
+      const remaining = Math.max(0, totalSize - offset);
+      let sent = offset;
+      const stream = createReadStream(path, { start: offset });
+      let trackingStream: Transform | undefined;
+      let bodyStream: ReadableStream<Uint8Array>;
+      if (onProgress) {
+        trackingStream = new Transform({
+          transform(chunk: Buffer, _encoding, callback) {
+            sent += chunk.length;
+            onProgress(sent);
+            callback(null, chunk);
           },
-          body: bodyStream,
-          duplex: 'half',
-          signal: combinedSignal,
-        },
-      );
-      if (response.status === 409) {
-        await response.body?.cancel().catch(() => undefined);
-        throw seraError('CANCELLED');
+        });
+        stream.once('error', (error) => {
+          if (!trackingStream?.destroyed) trackingStream?.destroy(error);
+        });
+        trackingStream.once('close', () => {
+          if (!stream.destroyed) stream.destroy();
+        });
+        bodyStream = Readable.toWeb(stream.pipe(trackingStream)) as ReadableStream<Uint8Array>;
+      } else {
+        bodyStream = Readable.toWeb(stream) as ReadableStream<Uint8Array>;
       }
-      if (!response.ok) {
-        await response.body?.cancel().catch(() => undefined);
-        throw new Error(`upload of ${name} returned ${response.status}`);
+
+      const headers: Record<string, string> = {
+        authorization: `Bearer ${this.token}`,
+        'content-type': 'application/octet-stream',
+        'content-length': String(remaining),
+      };
+      if (totalSize > 0 && offset < totalSize) {
+        headers['content-range'] =
+          `bytes ${String(offset)}-${String(totalSize - 1)}/${String(totalSize)}`;
       }
-      const payload = (await response.json().catch(() => undefined)) as
-        { accepted?: boolean; cancelled?: boolean } | undefined;
-      if (payload?.cancelled) throw seraError('CANCELLED');
-      if (payload?.accepted === false) {
-        throw new Error(`the server did not accept uploaded file ${name}`);
+
+      const timeoutSignal = AbortSignal.timeout(UPLOAD_TIMEOUT_MS);
+      const combinedSignal = AbortSignal.any([abort.signal, timeoutSignal]);
+      try {
+        const response = await fetch(
+          `${this.apiUrl}/internal/extraction/${taskId}/file?${query.toString()}`,
+          {
+            method: 'POST',
+            headers,
+            body: bodyStream,
+            duplex: 'half',
+            signal: combinedSignal,
+          },
+        );
+        if (response.status === 409) {
+          const conflict = (await response.json().catch(() => undefined)) as
+            { cancelled?: boolean; superseded?: boolean } | undefined;
+          if (conflict?.cancelled || !conflict?.superseded) {
+            throw seraError('CANCELLED');
+          }
+          lastError = new Error(`upload of ${name} was superseded`);
+          continue;
+        }
+        if (response.status === 416) {
+          const receivedHeader = Number(response.headers.get('x-sera-received-bytes'));
+          const body416 = (await response.json().catch(() => undefined)) as
+            { receivedBytes?: number } | undefined;
+          const serverBytes = Number.isSafeInteger(receivedHeader)
+            ? receivedHeader
+            : typeof body416?.receivedBytes === 'number'
+              ? body416.receivedBytes
+              : 0;
+          offset = Math.max(0, Math.min(serverBytes, totalSize));
+          lastError = new Error(`upload offset mismatch for ${name}`);
+          continue;
+        }
+        if (response.status >= 400 && response.status < 500) {
+          await response.body?.cancel().catch(() => undefined);
+          throw new Error(`upload of ${name} returned ${response.status}`);
+        }
+        if (!response.ok) {
+          await response.body?.cancel().catch(() => undefined);
+          lastError = new Error(`upload of ${name} returned ${response.status}`);
+          continue;
+        }
+        const payload = (await response.json().catch(() => undefined)) as
+          { accepted?: boolean; cancelled?: boolean } | undefined;
+        if (payload?.cancelled) throw seraError('CANCELLED');
+        if (payload?.accepted === false) {
+          throw new Error(`the server did not accept uploaded file ${name}`);
+        }
+        onProgress?.(totalSize);
+        return;
+      } catch (error) {
+        if (error instanceof SeraError && error.code === 'CANCELLED') throw error;
+        if (abort.signal.aborted) throw seraError('CANCELLED', { cause: error });
+        lastError = error instanceof Error ? error : new Error(String(error));
+        if (attempt + 1 >= MAX_UPLOAD_ATTEMPTS) {
+          throw lastError;
+        }
+      } finally {
+        stream.destroy();
+        trackingStream?.destroy();
       }
-    } finally {
-      stream.destroy();
-      trackingStream?.destroy();
     }
+    throw lastError ?? new Error(`upload of ${name} failed`);
   }
 
   private async progress(
     taskId: string,
-    percent: number,
-    step: string,
+    update: RemoteProgress,
     abort: AbortController,
-    bytesDownloaded?: number,
-    bytesTotal?: number,
   ): Promise<void> {
     if (abort.signal.aborted) return;
     try {
       const response = await this.post(
         `/internal/extraction/${taskId}/progress`,
         {
-          percent,
-          step,
-          ...(bytesDownloaded !== undefined ? { bytesDownloaded } : {}),
-          ...(bytesTotal !== undefined ? { bytesTotal } : {}),
+          percent: update.percent,
+          step: update.step,
+          ...(update.bytesDownloaded !== undefined
+            ? { bytesDownloaded: update.bytesDownloaded }
+            : {}),
+          ...(update.bytesTotal !== undefined ? { bytesTotal: update.bytesTotal } : {}),
+          ...(update.speedBytesPerSecond !== undefined
+            ? { speedBytesPerSecond: update.speedBytesPerSecond }
+            : {}),
+          ...(update.etaSeconds !== undefined ? { etaSeconds: update.etaSeconds } : {}),
         },
         REQUEST_TIMEOUT_MS,
         abort.signal,
@@ -559,6 +729,7 @@ export class ExtractionNode {
   private async report(path: string, body: unknown, signal?: AbortSignal): Promise<void> {
     const response = await this.post(path, body, REQUEST_TIMEOUT_MS, signal);
     if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
       throw new Error(`the server refused ${path.split('/').pop()} (HTTP ${response.status})`);
     }
     const payload = (await response.json().catch(() => undefined)) as

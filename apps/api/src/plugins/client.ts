@@ -59,29 +59,31 @@ export function normalizeClientAddress(raw: string): string {
     return address;
   }
 
-  const doubleColon = address.indexOf('::');
+  let normalized = address;
+  const lastColon = normalized.lastIndexOf(':');
+  const tail = lastColon !== -1 ? normalized.slice(lastColon + 1) : '';
+  if (tail.includes('.')) {
+    const octets = tail.split('.').map((o) => (/^\d+$/.test(o) ? parseInt(o, 10) : NaN));
+    if (octets.length === 4 && octets.every((o) => !Number.isNaN(o) && o >= 0 && o <= 255)) {
+      const hex1 = (((octets[0]! << 8) | octets[1]!) >>> 0).toString(16);
+      const hex2 = (((octets[2]! << 8) | octets[3]!) >>> 0).toString(16);
+      normalized = `${normalized.slice(0, lastColon + 1)}${hex1}:${hex2}`;
+    }
+  }
+
+  const doubleColon = normalized.indexOf('::');
   let parts: string[];
   if (doubleColon !== -1) {
-    const leftStr = address.slice(0, doubleColon);
-    const rightStr = address.slice(doubleColon + 2);
+    const leftStr = normalized.slice(0, doubleColon);
+    const rightStr = normalized.slice(doubleColon + 2);
     const left = leftStr ? leftStr.split(':') : [];
     const right = rightStr ? rightStr.split(':') : [];
-    const missing = 8 - (left.length + right.length);
+    const missing = Math.max(0, 8 - (left.length + right.length));
     const middle: string[] = [];
     for (let i = 0; i < missing; i += 1) middle.push('0');
     parts = [...left, ...middle, ...right];
   } else {
-    parts = address.split(':');
-  }
-
-  const last = parts[parts.length - 1] ?? '';
-  if (last.includes('.')) {
-    const octets = last.split('.').map((o) => parseInt(o, 10));
-    if (octets.length === 4 && octets.every((o) => !isNaN(o) && o >= 0 && o <= 255)) {
-      const hex1 = (((octets[0]! << 8) | octets[1]!) >>> 0).toString(16);
-      const hex2 = (((octets[2]! << 8) | octets[3]!) >>> 0).toString(16);
-      parts.splice(parts.length - 1, 1, hex1, hex2);
-    }
+    parts = normalized.split(':');
   }
 
   const first4 = parts.slice(0, 4).map((p) => {

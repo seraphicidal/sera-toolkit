@@ -35,6 +35,12 @@ export class RedditProvider extends YtdlpProvider {
     requiresOauth: false,
   });
 
+  async close(): Promise<void> {
+    const agents = [...this.proxyAgents.values()];
+    this.proxyAgents.clear();
+    await Promise.all(agents.map((agent) => agent.close().catch(() => undefined)));
+  }
+
   override normalize(url: URL): URL {
     const out = new URL(url.toString());
     out.protocol = 'https:';

@@ -18,6 +18,8 @@ import { isIpLiteral, isPublicAddress } from './ip.js';
 export interface EgressGuardOptions {
   readonly resolve?: (hostname: string) => Promise<readonly LookupAddress[]>;
   readonly isAllowedAddress?: (address: string) => boolean;
+  readonly isBlockedHost?: (hostname: string) => boolean;
+  readonly isBlockedUrl?: (url: string | URL) => boolean;
   readonly allowPrivateAddresses?: boolean;
   readonly allowNonStandardPorts?: boolean;
   readonly upstreamProxy?: string;
@@ -42,6 +44,8 @@ const defaultResolve = (hostname: string): Promise<LookupAddress[]> =>
 export class EgressGuard {
   private readonly resolveName: (hostname: string) => Promise<readonly LookupAddress[]>;
   private readonly isAllowedAddress: (address: string) => boolean;
+  private readonly isBlockedHost: ((hostname: string) => boolean) | undefined;
+  private readonly isBlockedUrl: ((url: string | URL) => boolean) | undefined;
   private readonly allowNonStandardPorts: boolean;
   private readonly defaultUpstreamProxy: string | undefined;
   private readonly connectTimeoutMs: number;
@@ -54,6 +58,8 @@ export class EgressGuard {
     this.resolveName = options.resolve ?? defaultResolve;
     this.isAllowedAddress =
       options.isAllowedAddress ?? (options.allowPrivateAddresses ? () => true : isPublicAddress);
+    this.isBlockedHost = options.isBlockedHost;
+    this.isBlockedUrl = options.isBlockedUrl;
     this.allowNonStandardPorts =
       options.allowNonStandardPorts ??
       (Boolean(options.allowPrivateAddresses) || options.isAllowedAddress !== undefined);
@@ -63,6 +69,13 @@ export class EgressGuard {
 
   private isAllowedPort(port: number): boolean {
     return this.allowNonStandardPorts || port === 80 || port === 443;
+  }
+
+  private isDestinationBlocked(hostname: string, url?: string | URL): boolean {
+    const bare = unbracket(hostname).toLowerCase().replace(/\.+$/, '');
+    if (this.isBlockedHost?.(bare)) return true;
+    if (url !== undefined && this.isBlockedUrl?.(url)) return true;
+    return false;
   }
 
   async addressesFor(hostname: string): Promise<readonly LookupAddress[]> {
@@ -99,6 +112,9 @@ export class EgressGuard {
     const parsed = typeof url === 'string' ? new URL(url) : url;
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
       throw seraError('BLOCKED_ADDRESS', { detail: `egress: protocol ${parsed.protocol}` });
+    }
+    if (this.isDestinationBlocked(parsed.hostname, parsed)) {
+      throw seraError('BLOCKED_ADDRESS', { detail: `egress: ${parsed.hostname} is blocked` });
     }
     await this.addressesFor(parsed.hostname);
   }
@@ -179,6 +195,10 @@ export class EgressGuard {
       return;
     }
     if (!this.isAllowedPort(target.port)) {
+      refuse(client, 403, 'Forbidden');
+      return;
+    }
+    if (this.isDestinationBlocked(target.host)) {
       refuse(client, 403, 'Forbidden');
       return;
     }
@@ -286,10 +306,11 @@ export class EgressGuard {
     client.once('close', () => upstream.destroy());
     upstream.once('close', () => client.destroy());
 
+    const pinnedAddress = addresses.find((a) => a.family === 4) ?? addresses[0]!;
     const connectEvent = proxyUrl.protocol === 'https:' ? 'secureConnect' : 'connect';
     upstream.once(connectEvent, () => {
-      const hostHeader = `${formatAuthorityHost(target.host)}:${String(target.port)}`;
-      let connectReq = `CONNECT ${hostHeader} HTTP/1.1\r\nHost: ${hostHeader}\r\n`;
+      const pinnedAuthority = `${formatAuthorityHost(pinnedAddress.address)}:${String(target.port)}`;
+      let connectReq = `CONNECT ${pinnedAuthority} HTTP/1.1\r\nHost: ${pinnedAuthority}\r\n`;
       if (proxyUrl.username || proxyUrl.password) {
         const creds = Buffer.from(
           `${decodeURIComponent(proxyUrl.username)}:${decodeURIComponent(proxyUrl.password)}`,
@@ -399,6 +420,10 @@ export class EgressGuard {
       res.writeHead(403, { 'content-type': 'text/plain' }).end('refused by the port guard');
       return;
     }
+    if (this.isDestinationBlocked(url.hostname, url)) {
+      res.writeHead(403, { 'content-type': 'text/plain' }).end('refused by the address guard');
+      return;
+    }
 
     let reqGone = res.destroyed || req.destroyed;
     const onEarlyAbort = () => {
@@ -457,12 +482,14 @@ export class EgressGuard {
       headers['proxy-authorization'] = `Basic ${creds}`;
     }
 
+    const pinnedUrl = new URL(url.toString());
+    pinnedUrl.hostname = formatAuthorityHost(address.address);
     const makeRequest = proxyUrl.protocol === 'https:' ? httpsRequest : httpRequest;
     const upstream = makeRequest({
       host: unbracket(proxyUrl.hostname),
       port: upstreamPort(proxyUrl),
       method: req.method,
-      path: req.url,
+      path: pinnedUrl.toString(),
       headers,
       agent: false,
       timeout: this.connectTimeoutMs,

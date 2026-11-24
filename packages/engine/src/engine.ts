@@ -1,8 +1,13 @@
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { HealthCheck, HealthReport, ServiceInfo } from '@sera/contracts/types';
+import type {
+  HealthCheck,
+  HealthReport,
+  NodeAvailability,
+  ServiceInfo,
+} from '@sera/contracts/types';
 import type { Dispatcher } from 'undici';
-import { loadConfig, VERSION, type EngineConfig } from './config.js';
+import { ConfigError, loadConfig, VERSION, type EngineConfig } from './config.js';
 import { ffmpegVersion } from './convert/ffmpeg.js';
 import {
   ExtractionNodeRegistry,
@@ -14,7 +19,7 @@ import { RemoteOverHttp } from './extract/remote-http.js';
 import { version as ytdlpVersion } from './extract/ytdlp.js';
 import { JobService } from './jobs/service.js';
 import { createLogger, type Logger } from './logging.js';
-import { ProviderRegistry } from './providers/index.js';
+import { normalizeForProvider, ProviderRegistry } from './providers/index.js';
 import type { MediaHostPolicy } from './providers/instagram-media.js';
 import { MemoryJobBackend } from './queue/memory.js';
 import type { JobBackend, WorkerHandle } from './queue/types.js';
@@ -98,20 +103,37 @@ export class SeraEngine {
 
     await mkdir(config.dataDir, { recursive: true });
 
+    const registry = new ProviderRegistry(undefined, config);
     const denylist =
       options.denylist ??
       new Denylist({
         staticHosts: config.blockedHosts,
         filePath: config.dataDir ? join(config.dataDir, 'denylist.json') : undefined,
+        canonicalizeUrl: (url) => {
+          const provider = registry.detect(url);
+          return provider ? normalizeForProvider(provider, url) : url;
+        },
       });
+    await denylist.reload();
 
-    const registry = new ProviderRegistry(undefined, config);
     const extractionNodes = new ExtractionNodeRegistry(logger);
 
-    const remote: RemoteExtraction =
-      config.extractionNodes.enabled && config.apiUrl
-        ? new RemoteOverHttp(config.apiUrl, config.extractionNodes.workerToken, logger)
-        : extractionNodes;
+    let remote: RemoteExtraction = extractionNodes;
+    if (config.extractionNodes.enabled && config.apiUrl) {
+      const remoteToken =
+        config.extractionNodes.workerToken ||
+        (!config.isProduction && config.extractionNodes.legacyTokenUsed
+          ? config.extractionNodes.token
+          : '');
+      if (config.isProduction && !config.extractionNodes.workerToken) {
+        throw new ConfigError(
+          'SERA_EXTRACTION_WORKER_TOKEN must be set when SERA_API_URL is configured with extraction nodes in production.',
+        );
+      }
+      if (remoteToken) {
+        remote = new RemoteOverHttp(config.apiUrl, remoteToken, logger);
+      }
+    }
     const resolver = new MediaResolver({
       config,
       logger,
@@ -178,6 +200,38 @@ export class SeraEngine {
         maxItemsPerJob: this.config.maxItemsPerJob,
         retentionSeconds: this.config.retentionSeconds,
       },
+      nodeAvailability: this.nodeAvailability(),
+    };
+  }
+
+  private nodeAvailability(): NodeAvailability {
+    if (!this.config.extractionNodes.enabled) {
+      return {
+        enabled: false,
+        totalNodes: 0,
+        healthyNodes: 0,
+        residentialNodes: 0,
+        features: [],
+        providers: [],
+      };
+    }
+    const nodes = (this.remote ?? this.extractionNodes).status();
+    const healthy = nodes.filter((node) => node.healthy);
+    const features = new Set<string>();
+    const providers = new Set<string>();
+    let residentialNodes = 0;
+    for (const node of healthy) {
+      if (node.networkClass === 'residential') residentialNodes += 1;
+      for (const feature of node.features ?? []) features.add(feature);
+      for (const provider of node.providers) providers.add(provider);
+    }
+    return {
+      enabled: true,
+      totalNodes: nodes.length,
+      healthyNodes: healthy.length,
+      residentialNodes,
+      features: [...features].sort(),
+      providers: [...providers].sort(),
     };
   }
 
@@ -267,6 +321,8 @@ export class SeraEngine {
     await this.backend.close().catch(() => undefined);
     await this.usage.close().catch(() => undefined);
     await this.resolver.close().catch(() => undefined);
+    await this.registry.close().catch(() => undefined);
+    await this.denylist.flush().catch(() => undefined);
     (this.remote as { close?: () => void } | undefined)?.close?.();
   }
 }

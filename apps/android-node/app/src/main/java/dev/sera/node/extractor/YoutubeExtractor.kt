@@ -5,9 +5,12 @@ import dev.sera.node.model.ResolvedMedia
 import dev.sera.node.model.ResolvedPlan
 import kotlinx.serialization.json.JsonPrimitive
 import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 private val ALTERNATE_CLIENTS = listOf("web_safari", "android")
 private val THUMBNAIL_EXT_REGEX = Regex("""\.(jpg|jpeg|png|webp)(?:[?#]|$)""", RegexOption.IGNORE_CASE)
+private val VALID_PLAYER_CLIENT_TOKEN = Regex("""^[A-Za-z0-9_+-]{1,32}$""")
+private val VALID_PLAYER_CLIENTS = Regex("""^[A-Za-z0-9_,+-]{1,128}$""")
 
 class YoutubeExtractor(
     executor: MediaCommandExecutor,
@@ -25,17 +28,38 @@ class YoutubeExtractor(
     override fun wantsPlaylist(url: HttpUrl): Boolean =
         url.encodedPath.startsWith("/playlist") && url.queryParameter("list") != null
 
+    private fun sanitizePlayerClients(raw: String?): String? {
+        val cleaned = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        val tokens = cleaned.split(',')
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && VALID_PLAYER_CLIENT_TOKEN.matches(it) }
+        if (tokens.isEmpty()) return null
+        val joined = tokens.joinToString(",")
+        return joined.takeIf { VALID_PLAYER_CLIENTS.matches(it) }
+    }
+
+    private fun sanitizePotProviderUrl(raw: String?): String? {
+        val cleaned = raw?.trim()?.trimEnd('/')?.takeIf { it.isNotEmpty() } ?: return null
+        if (hasForbiddenUrlChar(cleaned) || cleaned.contains(';')) return null
+        val parsed = cleaned.toHttpUrlOrNull() ?: return null
+        if (parsed.scheme != "http" && parsed.scheme != "https") return null
+        if (parsed.encodedUsername.isNotEmpty() || parsed.encodedPassword.isNotEmpty()) return null
+        return cleaned.takeIf { it.length <= 160 }
+    }
+
     private fun configuredPlayerClients(context: ExtractionExecutionContext): String? {
         val hotClients = context.hotConfig?.youtube?.playerClients.orEmpty()
             .map { it.trim() }
-            .filter { it.isNotEmpty() }
-        if (hotClients.isNotEmpty()) return hotClients.joinToString(",")
-        return context.runtimeConfig.youtubePlayerClients?.trim()?.takeIf { it.isNotEmpty() }
+            .filter { it.isNotEmpty() && VALID_PLAYER_CLIENT_TOKEN.matches(it) }
+        if (hotClients.isNotEmpty()) {
+            return sanitizePlayerClients(hotClients.joinToString(","))
+        }
+        return sanitizePlayerClients(context.runtimeConfig.youtubePlayerClients)
     }
 
     private fun configuredPotProviderUrl(context: ExtractionExecutionContext): String? {
-        val hotPot = context.hotConfig?.youtube?.potProviderUrl?.trim()?.takeIf { it.isNotEmpty() }
-        return hotPot ?: context.runtimeConfig.youtubePotProviderUrl?.trim()?.takeIf { it.isNotEmpty() }
+        val hotPot = sanitizePotProviderUrl(context.hotConfig?.youtube?.potProviderUrl)
+        return hotPot ?: sanitizePotProviderUrl(context.runtimeConfig.youtubePotProviderUrl)
     }
 
     override fun extractorArgs(

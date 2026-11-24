@@ -1,3 +1,4 @@
+import { rm, stat } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { seraError } from '../errors.js';
 import { run } from '../util/spawn.js';
@@ -305,7 +306,7 @@ export function buildArgs(request: ConvertRequest, source: ProbeResult): string[
     }
   }
 
-  if (request.maxOutputBytes) args.push('-fs', String(request.maxOutputBytes));
+  if (request.maxOutputBytes) args.push('-fs', String(request.maxOutputBytes + 1));
   args.push('-progress', 'pipe:1', '-nostats', request.output);
   return args;
 }
@@ -326,12 +327,15 @@ export async function convert(request: ConvertRequest): Promise<void> {
   }
 
   let lastPercent = 0;
+  let lastOutTimeSeconds = 0;
   const onLine = (line: string): void => {
     const [key, value] = line.split('=');
     if (key !== 'out_time_us' && key !== 'out_time_ms') return;
-    if (!duration || duration <= 0 || !value || value === 'N/A') return;
+    if (!value || value === 'N/A') return;
     const micros = Number(value);
     if (!Number.isFinite(micros)) return;
+    lastOutTimeSeconds = Math.max(lastOutTimeSeconds, micros / 1_000_000);
+    if (!duration || duration <= 0) return;
     const percent = Math.min(99, (micros / 1_000_000 / duration) * 100);
     if (percent > lastPercent) {
       lastPercent = percent;
@@ -352,6 +356,25 @@ export async function convert(request: ConvertRequest): Promise<void> {
     throw seraError('CONVERSION_FAILED', {
       detail: `ffmpeg exit ${result.code} for ${request.spec.kind}: ${result.stderrTail.slice(-500)}`,
     });
+  }
+  if (request.maxOutputBytes) {
+    const written = await stat(request.output).catch(() => undefined);
+    const expectedDuration =
+      request.spec.kind === 'gif' && duration !== undefined ? Math.min(duration, 30) : duration;
+    const truncatedByLimit =
+      written !== undefined &&
+      (written.size >= request.maxOutputBytes ||
+        (expectedDuration !== undefined &&
+          expectedDuration > 1 &&
+          written.size >= Math.floor(request.maxOutputBytes * 0.85) &&
+          lastOutTimeSeconds > 0 &&
+          lastOutTimeSeconds < expectedDuration - 0.5));
+    if (truncatedByLimit) {
+      await rm(request.output, { force: true }).catch(() => undefined);
+      throw seraError('TOO_LARGE', {
+        detail: `ffmpeg output hit size ceiling (${written.size} bytes >= ${request.maxOutputBytes})`,
+      });
+    }
   }
   request.onProgress?.(100);
 }

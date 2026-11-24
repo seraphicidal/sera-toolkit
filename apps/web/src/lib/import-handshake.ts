@@ -1,21 +1,10 @@
 import type { ImportRequest } from '@sera/contracts/types';
 
-export const INSTAGRAM_ORIGINS: readonly string[] = [
-  'https://www.instagram.com',
-  'https://instagram.com',
-];
-
-export const READY = 'sera-import-ready';
-export const PAYLOAD = 'sera-import-payload';
-export const ACK = 'sera-import-ack';
-
 export const FRAGMENT_VERSION = '2';
 
-interface PayloadMessage {
-  readonly type: typeof PAYLOAD;
-  readonly url: unknown;
-  readonly node: unknown;
-}
+export const MAX_IMPORT_FRAGMENT_LENGTH = 65_536;
+
+const IMPORT_MEDIA_HOSTS = ['cdninstagram.com', 'fbcdn.net'];
 
 function onInstagramHost(value: unknown): boolean {
   if (typeof value !== 'string') return false;
@@ -40,73 +29,6 @@ function looksLikeImport(value: unknown): value is ImportRequest {
     !Array.isArray(record.node)
   );
 }
-
-export function trustedImport(
-  event: MessageEvent,
-  opener: Window | null,
-): ImportRequest | undefined {
-  if (!opener || event.source !== opener) return undefined;
-  if (!INSTAGRAM_ORIGINS.includes(event.origin)) return undefined;
-  const data = event.data as PayloadMessage | undefined;
-  if (data?.type !== PAYLOAD) return undefined;
-  const request = { url: data.url, node: data.node };
-  if (!looksLikeImport(request)) return undefined;
-  if (mediaUrlsOf(request.node).some((url) => !onInstagramCdn(url))) return undefined;
-  return request;
-}
-
-export interface ImportChannel {
-  readonly received: Promise<ImportRequest>;
-  readonly close: () => void;
-}
-
-export function openImportChannel(target: Window, timeoutMs = 20_000): ImportChannel {
-  const opener = target.opener as Window | null;
-  let settle!: (request: ImportRequest) => void;
-  let fail!: (reason: Error) => void;
-  const received = new Promise<ImportRequest>((resolve, reject) => {
-    settle = resolve;
-    fail = reject;
-  });
-
-  let closed = false;
-  if (!opener || opener.closed) {
-    closed = true;
-    const noopClose = (): void => {
-      closed = true;
-    };
-    queueMicrotask(() => fail(new Error('no active opener window')));
-    return { received, close: noopClose };
-  }
-
-  const onMessage = (event: MessageEvent): void => {
-    const request = trustedImport(event, opener);
-    if (!request) return;
-    (event.source as Window | null)?.postMessage({ type: ACK }, event.origin);
-    close();
-    settle(request);
-  };
-
-  const timer = target.setTimeout(() => {
-    close();
-    fail(new Error('no post arrived'));
-  }, timeoutMs);
-
-  const close = (): void => {
-    if (closed) return;
-    closed = true;
-    target.clearTimeout(timer);
-    target.removeEventListener('message', onMessage);
-  };
-
-  target.addEventListener('message', onMessage);
-
-  return { received, close };
-}
-
-export const MAX_IMPORT_FRAGMENT_LENGTH = 65_536;
-
-const IMPORT_MEDIA_HOSTS = ['cdninstagram.com', 'fbcdn.net'];
 
 function onInstagramCdn(value: unknown): boolean {
   if (typeof value !== 'string') return false;

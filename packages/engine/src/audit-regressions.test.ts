@@ -104,6 +104,7 @@ describe('audit pass 1 regressions', () => {
       await mkdir(targetPath);
       const list = new Denylist({ filePath: targetPath });
       list.blockHost('evil.example', 'test');
+      await list.flush();
       const remaining = await readdir(dir);
       expect(remaining.filter((name) => name.endsWith('.tmp'))).toEqual([]);
     } finally {
@@ -589,7 +590,8 @@ describe('audit pass 2 regressions', () => {
         () => undefined,
       );
       expect(result.filename.endsWith('.jpg')).toBe(true);
-      expect(existsSync(join(dir, 'deadbeef0000000000000003', 'info-0', 'info.json'))).toBe(true);
+      expect(existsSync(join(dir, 'deadbeef0000000000000003', 'info-0', 'info.json'))).toBe(false);
+      expect(existsSync(join(dir, 'deadbeef0000000000000003', 'work', 'info.json'))).toBe(false);
     } finally {
       await resolver.close();
       await rm(dir, { recursive: true, force: true });

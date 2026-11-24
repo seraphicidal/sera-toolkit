@@ -134,6 +134,7 @@ abstract class YtdlpBaseExtractor(
                 useExtractors = useExtractors(url, context),
                 timeoutMs = context.resolveTimeoutMs,
                 maxEntries = context.maxItemsPerJob,
+                allowPrivateAddresses = context.runtimeConfig.allowPrivateAddresses,
                 isCancelled = context.isCancelled,
             ),
         )

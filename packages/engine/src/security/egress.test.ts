@@ -246,10 +246,12 @@ describe('upstream proxy chaining', () => {
   let upstreamProxyUrl: string;
   let chainedGuardUrl: string;
   const upstreamRequests: string[] = [];
+  const upstreamHosts: string[] = [];
 
   beforeAll(async () => {
     upstreamServer = createServer((req, res) => {
       upstreamRequests.push(`HTTP ${req.url ?? ''}`);
+      upstreamHosts.push(String(req.headers.host ?? ''));
       res.writeHead(200, { 'content-type': 'text/plain' }).end('via-upstream');
     });
     upstreamServer.on('connect', (_req, client: Duplex) => {
@@ -280,19 +282,21 @@ describe('upstream proxy chaining', () => {
 
   afterEach(() => {
     upstreamRequests.length = 0;
+    upstreamHosts.length = 0;
   });
 
-  it('chains plain HTTP request through upstream proxy', async () => {
+  it('chains plain HTTP request through upstream proxy with pinned resolved IP and original Host', async () => {
     const res = await viaProxy(`http://site.test:${String(originPort)}/hello`, chainedGuardUrl);
     expect(res.status).toBe(200);
     expect(res.body).toBe('via-upstream');
-    expect(upstreamRequests).toContain(`HTTP http://site.test:${String(originPort)}/hello`);
+    expect(upstreamRequests).toContain(`HTTP http://127.0.0.1:${String(originPort)}/hello`);
+    expect(upstreamHosts).toContain(`site.test:${String(originPort)}`);
   });
 
-  it('chains CONNECT request through upstream proxy', async () => {
+  it('chains CONNECT request through upstream proxy with pinned resolved IP', async () => {
     const status = await connectVia(`site.test:${String(originPort)}`, chainedGuardUrl);
     expect(status).toBe('HTTP/1.1 200 Connection Established');
-    expect(upstreamRequests).toContain(`CONNECT site.test:${String(originPort)}`);
+    expect(upstreamRequests).toContain(`CONNECT 127.0.0.1:${String(originPort)}`);
   });
 
   it('refuses private host without forwarding to upstream proxy', async () => {
@@ -451,6 +455,34 @@ describe('the egress proxy upstream validation', () => {
       expect(connectStatus).toContain('502');
     } finally {
       await socksGuard.close();
+    }
+  });
+
+  it('enforces isBlockedHost and isBlockedUrl across assertPublicDestination, forward, and CONNECT', async () => {
+    const blockedGuard = new EgressGuard({
+      resolve: table({
+        'blocked.test': ['93.184.216.34'],
+        'allowed.test': ['93.184.216.34'],
+      }),
+      isAllowedAddress: isPublicAddress,
+      isBlockedHost: (host) => host === 'blocked.test',
+      isBlockedUrl: (url) => String(url).includes('/forbidden'),
+      allowNonStandardPorts: true,
+      connectTimeoutMs: 1_000,
+    });
+    const proxy = await blockedGuard.proxyUrl();
+    try {
+      expect(await codeOf(blockedGuard.assertPublicDestination('https://blocked.test/v.mp4'))).toBe(
+        'BLOCKED_ADDRESS',
+      );
+      expect(
+        await codeOf(blockedGuard.assertPublicDestination('https://allowed.test/forbidden')),
+      ).toBe('BLOCKED_ADDRESS');
+      expect(await connectVia('blocked.test:443', proxy)).toBe('HTTP/1.1 403 Forbidden');
+      const blockedForward = await viaProxy('http://allowed.test/forbidden', proxy);
+      expect(blockedForward.status).toBe(403);
+    } finally {
+      await blockedGuard.close();
     }
   });
 });

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { isSafeDownloadPath } from '@/lib/format';
 import { ClearHistoryButton } from './clear-history-button';
 import {
@@ -14,7 +14,7 @@ import {
 
 const TICK_MS = 30_000;
 
-export function RecentDownloads({
+export const RecentDownloads = memo(function RecentDownloads({
   onAgain,
   disabled = false,
 }: {
@@ -23,11 +23,15 @@ export function RecentDownloads({
 }) {
   const [entries, setEntries] = useState<HistoryEntry[]>([]);
   const [now, setNow] = useState(() => Date.now());
+  const [clearedNotice, setClearedNotice] = useState(false);
+  const noticeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   useEffect(() => {
     const refresh = () => {
-      setEntries(readHistory());
+      const next = readHistory();
+      setEntries(next);
       setNow(Date.now());
+      if (next.length > 0) setClearedNotice(false);
     };
     const onStorage = (event: StorageEvent) => {
       if (event.key === null || event.key === HISTORY_KEY) refresh();
@@ -38,16 +42,51 @@ export function RecentDownloads({
     return () => {
       window.removeEventListener(HISTORY_EVENT, refresh);
       window.removeEventListener('storage', onStorage);
+      if (noticeTimer.current) clearTimeout(noticeTimer.current);
     };
   }, []);
 
   useEffect(() => {
     if (!entries.length) return undefined;
-    const timer = setInterval(() => setNow(Date.now()), TICK_MS);
-    return () => clearInterval(timer);
+    let timer: ReturnType<typeof setInterval> | undefined;
+    const start = () => {
+      if (timer || document.visibilityState !== 'visible') return;
+      setNow(Date.now());
+      timer = setInterval(() => setNow(Date.now()), TICK_MS);
+    };
+    const stop = () => {
+      if (timer) clearInterval(timer);
+      timer = undefined;
+    };
+    const onVisibility = () => (document.visibilityState === 'visible' ? start() : stop());
+    start();
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      stop();
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
   }, [entries.length]);
 
-  if (!entries.length) return null;
+  const handleCleared = () => {
+    setClearedNotice(true);
+    if (noticeTimer.current) clearTimeout(noticeTimer.current);
+    noticeTimer.current = setTimeout(() => setClearedNotice(false), 3_000);
+    const urlInput = document.getElementById('sera-url');
+    if (urlInput instanceof HTMLElement) urlInput.focus();
+  };
+
+  if (!entries.length) {
+    if (!clearedNotice) return null;
+    return (
+      <p
+        role="status"
+        aria-live="polite"
+        className="rounded-[var(--radius-input)] border border-[var(--color-line)] bg-[var(--color-sunken)] px-3.5 py-2.5 text-center text-xs font-medium text-[var(--color-success)]"
+      >
+        Local download history cleared.
+      </p>
+    );
+  }
 
   return (
     <section aria-labelledby="recent-heading" className="flex flex-col gap-2.5">
@@ -60,7 +99,8 @@ export function RecentDownloads({
         </h2>
         <ClearHistoryButton
           label="Clear history"
-          className="cursor-pointer rounded-md text-xs text-[var(--color-ink-faint)] transition-colors hover:text-[var(--color-ink)] focus-visible:shadow-[var(--shadow-focus)]"
+          onCleared={handleCleared}
+          className="cursor-pointer rounded-md px-1.5 py-1 text-xs text-[var(--color-ink-faint)] transition-colors hover:text-[var(--color-ink)] focus-visible:shadow-[var(--shadow-focus)]"
         />
       </div>
       <ul className="divide-y divide-[var(--color-line)] overflow-hidden rounded-[var(--radius-input)] border border-[var(--color-line)] bg-[var(--color-surface)]">
@@ -83,7 +123,7 @@ export function RecentDownloads({
                   href={entry.downloadPath}
                   download={entry.filename}
                   aria-label={`Download ${entry.filename}`}
-                  className="shrink-0 rounded-lg bg-[var(--color-accent)] px-2.5 py-1.5 text-xs font-medium text-[var(--color-accent-ink)] transition-colors hover:bg-[var(--color-accent-hover)]"
+                  className="inline-flex min-h-9 shrink-0 items-center rounded-lg bg-[var(--color-accent)] px-3 py-1.5 text-xs font-medium text-[var(--color-accent-ink)] transition-colors hover:bg-[var(--color-accent-hover)]"
                 >
                   Download
                 </a>
@@ -93,7 +133,7 @@ export function RecentDownloads({
                   onClick={() => onAgain(entry.url)}
                   disabled={disabled}
                   aria-label={`Download again: ${entry.title}`}
-                  className="shrink-0 cursor-pointer rounded-lg border border-[var(--color-line)] px-2.5 py-1.5 text-xs font-medium transition-colors hover:bg-[var(--color-sunken)] disabled:cursor-not-allowed disabled:opacity-50"
+                  className="inline-flex min-h-9 shrink-0 cursor-pointer items-center rounded-lg border border-[var(--color-line)] px-3 py-1.5 text-xs font-medium transition-colors hover:bg-[var(--color-sunken)] disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Download again
                 </button>
@@ -104,4 +144,4 @@ export function RecentDownloads({
       </ul>
     </section>
   );
-}
+});

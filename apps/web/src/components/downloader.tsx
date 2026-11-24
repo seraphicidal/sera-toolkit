@@ -1,15 +1,17 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import type {
   Job,
   JobError,
   MediaInfo,
   PackagingMode,
+  ServiceInfo,
   SubtitleFormat,
 } from '@sera/contracts/types';
-import { ApiError, cancelJob, createJob, resolveMedia } from '@/lib/api';
-import { cx, formatBytes, formatDuration, isRunning, pluralize, stepRadio } from '@/lib/format';
+import { ApiError, cancelJob, createJob, getServiceInfo, resolveMedia } from '@/lib/api';
+import { cx, formatBytes, formatDuration, pluralize, stepRadio } from '@/lib/format';
 import { addToHistory } from '@/lib/history';
 import {
   availableKinds,
@@ -27,26 +29,31 @@ import {
   type SubtitleChoices,
 } from '@/lib/subtitles';
 import { endPlaceholder, summarizeTrim, type TrimSummary } from '@/lib/trim';
-import { useJob } from '@/lib/use-job';
-import { DownloadIcon, SpinnerIcon } from './icons';
+import { ActiveJobPanel } from './active-job-panel';
+import { DownloadIcon } from './icons';
 import { ErrorPanel, type ErrorAction } from './error-panel';
 import { FormatPicker } from './format-picker';
 import { ItemPicker } from './item-picker';
 import { MediaPreview } from './media-preview';
-import { ProgressPanel } from './progress-panel';
 import { RecentDownloads } from './recent-downloads';
-import { ResultPanel } from './result-panel';
-import { UrlForm } from './url-form';
+import { MAX_BATCH_URLS, UrlForm } from './url-form';
 
 type Phase = 'idle' | 'analyzing' | 'ready' | 'submitting' | 'running' | 'done';
+type BatchItemStatus = 'pending' | 'ready' | 'done' | 'failed';
 
 const PREFERRED_KIND_KEY = 'sera-preferred-kind';
-const MAX_SELECTED_ITEMS = 25;
+const DEFAULT_MAX_SELECTED_ITEMS = 25;
 
 function getPreferredKind(): SelectableKind | undefined {
   try {
     const saved = localStorage.getItem(PREFERRED_KIND_KEY);
-    if (saved === 'video' || saved === 'audio' || saved === 'image' || saved === 'gif') {
+    if (
+      saved === 'video' ||
+      saved === 'audio' ||
+      saved === 'image' ||
+      saved === 'gif' ||
+      saved === 'file'
+    ) {
       return saved;
     }
   } catch {}
@@ -59,12 +66,15 @@ function setPreferredKind(kind: SelectableKind): void {
   } catch {}
 }
 
-function seedFrom(info: MediaInfo): {
+function seedFrom(
+  info: MediaInfo,
+  maxItems: number,
+): {
   kind: SelectableKind;
   selectedIds: Set<string>;
   label: string | undefined;
 } {
-  const selectedIds = selectItemsUpToMax(info.items, MAX_SELECTED_ITEMS);
+  const selectedIds = selectItemsUpToMax(info.items, maxItems);
   const available = availableKinds(info, selectedIds);
   const preferred = getPreferredKind();
   const kind = preferred && available.includes(preferred) ? preferred : initialKind(info);
@@ -72,14 +82,21 @@ function seedFrom(info: MediaInfo): {
 }
 
 export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo } = {}) {
+  const router = useRouter();
   const importMode = initialInfo !== undefined;
+  const [serviceInfo, setServiceInfo] = useState<ServiceInfo | undefined>(undefined);
+  const maxSelectedItems = serviceInfo?.limits.maxItemsPerJob
+    ? Math.max(1, Math.min(200, serviceInfo.limits.maxItemsPerJob))
+    : DEFAULT_MAX_SELECTED_ITEMS;
+
   const initialSeed = useMemo(
-    () => (initialInfo ? seedFrom(initialInfo) : undefined),
+    () => (initialInfo ? seedFrom(initialInfo, DEFAULT_MAX_SELECTED_ITEMS) : undefined),
     [initialInfo],
   );
   const [url, setUrl] = useState('');
   const [batchQueue, setBatchQueue] = useState<readonly string[]>([]);
   const [batchIndex, setBatchIndex] = useState(0);
+  const [batchStatuses, setBatchStatuses] = useState<readonly BatchItemStatus[]>([]);
   const [phase, setPhase] = useState<Phase>(initialInfo ? 'ready' : 'idle');
   const [info, setInfo] = useState<MediaInfo | undefined>(initialInfo);
   const [error, setError] = useState<JobError | undefined>();
@@ -101,130 +118,178 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   const analyzeAbort = useRef<AbortController | undefined>(undefined);
+  const submitAbort = useRef<AbortController | undefined>(undefined);
   const sessionRef = useRef(0);
-  const { job } = useJob(jobId, initialJob);
+  const sharedUrlRef = useRef<{ read: boolean; url: string | undefined }>({
+    read: false,
+    url: undefined,
+  });
+  const maxItemsRef = useRef(maxSelectedItems);
+  maxItemsRef.current = maxSelectedItems;
+  const activeJobIdRef = useRef<string | undefined>(jobId);
+  activeJobIdRef.current = jobId;
+  const activePhaseRef = useRef<Phase>(phase);
+  activePhaseRef.current = phase;
+  const batchIndexRef = useRef(batchIndex);
+  batchIndexRef.current = batchIndex;
 
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    const controller = new AbortController();
+    getServiceInfo(controller.signal)
+      .then((loaded) => {
+        if (!controller.signal.aborted) setServiceInfo(loaded);
+      })
+      .catch(() => undefined);
+    return () => {
+      controller.abort();
       sessionRef.current += 1;
       analyzeAbort.current?.abort();
+      submitAbort.current?.abort();
+    };
+  }, []);
+
+  const updateBatchStatus = useCallback((idx: number, status: BatchItemStatus) => {
+    setBatchStatuses((prev) => {
+      if (idx < 0 || idx >= prev.length || prev[idx] === status) return prev;
+      const next = [...prev];
+      next[idx] = status;
+      return next;
+    });
+  }, []);
+
+  const reset = useCallback(
+    (preserveBatch = false) => {
+      sessionRef.current += 1;
+      analyzeAbort.current?.abort();
+      submitAbort.current?.abort();
+      setError(undefined);
+      setJobId(undefined);
+      setInitialJob(undefined);
+      setFilename('');
+      setTrimStart('');
+      setTrimEnd('');
+      setSubtitleTrack('');
+      setSubtitleFormat('embed');
+      setSubtitlesOnly(false);
+      setPackaging('auto');
+      setShowAdvanced(false);
+      if (initialInfo) {
+        const seeded = seedFrom(initialInfo, maxItemsRef.current);
+        setInfo(initialInfo);
+        setKind(seeded.kind);
+        setSelectedIds(seeded.selectedIds);
+        setLabel(seeded.label);
+        setPhase('ready');
+        return;
+      }
+      setPhase('idle');
+      setInfo(undefined);
+      setSelectedIds(new Set());
+      setLabel(undefined);
+      if (!preserveBatch) {
+        setBatchQueue([]);
+        setBatchIndex(0);
+        setBatchStatuses([]);
+      }
     },
-    [],
+    [initialInfo],
   );
 
-  const reset = useCallback(() => {
-    sessionRef.current += 1;
-    analyzeAbort.current?.abort();
-    setError(undefined);
-    setJobId(undefined);
-    setInitialJob(undefined);
-    setFilename('');
-    setTrimStart('');
-    setTrimEnd('');
-    setSubtitleTrack('');
-    setSubtitleFormat('embed');
-    setSubtitlesOnly(false);
-    setPackaging('auto');
-    setShowAdvanced(false);
-    if (initialInfo) {
-      const seeded = seedFrom(initialInfo);
-      setInfo(initialInfo);
-      setKind(seeded.kind);
-      setSelectedIds(seeded.selectedIds);
-      setLabel(seeded.label);
-      setPhase('ready');
-      return;
-    }
-    setPhase('idle');
-    setInfo(undefined);
-    setSelectedIds(new Set());
-    setLabel(undefined);
-    setBatchQueue([]);
-    setBatchIndex(0);
-  }, [initialInfo]);
-
   const clearAll = useCallback(() => {
-    reset();
+    reset(false);
     setUrl('');
-    setBatchQueue([]);
-    setBatchIndex(0);
   }, [reset]);
 
-  const analyze = useCallback(async (raw: string) => {
-    sessionRef.current += 1;
-    analyzeAbort.current?.abort();
-    const controller = new AbortController();
-    analyzeAbort.current = controller;
+  const analyze = useCallback(
+    async (raw: string, activeBatchIdx?: number) => {
+      sessionRef.current += 1;
+      analyzeAbort.current?.abort();
+      submitAbort.current?.abort();
+      const controller = new AbortController();
+      analyzeAbort.current = controller;
 
-    setPhase('analyzing');
-    setError(undefined);
-    setInfo(undefined);
-    setJobId(undefined);
-    setInitialJob(undefined);
-    setFilename('');
-    setTrimStart('');
-    setTrimEnd('');
-    setSubtitleTrack('');
-    setSubtitleFormat('embed');
-    setSubtitlesOnly(false);
-    setPackaging('auto');
-    setShowAdvanced(false);
+      setPhase('analyzing');
+      setError(undefined);
+      setInfo(undefined);
+      setJobId(undefined);
+      setInitialJob(undefined);
+      setFilename('');
+      setTrimStart('');
+      setTrimEnd('');
+      setSubtitleTrack('');
+      setSubtitleFormat('embed');
+      setSubtitlesOnly(false);
+      setPackaging('auto');
+      setShowAdvanced(false);
 
-    try {
-      const resolved = await resolveMedia(raw, controller.signal);
-      if (controller.signal.aborted) return;
+      try {
+        const resolved = await resolveMedia(raw, controller.signal);
+        if (controller.signal.aborted) return;
 
-      const everyItem = selectItemsUpToMax(resolved.items, MAX_SELECTED_ITEMS);
-      const available = availableKinds(resolved, everyItem);
-      const preferred = getPreferredKind();
-      const startingKind =
-        preferred && available.includes(preferred) ? preferred : initialKind(resolved);
+        const everyItem = selectItemsUpToMax(resolved.items, maxItemsRef.current);
+        const available = availableKinds(resolved, everyItem);
+        const preferred = getPreferredKind();
+        const startingKind =
+          preferred && available.includes(preferred) ? preferred : initialKind(resolved);
 
-      setInfo(resolved);
-      setKind(startingKind);
-      setSelectedIds(everyItem);
-      setLabel(qualityLabels(resolved, startingKind, everyItem)[0]);
-      setPhase('ready');
-    } catch (caught) {
-      if (controller.signal.aborted) return;
-      setError(
-        caught instanceof ApiError
-          ? {
-              code: caught.code,
-              message: caught.message,
-              hint: caught.hint,
-              retryable: caught.retryable,
-            }
-          : { code: 'INTERNAL', message: 'Something went wrong.', retryable: true },
-      );
-      setPhase('idle');
-    }
-  }, []);
+        setInfo(resolved);
+        setKind(startingKind);
+        setSelectedIds(everyItem);
+        setLabel(qualityLabels(resolved, startingKind, everyItem)[0]);
+        setPhase('ready');
+        if (activeBatchIdx !== undefined) updateBatchStatus(activeBatchIdx, 'ready');
+      } catch (caught) {
+        if (controller.signal.aborted) return;
+        setError(
+          caught instanceof ApiError
+            ? {
+                code: caught.code,
+                message: caught.message,
+                hint: caught.hint,
+                retryable: caught.retryable,
+              }
+            : { code: 'INTERNAL', message: 'Something went wrong.', retryable: true },
+        );
+        setPhase('idle');
+        if (activeBatchIdx !== undefined) updateBatchStatus(activeBatchIdx, 'failed');
+      }
+    },
+    [updateBatchStatus],
+  );
 
   useEffect(() => {
     if (importMode) return;
-    const shared = urlFromFragment(window.location.hash);
+    if (!sharedUrlRef.current.read) {
+      const shared = urlFromFragment(window.location.hash);
+      sharedUrlRef.current = { read: true, url: shared };
+      if (shared) {
+        window.history.replaceState(null, '', window.location.pathname + window.location.search);
+      }
+    }
+    const shared = sharedUrlRef.current.url;
     if (!shared) return;
-    window.history.replaceState(null, '', window.location.pathname + window.location.search);
     setUrl(shared);
     void analyze(shared);
+    return () => {
+      analyzeAbort.current?.abort();
+    };
   }, [importMode, analyze]);
 
   const again = useCallback(
     (link: string) => {
-      if (
-        jobId &&
-        (phase === 'running' || phase === 'submitting' || (job && isRunning(job.state)))
-      ) {
-        void cancelJob(jobId);
+      const currentJobId = activeJobIdRef.current;
+      const currentPhase = activePhaseRef.current;
+      if (currentJobId && (currentPhase === 'running' || currentPhase === 'submitting')) {
+        void cancelJob(currentJobId);
       }
       setBatchQueue([]);
       setBatchIndex(0);
+      setBatchStatuses([]);
       setUrl(link);
       void analyze(link);
       window.scrollTo({ top: 0, behavior: 'smooth' });
     },
-    [analyze, job, jobId, phase],
+    [analyze],
   );
 
   const activeKinds = useMemo(
@@ -243,7 +308,7 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
       const next = new Set(current);
       if (next.has(itemId)) {
         next.delete(itemId);
-      } else if (next.size < MAX_SELECTED_ITEMS) {
+      } else if (next.size < maxItemsRef.current) {
         next.add(itemId);
       }
       return next;
@@ -252,7 +317,7 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
 
   const handleSelectAllItems = useCallback(
     (all: boolean) => {
-      setSelectedIds(all && info ? selectItemsUpToMax(info.items, MAX_SELECTED_ITEMS) : new Set());
+      setSelectedIds(all && info ? selectItemsUpToMax(info.items, maxItemsRef.current) : new Set());
     },
     [info],
   );
@@ -267,6 +332,18 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
       ? (info.items.find((item) => item.options.some((o) => o.id === selection.optionIds[0])) ??
         info.items.find((item) => selectedIds.has(item.id)))
       : undefined;
+
+  const singleItemId = singleItem?.id;
+  const prevSingleItemId = useRef<string | undefined>(singleItemId);
+  useEffect(() => {
+    if (prevSingleItemId.current !== singleItemId) {
+      prevSingleItemId.current = singleItemId;
+      setSubtitleTrack('');
+      setSubtitlesOnly(false);
+      setTrimStart('');
+      setTrimEnd('');
+    }
+  }, [singleItemId]);
 
   const singleOption = singleItem?.options.find((option) => option.id === selection?.optionIds[0]);
   const subtitles = subtitleChoices(singleItem, singleOption);
@@ -292,19 +369,25 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
   const start = useCallback(async () => {
     if (!info || !selection?.optionIds.length) return;
     const session = ++sessionRef.current;
+    submitAbort.current?.abort();
+    const controller = new AbortController();
+    submitAbort.current = controller;
     setPhase('submitting');
     setError(undefined);
 
     try {
-      const created: Job = await createJob({
-        infoId: info.id,
-        optionIds: selection.optionIds,
-        packaging,
-        ...(filename.trim() ? { filename: filename.trim() } : {}),
-        ...(trim.state === 'ok' ? { trim: trim.request } : {}),
-        ...(subtitlesRequested ? { subtitles: subtitlesRequested } : {}),
-      });
-      if (sessionRef.current !== session) {
+      const created: Job = await createJob(
+        {
+          infoId: info.id,
+          optionIds: selection.optionIds,
+          packaging,
+          ...(filename.trim() ? { filename: filename.trim() } : {}),
+          ...(trim.state === 'ok' ? { trim: trim.request } : {}),
+          ...(subtitlesRequested ? { subtitles: subtitlesRequested } : {}),
+        },
+        controller.signal,
+      );
+      if (sessionRef.current !== session || controller.signal.aborted) {
         void cancelJob(created.id);
         return;
       }
@@ -312,7 +395,7 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
       setJobId(created.id);
       setPhase('running');
     } catch (caught) {
-      if (sessionRef.current !== session) return;
+      if (sessionRef.current !== session || controller.signal.aborted) return;
       setError(
         caught instanceof ApiError
           ? {
@@ -327,39 +410,62 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
     }
   }, [info, selection, packaging, filename, trim, subtitlesRequested]);
 
-  useEffect(() => {
-    if (!job || !jobId || job.id !== jobId) return;
-    if (job.state === 'ready') {
+  const handleJobReady = useCallback(
+    (readyJob: Job) => {
       setPhase('done');
-      if (job.result && info) {
+      if (batchQueue.length > 1) {
+        updateBatchStatus(batchIndexRef.current, 'done');
+      }
+      if (readyJob.result && info) {
         addToHistory({
-          jobId: job.id,
+          jobId: readyJob.id,
           title: info.title,
           source: info.providerLabel,
           url: info.url,
-          filename: job.result.filename,
-          downloadPath: job.result.downloadPath,
+          filename: readyJob.result.filename,
+          downloadPath: readyJob.result.downloadPath,
           savedAt: new Date().toISOString(),
-          expiresAt: job.result.expiresAt,
+          expiresAt: readyJob.result.expiresAt,
         });
       }
-      return;
-    }
-    if (job.state === 'failed' || job.state === 'cancelled' || job.state === 'expired') {
-      setError(job.error ?? { code: 'INTERNAL', message: 'The download failed.', retryable: true });
+    },
+    [info, batchQueue.length, updateBatchStatus],
+  );
+
+  const handleJobFailed = useCallback(
+    (failedJob: Job) => {
+      setError(
+        failedJob.error ?? { code: 'INTERNAL', message: 'The download failed.', retryable: true },
+      );
       setPhase('ready');
       setJobId(undefined);
       setInitialJob(undefined);
-    }
-  }, [job, jobId, info]);
+      if (batchQueue.length > 1) {
+        updateBatchStatus(batchIndexRef.current, 'failed');
+      }
+    },
+    [batchQueue.length, updateBatchStatus],
+  );
 
   const cancel = useCallback(() => {
     sessionRef.current += 1;
+    submitAbort.current?.abort();
     if (jobId) void cancelJob(jobId);
     setJobId(undefined);
     setInitialJob(undefined);
     setPhase('ready');
   }, [jobId]);
+
+  const selectBatchItem = useCallback(
+    (targetIdx: number) => {
+      const target = batchQueue[targetIdx];
+      if (!target) return;
+      setBatchIndex(targetIdx);
+      setUrl(target);
+      void analyze(target, targetIdx);
+    },
+    [batchQueue, analyze],
+  );
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
@@ -372,18 +478,21 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
           return;
         }
         if (phase === 'running' || phase === 'submitting') cancel();
-        else if (phase === 'ready' || phase === 'done' || phase === 'analyzing') reset();
+        else if (phase === 'ready' || phase === 'done' || phase === 'analyzing') {
+          reset(batchQueue.length > 1);
+        }
         return;
       }
-      if (event.key === 'Enter') {
+      if (event.key === 'Enter' && !event.defaultPrevented) {
+        if (error) return;
+        const target = event.target instanceof Element ? event.target : null;
+        if (target?.closest('#sera-url, [data-item-picker="true"]')) return;
         const isModifier = event.metaKey || event.ctrlKey;
-        const isInteractive =
-          event.target instanceof Element &&
-          Boolean(
-            event.target.closest(
-              'a, summary, button, input, select, textarea, [role="button"], [contenteditable="true"]',
-            ),
-          );
+        const isInteractive = Boolean(
+          target?.closest(
+            'a, summary, button, input, select, textarea, [role="button"], [contenteditable="true"]',
+          ),
+        );
         if (isModifier || !isInteractive) {
           if (phase === 'ready' && selection?.optionIds.length && trim.state !== 'invalid') {
             event.preventDefault();
@@ -394,11 +503,68 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [phase, cancel, reset, selection, trim.state, start]);
+  }, [phase, error, cancel, reset, selection, trim.state, start, batchQueue.length]);
+
+  const handleUrlChange = useCallback(
+    (next: string) => {
+      setUrl(next);
+      if (info || error || phase === 'analyzing') {
+        reset(false);
+      } else if (!next.trim() && batchQueue.length > 0) {
+        setBatchQueue([]);
+        setBatchIndex(0);
+        setBatchStatuses([]);
+      }
+    },
+    [info, error, phase, reset, batchQueue.length],
+  );
+
+  const handleUrlSubmit = useCallback(
+    (next: string) => {
+      setBatchQueue([]);
+      setBatchIndex(0);
+      setBatchStatuses([]);
+      void analyze(next);
+    },
+    [analyze],
+  );
+
+  const handleBatchSubmit = useCallback(
+    (urls: string[]) => {
+      const capped = urls.slice(0, MAX_BATCH_URLS);
+      setBatchQueue(capped);
+      setBatchIndex(0);
+      setBatchStatuses(capped.map(() => 'pending'));
+      const first = capped[0] ?? '';
+      setUrl(first);
+      if (first) void analyze(first, 0);
+    },
+    [analyze],
+  );
+
+  const handleKindChange = useCallback((nextKind: SelectableKind) => {
+    setKind(nextKind);
+    setPreferredKind(nextKind);
+  }, []);
 
   const busy = phase === 'analyzing';
   const working = phase === 'running' || phase === 'submitting';
   const isCollection = (info?.items.length ?? 0) > 1;
+  const hasNextInBatch = !importMode && batchQueue.length > 1 && batchIndex < batchQueue.length - 1;
+  const batchNextLabel = hasNextInBatch
+    ? `Next in batch (${batchIndex + 2}/${batchQueue.length}) →`
+    : undefined;
+
+  const handleNextInBatch = useCallback(() => {
+    if (batchIndex < batchQueue.length - 1) {
+      selectBatchItem(batchIndex + 1);
+    }
+  }, [batchIndex, batchQueue.length, selectBatchItem]);
+
+  const handleDownloadAgain = useCallback(() => {
+    if (!info) return;
+    void analyze(info.url, batchQueue.length > 1 ? batchIndex : undefined);
+  }, [info, analyze, batchQueue.length, batchIndex]);
 
   const errorActions = useMemo<ErrorAction[]>(() => {
     if (!error) return [];
@@ -410,7 +576,7 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
         onClick: () => {
           setError(undefined);
           if (info) void start();
-          else void analyze(url);
+          else void analyze(url, batchQueue.length > 1 ? batchIndex : undefined);
         },
       });
     }
@@ -418,37 +584,55 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
       actions.push({
         label: 'Download from your browser',
         primary: !error.retryable,
-        onClick: () => window.open('/import', '_blank', 'noopener'),
+        onClick: () => router.push('/import'),
+      });
+    }
+    if (hasNextInBatch) {
+      actions.push({
+        label: 'Skip to next',
+        onClick: handleNextInBatch,
       });
     }
     if (info) actions.push({ label: 'Change format', onClick: () => setError(undefined) });
     actions.push({ label: info ? 'Start over' : 'Clear', onClick: clearAll });
     return actions;
-  }, [error, info, url, importMode, analyze, start, clearAll]);
+  }, [
+    error,
+    info,
+    url,
+    importMode,
+    hasNextInBatch,
+    handleNextInBatch,
+    analyze,
+    start,
+    clearAll,
+    batchQueue.length,
+    batchIndex,
+    router,
+  ]);
+
+  const showActiveJob = working || phase === 'done';
+  const nodesOffline =
+    Boolean(serviceInfo?.nodeAvailability?.enabled) &&
+    (serviceInfo?.nodeAvailability?.healthyNodes ?? 0) === 0;
 
   return (
     <div className="flex flex-col gap-4">
+      {!importMode && nodesOffline && phase === 'idle' && !error && (
+        <p
+          role="status"
+          className="rounded-xl border border-[var(--color-line)] bg-[var(--color-sunken)] px-3.5 py-2.5 text-center text-xs text-[var(--color-ink-muted)]"
+        >
+          Residential extraction nodes are currently offline — some sites may be temporarily
+          unavailable.
+        </p>
+      )}
       {!importMode && (
         <UrlForm
           value={url}
-          onChange={(next) => {
-            setUrl(next);
-            if (info || error || phase === 'analyzing') {
-              reset();
-            }
-          }}
-          onSubmit={(next) => {
-            setBatchQueue([]);
-            setBatchIndex(0);
-            void analyze(next);
-          }}
-          onSubmitBatch={(urls) => {
-            setBatchQueue(urls);
-            setBatchIndex(0);
-            const first = urls[0] ?? '';
-            setUrl(first);
-            if (first) void analyze(first);
-          }}
+          onChange={handleUrlChange}
+          onSubmit={handleUrlSubmit}
+          onSubmitBatch={handleBatchSubmit}
           busy={busy}
           disabled={working}
         />
@@ -466,68 +650,59 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
             <div className="flex items-center gap-1.5">
               <button
                 type="button"
-                disabled={busy || working || batchIndex <= 0}
-                onClick={() => {
-                  const prevIdx = Math.max(0, batchIndex - 1);
-                  const target = batchQueue[prevIdx];
-                  if (!target) return;
-                  setBatchIndex(prevIdx);
-                  setUrl(target);
-                  void analyze(target);
-                }}
-                className="cursor-pointer rounded-md border border-[var(--color-line)] px-2 py-1 text-xs font-medium text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] disabled:cursor-not-allowed disabled:opacity-45"
+                disabled={working || batchIndex <= 0}
+                onClick={() => selectBatchItem(Math.max(0, batchIndex - 1))}
+                className="min-h-8 cursor-pointer rounded-md border border-[var(--color-line)] px-2.5 py-1 text-xs font-medium text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] disabled:cursor-not-allowed disabled:opacity-45"
               >
                 Prev
               </button>
               <button
                 type="button"
-                disabled={busy || working || batchIndex >= batchQueue.length - 1}
-                onClick={() => {
-                  const nextIdx = Math.min(batchQueue.length - 1, batchIndex + 1);
-                  const target = batchQueue[nextIdx];
-                  if (!target) return;
-                  setBatchIndex(nextIdx);
-                  setUrl(target);
-                  void analyze(target);
-                }}
-                className="cursor-pointer rounded-md border border-[var(--color-line)] px-2 py-1 text-xs font-medium text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] disabled:cursor-not-allowed disabled:opacity-45"
+                disabled={working || batchIndex >= batchQueue.length - 1}
+                onClick={() => selectBatchItem(Math.min(batchQueue.length - 1, batchIndex + 1))}
+                className="min-h-8 cursor-pointer rounded-md border border-[var(--color-line)] px-2.5 py-1 text-xs font-medium text-[var(--color-ink-muted)] hover:text-[var(--color-ink)] disabled:cursor-not-allowed disabled:opacity-45"
               >
                 Next
               </button>
               <button
                 type="button"
-                disabled={busy || working}
+                disabled={working}
                 onClick={() => {
                   setBatchQueue([]);
                   setBatchIndex(0);
+                  setBatchStatuses([]);
                 }}
-                className="cursor-pointer rounded-md px-2 py-1 text-xs font-medium text-[var(--color-ink-faint)] hover:text-[var(--color-danger)]"
+                className="min-h-8 cursor-pointer rounded-md px-2 py-1 text-xs font-medium text-[var(--color-ink-faint)] hover:text-[var(--color-danger)] disabled:cursor-not-allowed disabled:opacity-45"
               >
                 Clear batch
               </button>
             </div>
           </div>
 
-          <div className="flex flex-wrap gap-1.5">
+          <div className="flex max-h-28 flex-wrap gap-1.5 overflow-y-auto">
             {batchQueue.map((queuedUrl, idx) => {
               const active = idx === batchIndex;
+              const status = batchStatuses[idx] ?? 'pending';
+              const marker = status === 'done' ? '✓ ' : status === 'failed' ? '! ' : '';
               return (
                 <button
                   key={`${idx}-${queuedUrl}`}
                   type="button"
-                  disabled={busy || working}
-                  onClick={() => {
-                    setBatchIndex(idx);
-                    setUrl(queuedUrl);
-                    void analyze(queuedUrl);
-                  }}
+                  disabled={working}
+                  aria-current={active ? 'true' : undefined}
+                  onClick={() => selectBatchItem(idx)}
                   className={cx(
-                    'max-w-full truncate rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors',
+                    'max-w-full cursor-pointer truncate rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors disabled:cursor-not-allowed',
                     active
                       ? 'border-[var(--color-accent)] bg-[var(--color-accent-wash)] text-[var(--color-accent)]'
-                      : 'border-[var(--color-line)] bg-[var(--color-canvas)] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]',
+                      : status === 'done'
+                        ? 'border-[var(--color-success)]/40 bg-[var(--color-canvas)] text-[var(--color-success)]'
+                        : status === 'failed'
+                          ? 'border-[var(--color-danger)]/40 bg-[var(--color-danger-wash)] text-[var(--color-danger)]'
+                          : 'border-[var(--color-line)] bg-[var(--color-canvas)] text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]',
                   )}
                 >
+                  {marker}
                   {idx + 1}. {queuedUrl}
                 </button>
               );
@@ -544,12 +719,20 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
         <>
           <MediaPreview info={info} />
 
-          {phase === 'done' && job ? (
-            <ResultPanel job={job} onReset={clearAll} />
-          ) : working && job && isRunning(job.state) ? (
-            <ProgressPanel job={job} onCancel={cancel} />
-          ) : working ? (
-            <QueuedNotice />
+          {showActiveJob ? (
+            <ActiveJobPanel
+              jobId={jobId}
+              initialJob={initialJob}
+              submitting={phase === 'submitting'}
+              onReady={handleJobReady}
+              onFailed={handleJobFailed}
+              onCancel={cancel}
+              onReset={clearAll}
+              onDownloadAgain={handleDownloadAgain}
+              hasNextInBatch={hasNextInBatch}
+              batchNextLabel={batchNextLabel}
+              onNextInBatch={handleNextInBatch}
+            />
           ) : (
             <section className="animate-fade-up flex flex-col gap-5 rounded-[var(--radius-panel)] border border-[var(--color-line)] bg-[var(--color-surface)] p-5 shadow-[var(--shadow-lift)]">
               {isCollection && (
@@ -559,7 +742,7 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
                   onToggle={handleToggleItem}
                   onSelectAll={handleSelectAllItems}
                   onSelectIds={setSelectedIds}
-                  maxItems={MAX_SELECTED_ITEMS}
+                  maxItems={maxSelectedItems}
                 />
               )}
 
@@ -567,10 +750,7 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
                 info={info}
                 selectedIds={selectedIds}
                 kind={pickerKind}
-                onKindChange={(nextKind) => {
-                  setKind(nextKind);
-                  setPreferredKind(nextKind);
-                }}
+                onKindChange={handleKindChange}
                 label={effectiveLabel}
                 onLabelChange={setLabel}
               />
@@ -709,7 +889,7 @@ function AdvancedOptions({
         type="button"
         onClick={onToggle}
         aria-expanded={open}
-        className="flex cursor-pointer items-center gap-1.5 text-[0.8125rem] text-[var(--color-ink-muted)] transition-colors hover:text-[var(--color-ink)]"
+        className="flex min-h-9 cursor-pointer items-center gap-1.5 text-[0.8125rem] text-[var(--color-ink-muted)] transition-colors hover:text-[var(--color-ink)]"
       >
         <span
           aria-hidden="true"
@@ -736,7 +916,7 @@ function AdvancedOptions({
               maxLength={200}
               onChange={(event) => onFilenameChange(event.target.value)}
               placeholder="From the post's title"
-              className="w-full rounded-xl border border-[var(--color-line)] bg-[var(--color-canvas)] px-3.5 py-2.5 text-[0.875rem] text-[var(--color-ink)] transition-colors outline-none placeholder:text-[var(--color-ink-faint)] focus:border-[var(--color-accent)]"
+              className="w-full rounded-xl border border-[var(--color-line)] bg-[var(--color-canvas)] px-3.5 py-2.5 text-[0.875rem] text-[var(--color-ink)] transition-colors outline-none placeholder:text-[var(--color-ink-faint)] focus:border-[var(--color-accent)] focus-visible:shadow-[var(--shadow-focus)]"
             />
           </div>
 
@@ -920,7 +1100,8 @@ function TrimFields({
           <input
             id="sera-trim-start"
             type="text"
-            inputMode="numeric"
+            inputMode="text"
+            pattern="(?:[0-9]{1,2}:)?[0-5]?[0-9]:[0-5][0-9]"
             autoComplete="off"
             value={start}
             maxLength={9}
@@ -939,7 +1120,8 @@ function TrimFields({
           <input
             id="sera-trim-end"
             type="text"
-            inputMode="numeric"
+            inputMode="text"
+            pattern="(?:[0-9]{1,2}:)?[0-5]?[0-9]:[0-5][0-9]"
             autoComplete="off"
             value={end}
             maxLength={9}
@@ -978,19 +1160,6 @@ function TrimFields({
               : 'Optional: start and end as m:ss or h:mm:ss.'}
       </p>
     </fieldset>
-  );
-}
-
-function QueuedNotice() {
-  return (
-    <section
-      role="status"
-      aria-live="polite"
-      className="animate-fade-up flex items-center gap-2.5 rounded-[var(--radius-panel)] border border-[var(--color-line)] bg-[var(--color-surface)] p-5"
-    >
-      <SpinnerIcon size={17} className="text-[var(--color-accent)]" />
-      <p className="text-[0.9375rem] text-[var(--color-ink-muted)]">Starting…</p>
-    </section>
   );
 }
 

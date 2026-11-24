@@ -1,3 +1,4 @@
+import { rm, stat } from 'node:fs/promises';
 import { extname } from 'node:path';
 import type { TrimRange } from '@sera/contracts/types';
 import { seraError } from '../errors.js';
@@ -141,7 +142,7 @@ export async function trimMedia(request: TrimMediaRequest): Promise<{ reencoded:
     ...(extension === 'mp4' || extension === 'mov' || extension === 'm4a'
       ? ['-movflags', '+faststart']
       : []),
-    ...(request.maxOutputBytes ? ['-fs', String(request.maxOutputBytes)] : []),
+    ...(request.maxOutputBytes ? ['-fs', String(request.maxOutputBytes + 1)] : []),
     request.output,
   ];
 
@@ -155,6 +156,15 @@ export async function trimMedia(request: TrimMediaRequest): Promise<{ reencoded:
       message: 'The media was downloaded, but trimming it failed.',
       detail: `ffmpeg trim exit ${result.code}: ${result.stderrTail.slice(-500)}`,
     });
+  }
+  if (request.maxOutputBytes) {
+    const written = await stat(request.output).catch(() => undefined);
+    if (written && written.size >= request.maxOutputBytes) {
+      await rm(request.output, { force: true }).catch(() => undefined);
+      throw seraError('TOO_LARGE', {
+        detail: `ffmpeg trim output hit size ceiling (${written.size} bytes >= ${request.maxOutputBytes})`,
+      });
+    }
   }
   return { reencoded: !copy };
 }

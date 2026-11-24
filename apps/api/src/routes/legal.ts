@@ -8,7 +8,12 @@ import type { SeraEngine } from '@sera/engine';
 import { checkAdminAuth } from '../plugins/admin-auth.js';
 import { computeClientKey, normalizeClientAddress } from '../plugins/client.js';
 
+const MAX_STORED_REPORTS = 5000;
+
 export function registerLegalRoutes(app: FastifyInstance, engine: SeraEngine): void {
+  let trackedReports: string[] | undefined;
+  let reportPersistQueue: Promise<void> = Promise.resolve();
+
   app.post(
     '/api/legal/report',
     {
@@ -24,7 +29,7 @@ export function registerLegalRoutes(app: FastifyInstance, engine: SeraEngine): v
       if (!parsed.success) {
         return reply.status(400).send({
           error: {
-            code: 'INVALID_URL',
+            code: 'VALIDATION_ERROR',
             message: 'Invalid report payload.',
             hint: parsed.error.issues[0]?.message,
             retryable: false,
@@ -59,20 +64,31 @@ export function registerLegalRoutes(app: FastifyInstance, engine: SeraEngine): v
 
       if (engine.config.dataDir) {
         const reportDir = join(engine.config.dataDir, 'reports');
-        try {
+        const persist = async (): Promise<void> => {
           await mkdir(reportDir, { recursive: true });
-          const existing = await readdir(reportDir).catch(() => [] as string[]);
-          const MAX_STORED_REPORTS = 5000;
-          if (existing.length >= MAX_STORED_REPORTS) {
-            const stale = existing
+          if (trackedReports === undefined) {
+            const existing = await readdir(reportDir).catch(() => [] as string[]);
+            trackedReports = existing
               .filter((f) => f.endsWith('.json'))
-              .sort((a, b) => reportTimestamp(a) - reportTimestamp(b))
-              .slice(0, Math.max(1, existing.length - MAX_STORED_REPORTS + 1));
-            await Promise.all(
-              stale.map((f) => rm(join(reportDir, f), { force: true }).catch(() => undefined)),
-            );
+              .sort((a, b) => reportTimestamp(a) - reportTimestamp(b) || a.localeCompare(b));
           }
-          const filePath = join(reportDir, `${reportId}.json`);
+          if (trackedReports.length >= MAX_STORED_REPORTS) {
+            const current = await readdir(reportDir).catch(() => [] as string[]);
+            trackedReports = current
+              .filter((f) => f.endsWith('.json'))
+              .sort((a, b) => reportTimestamp(a) - reportTimestamp(b) || a.localeCompare(b));
+            if (trackedReports.length >= MAX_STORED_REPORTS) {
+              const stale = trackedReports.splice(
+                0,
+                Math.max(1, trackedReports.length - MAX_STORED_REPORTS + 1),
+              );
+              await Promise.all(
+                stale.map((f) => rm(join(reportDir, f), { force: true }).catch(() => undefined)),
+              );
+            }
+          }
+          const filename = `${reportId}.json`;
+          const filePath = join(reportDir, filename);
           await writeFile(
             filePath,
             JSON.stringify(
@@ -91,6 +107,12 @@ export function registerLegalRoutes(app: FastifyInstance, engine: SeraEngine): v
             ),
             'utf-8',
           );
+          trackedReports.push(filename);
+        };
+        const nextPersist = reportPersistQueue.then(persist, persist);
+        reportPersistQueue = nextPersist.catch(() => undefined);
+        try {
+          await nextPersist;
         } catch (err) {
           engine.logger.error({ err, reportId }, 'failed to persist legal report');
         }

@@ -30,12 +30,17 @@ services:
     restart: unless-stopped
     read_only: true
     tmpfs:
-      - /tmp
-      - /app/apps/web/.next/cache
+      - /tmp:noexec,nosuid,nodev,size=64m
+      - /app/apps/web/.next/cache:noexec,nosuid,nodev,size=128m
+    pids_limit: 128
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    deploy:
+      resources:
+        limits:
+          memory: 512m
 
   api:
     image: ${SERA_IMAGE_API:-ghcr.io/seraphicidal/sera-api:latest}
@@ -47,7 +52,7 @@ services:
       SERA_SECRET: ${SERA_SECRET:?set SERA_SECRET in .env — see .env.example}
       SERA_CORS_ORIGINS: ${SERA_CORS_ORIGINS:-}
       SERA_QUEUE_DRIVER: redis
-      SERA_REDIS_URL: ${SERA_REDIS_URL:-redis://:${SERA_REDIS_PASSWORD:-sera_secure_redis}@redis:6379}
+      SERA_REDIS_URL: ${SERA_REDIS_URL:-redis://:${SERA_REDIS_PASSWORD:?set SERA_REDIS_PASSWORD in .env — see .env.example}@redis:6379}
       SERA_EMBEDDED_WORKER: 'false'
       SERA_DATA_DIR: /data
       SERA_RETENTION_SECONDS: ${SERA_RETENTION_SECONDS:-1800}
@@ -87,13 +92,14 @@ services:
       SERA_ENABLED_PROVIDERS: ${SERA_ENABLED_PROVIDERS:-}
       SERA_DISABLED_PROVIDERS: ${SERA_DISABLED_PROVIDERS:-}
       SERA_ALLOW_PRIVATE_ADDRESSES: ${SERA_ALLOW_PRIVATE_ADDRESSES:-false}
-      SERA_TRUST_PROXY: ${SERA_TRUST_PROXY:-127.0.0.1/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7}
+      SERA_TRUST_PROXY: ${SERA_TRUST_PROXY:-1}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     volumes:
       - media:/data
     read_only: true
     tmpfs:
-      - /tmp:exec
+      - /tmp:exec,nosuid,nodev,size=256m
+    pids_limit: 256
     depends_on:
       redis:
         condition: service_healthy
@@ -134,7 +140,7 @@ services:
       NODE_ENV: production
       SERA_SECRET: ${SERA_SECRET:?set SERA_SECRET in .env — see .env.example}
       SERA_QUEUE_DRIVER: redis
-      SERA_REDIS_URL: ${SERA_REDIS_URL:-redis://:${SERA_REDIS_PASSWORD:-sera_secure_redis}@redis:6379}
+      SERA_REDIS_URL: ${SERA_REDIS_URL:-redis://:${SERA_REDIS_PASSWORD:?set SERA_REDIS_PASSWORD in .env — see .env.example}@redis:6379}
       SERA_DATA_DIR: /data
       SERA_API_URL: http://api:4000
       SERA_WORKER_CONCURRENCY: ${SERA_WORKER_CONCURRENCY:-2}
@@ -173,9 +179,12 @@ services:
       - media:/data
     read_only: true
     tmpfs:
-      - /tmp:exec
+      - /tmp:exec,nosuid,nodev,size=256m
+    pids_limit: 256
     depends_on:
       redis:
+        condition: service_healthy
+      api:
         condition: service_healthy
     networks:
       - internal-net
@@ -191,15 +200,18 @@ services:
 
   redis:
     image: redis:7.4-alpine
-    command: >
-      redis-server
-      --save ''
-      --appendonly no
-      --maxmemory 256mb
-      --maxmemory-policy noeviction
-      --requirepass ${SERA_REDIS_PASSWORD:-sera_secure_redis}
+    command:
+      - su-exec
+      - redis
+      - sh
+      - -ec
+      - |
+        umask 077
+        escaped=$$(printf '%s' "$$REDISCLI_AUTH" | sed 's/\\/\\\\/g; s/"/\\"/g')
+        printf 'requirepass "%s"\n' "$$escaped" > /tmp/redis.conf
+        exec redis-server /tmp/redis.conf --save '' --appendonly no --maxmemory 256mb --maxmemory-policy noeviction
     environment:
-      REDISCLI_AUTH: ${SERA_REDIS_PASSWORD:-sera_secure_redis}
+      REDISCLI_AUTH: ${SERA_REDIS_PASSWORD:?set SERA_REDIS_PASSWORD in .env — see .env.example}
     healthcheck:
       test: ['CMD', 'redis-cli', 'ping']
       interval: 10s
@@ -208,6 +220,10 @@ services:
     networks:
       - internal-net
     restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,nodev,size=16m
+    pids_limit: 128
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -215,6 +231,10 @@ services:
     cap_add:
       - SETUID
       - SETGID
+    deploy:
+      resources:
+        limits:
+          memory: 384m
 
 networks:
   edge-net:

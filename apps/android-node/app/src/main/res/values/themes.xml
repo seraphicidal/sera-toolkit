@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.SeraNode" parent="android:Theme.Material.NoActionBar">
-        <item name="android:windowBackground">@android:color/background_light</item>
+    <style name="Theme.SeraNode" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">#FFFBFBF9</item>
     </style>
 </resources>

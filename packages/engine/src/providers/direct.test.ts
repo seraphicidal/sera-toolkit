@@ -59,17 +59,18 @@ describe('classify', () => {
     expect(classify('application/dash+xml', 'mpd')).toBe('video');
   });
 
-  it('recognises document, archive, and binary file types', () => {
-    expect(classify('application/pdf', 'pdf')).toBe('image');
-    expect(classify('application/zip', 'zip')).toBe('image');
-    expect(classify('application/x-tar', 'tar')).toBe('image');
-    expect(classify('application/x-7z-compressed', '7z')).toBe('image');
-    expect(classify('application/vnd.android.package-archive', 'apk')).toBe('image');
-    expect(classify('application/x-apple-diskimage', 'dmg')).toBe('image');
-    expect(classify('application/x-iso9660-image', 'iso')).toBe('image');
-    expect(classify('application/x-msdownload', 'exe')).toBe('image');
-    expect(classify('application/epub+zip', 'epub')).toBe('image');
-    expect(classify('application/octet-stream', 'iso')).toBe('image');
+  it('recognises safe document and archive types as file and rejects executables', () => {
+    expect(classify('application/pdf', 'pdf')).toBe('file');
+    expect(classify('application/zip', 'zip')).toBe('file');
+    expect(classify('application/x-tar', 'tar')).toBe('file');
+    expect(classify('application/x-7z-compressed', '7z')).toBe('file');
+    expect(classify('application/x-iso9660-image', 'iso')).toBe('file');
+    expect(classify('application/epub+zip', 'epub')).toBe('file');
+    expect(classify('application/octet-stream', 'iso')).toBe('file');
+    expect(classify('application/vnd.android.package-archive', 'apk')).toBe('unknown');
+    expect(classify('application/x-apple-diskimage', 'dmg')).toBe('unknown');
+    expect(classify('application/x-msdownload', 'exe')).toBe('unknown');
+    expect(classify('application/octet-stream', 'exe')).toBe('unknown');
     expect(classify('text/html', 'pdf')).toBe('unknown');
   });
 });
@@ -130,16 +131,15 @@ describe('DirectFileProvider', () => {
     ['zip', 'application/zip', 'zip'],
     ['tar', 'application/x-tar', 'tar'],
     ['7z', 'application/x-7z-compressed', '7z'],
-    ['apk', 'application/vnd.android.package-archive', 'apk'],
-    ['dmg', 'application/x-apple-diskimage', 'dmg'],
-    ['exe', 'application/x-msdownload', 'exe'],
     ['epub', 'application/epub+zip', 'epub'],
   ])(
-    'claims and resolves direct .%s archive/document files',
+    'claims and resolves direct .%s archive/document files as kind file',
     async (ext, mime, expectedContainer) => {
       const url = new URL(`https://example.com/release/package.${ext}`);
       expect(provider.canHandle(url)).toBe(true);
       const media = await provider.resolve(url, contextWithHead(mime, 4_096));
+      expect(media.items[0]?.kind).toBe('file');
+      expect(media.items[0]?.plans[0]?.kind).toBe('file');
       expect(media.items[0]?.container).toBe(expectedContainer);
       expect(media.items[0]?.plans[0]?.fetch).toEqual({
         via: 'direct',
@@ -147,6 +147,35 @@ describe('DirectFileProvider', () => {
       });
     },
   );
+
+  it.each(['apk', 'dmg', 'exe'])('does not claim direct .%s executable URLs', (ext) => {
+    expect(provider.canHandle(new URL(`https://example.com/release/installer.${ext}`))).toBe(false);
+  });
+
+  it('falls back to a Range GET probe when HEAD returns 405', async () => {
+    const { Readable } = await import('node:stream');
+    let openCalled = false;
+    const url = new URL('https://example.com/clip.mp4');
+    const media = await provider.resolve(url, {
+      config,
+      logger: silentLogger(),
+      probe: () => Promise.reject(new Error('not used')),
+      fetchText: () => Promise.reject(new Error('not used')),
+      head: (target) => Promise.resolve({ url: target.toString(), status: 405 }),
+      open: (target, options) => {
+        openCalled = options?.headers?.range === 'bytes=0-0';
+        return Promise.resolve({
+          status: 206,
+          url: target.toString(),
+          headers: { 'content-type': 'video/mp4', 'content-range': 'bytes 0-0/123456' },
+          body: Readable.from([]),
+        });
+      },
+    });
+    expect(openCalled).toBe(true);
+    expect(media.items[0]?.kind).toBe('video');
+    expect(media.items[0]?.filesizeBytes).toBe(123456);
+  });
 
   it('uses ytdlp fetch plan for .m3u8 and .mpd manifests', async () => {
     const hlsUrl = new URL('https://cdn.example.com/live/master.m3u8');

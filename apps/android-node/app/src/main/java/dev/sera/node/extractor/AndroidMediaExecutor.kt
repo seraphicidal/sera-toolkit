@@ -6,18 +6,24 @@ import com.yausername.youtubedl_android.YoutubeDLRequest
 import dev.sera.node.model.SeraJson
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
 import java.util.UUID
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.min
 import kotlin.math.roundToLong
 
@@ -58,6 +64,9 @@ class AndroidMediaExecutor(
 ) : MediaCommandExecutor {
 
     override suspend fun dumpInfo(url: String, options: YtdlpProbeOptions): ParsedYtdlpOutput {
+        withContext(Dispatchers.IO) {
+            assertPublicUrlForExternalTool(url, allowPrivateAddresses = options.allowPrivateAddresses)
+        }
         toolsManager.ensureReady()
         val runtimePaths = YtdlpRuntimePaths(
             ffmpegLocation = null,
@@ -76,6 +85,9 @@ class AndroidMediaExecutor(
     }
 
     override suspend fun download(options: YtdlpDownloadOptions) {
+        withContext(Dispatchers.IO) {
+            assertPublicUrlForExternalTool(options.url, allowPrivateAddresses = options.allowPrivateAddresses)
+        }
         toolsManager.ensureReady()
         val runtimePaths = YtdlpRuntimePaths(
             ffmpegLocation = null,
@@ -89,16 +101,16 @@ class AndroidMediaExecutor(
             hasMergeContainer = !options.mergeContainer.isNullOrBlank(),
             onProgress = options.onProgress,
         )
-        var sawStructuredProgress = false
+        val sawStructuredProgress = AtomicBoolean(false)
         executeYtdlp(
             request = request,
             timeoutMs = options.timeoutMs,
             isCancelled = options.isCancelled,
             callback = { pct, eta, line ->
                 if (line.startsWith("SERA-PROGRESS") || line.startsWith("SERA-POSTPROCESS")) {
-                    sawStructuredProgress = true
+                    sawStructuredProgress.set(true)
                     parser.feedLine(line)
-                } else if (!sawStructuredProgress && pct in 0.0f..100.0f) {
+                } else if (!sawStructuredProgress.get() && pct in 0.0f..100.0f) {
                     options.onProgress(
                         YtdlpProgress(
                             percent = pct.toDouble(),
@@ -113,6 +125,9 @@ class AndroidMediaExecutor(
     }
 
     override suspend fun downloadSubtitles(options: YtdlpSubtitleOptions): File {
+        withContext(Dispatchers.IO) {
+            assertPublicUrlForExternalTool(options.url, allowPrivateAddresses = options.allowPrivateAddresses)
+        }
         toolsManager.ensureReady()
         val runtimePaths = YtdlpRuntimePaths(
             ffmpegLocation = null,
@@ -127,13 +142,14 @@ class AndroidMediaExecutor(
             isCancelled = options.isCancelled,
             callback = null,
         )
-        val written = options.workdir.listFiles()
-            ?.firstOrNull { it.isFile && it.name.endsWith(".${options.format}") }
-            ?: throw seraError(
-                SeraErrorCode.MEDIA_UNAVAILABLE,
-                message = "Those subtitles are not available any more.",
-                detail = "no .${options.format} written for ${options.lang}",
-            )
+        val written = withContext(Dispatchers.IO) {
+            options.workdir.listFiles()
+                ?.firstOrNull { it.isFile && it.name.endsWith(".${options.format}") }
+        } ?: throw seraError(
+            SeraErrorCode.MEDIA_UNAVAILABLE,
+            message = "Those subtitles are not available any more.",
+            detail = "no .${options.format} written for ${options.lang}",
+        )
         return written
     }
 
@@ -309,13 +325,18 @@ class AndroidMediaExecutor(
         return try {
             withTimeout(timeoutMs.coerceAtLeast(5_000L)) {
                 coroutineScope {
+                    val destroyHandle = coroutineContext[Job]?.invokeOnCompletion { cause ->
+                        if (cause != null) {
+                            runCatching { ytdlp.destroyProcessById(processId) }
+                        }
+                    }
                     val cancelMonitor = launch {
                         while (isActive) {
                             if (isCancelled()) {
                                 runCatching { ytdlp.destroyProcessById(processId) }
                                 break
                             }
-                            delay(150L)
+                            delay(100L)
                         }
                     }
                     try {
@@ -335,6 +356,7 @@ class AndroidMediaExecutor(
                         }
                     } finally {
                         cancelMonitor.cancel()
+                        destroyHandle?.dispose()
                         runCatching { ytdlp.destroyProcessById(processId) }
                     }
                 }
@@ -343,11 +365,17 @@ class AndroidMediaExecutor(
             runCatching { ytdlp.destroyProcessById(processId) }
             throw seraError(SeraErrorCode.TIMEOUT, detail = "yt-dlp timed out after ${timeoutMs}ms", cause = error)
         } catch (error: YoutubeDL.CanceledException) {
+            if (!currentCoroutineContext().isActive) {
+                throw CancellationException("yt-dlp process cancelled", error)
+            }
             throw seraError(SeraErrorCode.CANCELLED, cause = error)
         } catch (error: CancellationException) {
             runCatching { ytdlp.destroyProcessById(processId) }
-            throw seraError(SeraErrorCode.CANCELLED, cause = error)
+            throw error
         } catch (error: YoutubeDLException) {
+            if (!currentCoroutineContext().isActive) {
+                throw CancellationException("yt-dlp process cancelled", error)
+            }
             if (isCancelled()) throw seraError(SeraErrorCode.CANCELLED, cause = error)
             throw classifyYtdlpFailure(error.message.orEmpty(), 1)
         } catch (error: InterruptedException) {
@@ -369,81 +397,17 @@ class AndroidMediaExecutor(
         if (!binary.isFile) {
             throw seraError(SeraErrorCode.INTERNAL, detail = "missing native binary ${binary.name}")
         }
-        return withContext(Dispatchers.IO) {
-            val pb = ProcessBuilder(listOf(binary.absolutePath) + args)
-            if (workDir.isDirectory) pb.directory(workDir)
-            pb.environment().putAll(toolsManager.buildNativeProcessEnv())
-
-            val process = pb.start()
-            val stdoutBuilder = StringBuilder()
-            val stderrTail = StringBuilder()
-
-            val stderrThread = Thread {
-                try {
-                    BufferedReader(InputStreamReader(process.errorStream, Charsets.UTF_8)).use { reader ->
-                        val buf = CharArray(4096)
-                        while (true) {
-                            val read = reader.read(buf)
-                            if (read <= 0) break
-                            synchronized(stderrTail) {
-                                stderrTail.append(buf, 0, read)
-                                if (stderrTail.length > 8192) {
-                                    stderrTail.delete(0, stderrTail.length - 8192)
-                                }
-                            }
-                        }
-                    }
-                } catch (_: Exception) {
-                }
-            }.apply {
-                isDaemon = true
-                start()
-            }
-
-            val stdoutThread = Thread {
-                try {
-                    BufferedReader(InputStreamReader(process.inputStream, Charsets.UTF_8)).use { reader ->
-                        while (true) {
-                            val line = reader.readLine() ?: break
-                            onStdoutLine?.invoke(line)
-                            if (captureStdout && stdoutBuilder.length < maxStdoutBytes) {
-                                if (stdoutBuilder.isNotEmpty()) stdoutBuilder.append('\n')
-                                stdoutBuilder.append(line)
-                            }
-                        }
-                    }
-                } catch (_: Exception) {
-                }
-            }.apply {
-                isDaemon = true
-                start()
-            }
-
-            val deadline = System.currentTimeMillis() + timeoutMs.coerceAtLeast(1_000L)
-            try {
-                while (process.isAlive) {
-                    if (isCancelled() || !isActive) {
-                        process.destroyForcibly()
-                        throw seraError(SeraErrorCode.CANCELLED)
-                    }
-                    if (System.currentTimeMillis() > deadline) {
-                        process.destroyForcibly()
-                        throw seraError(SeraErrorCode.TIMEOUT, detail = "${binary.name} timed out after ${timeoutMs}ms")
-                    }
-                    Thread.sleep(100L)
-                }
-                stdoutThread.join(2_000L)
-                stderrThread.join(2_000L)
-                val errStr = synchronized(stderrTail) { stderrTail.toString() }
-                CommandOutput(
-                    exitCode = process.exitValue(),
-                    stdout = stdoutBuilder.toString(),
-                    stderrTail = errStr,
-                )
-            } finally {
-                if (process.isAlive) process.destroyForcibly()
-            }
-        }
+        return runNativeProcess(
+            binary = binary,
+            args = args,
+            workDir = workDir,
+            env = toolsManager.buildNativeProcessEnv(),
+            timeoutMs = timeoutMs,
+            captureStdout = captureStdout,
+            maxStdoutBytes = maxStdoutBytes,
+            onStdoutLine = onStdoutLine,
+            isCancelled = isCancelled,
+        )
     }
 
     private fun parseFrameRate(raw: String?): Double? {
@@ -455,5 +419,101 @@ class AndroidMediaExecutor(
         if (!num.isFinite() || !den.isFinite() || num == 0.0 || den <= 0.0) return null
         val fps = ((num / den) * 100.0).roundToLong() / 100.0
         return if (fps.isFinite() && fps > 0.0) fps else null
+    }
+
+    companion object {
+        internal suspend fun runNativeProcess(
+            binary: File,
+            args: List<String>,
+            workDir: File?,
+            env: Map<String, String>,
+            timeoutMs: Long,
+            captureStdout: Boolean,
+            maxStdoutBytes: Int,
+            onStdoutLine: ((String) -> Unit)?,
+            isCancelled: () -> Boolean,
+        ): CommandOutput = withContext(Dispatchers.IO) {
+            val pb = ProcessBuilder(listOf(binary.absolutePath) + args)
+            if (workDir != null && workDir.isDirectory) pb.directory(workDir)
+            pb.environment().putAll(env)
+
+            val process = pb.start()
+            val destroyHandle = currentCoroutineContext()[Job]?.invokeOnCompletion { cause ->
+                if (cause != null && process.isAlive) {
+                    process.destroyForcibly()
+                }
+            }
+
+            try {
+                coroutineScope {
+                    val stderrJob = async(Dispatchers.IO) {
+                        val stderrTail = StringBuilder()
+                        try {
+                            BufferedReader(InputStreamReader(process.errorStream, Charsets.UTF_8)).use { reader ->
+                                val buf = CharArray(4096)
+                                while (true) {
+                                    val read = reader.read(buf)
+                                    if (read <= 0) break
+                                    stderrTail.append(buf, 0, read)
+                                    if (stderrTail.length > 8192) {
+                                        stderrTail.delete(0, stderrTail.length - 8192)
+                                    }
+                                }
+                            }
+                        } catch (_: Exception) {
+                        }
+                        stderrTail.toString()
+                    }
+
+                    val stdoutJob = async(Dispatchers.IO) {
+                        val stdoutBuilder = StringBuilder()
+                        try {
+                            BufferedReader(InputStreamReader(process.inputStream, Charsets.UTF_8)).use { reader ->
+                                while (true) {
+                                    val line = reader.readLine() ?: break
+                                    onStdoutLine?.invoke(line)
+                                    if (captureStdout && stdoutBuilder.length < maxStdoutBytes) {
+                                        if (stdoutBuilder.isNotEmpty()) stdoutBuilder.append('\n')
+                                        stdoutBuilder.append(line)
+                                    }
+                                }
+                            }
+                        } catch (_: Exception) {
+                        }
+                        stdoutBuilder.toString()
+                    }
+
+                    val deadline = System.currentTimeMillis() + timeoutMs.coerceAtLeast(1_000L)
+                    while (true) {
+                        if (isCancelled()) {
+                            process.destroyForcibly()
+                            throw seraError(SeraErrorCode.CANCELLED)
+                        }
+                        if (!isActive) {
+                            process.destroyForcibly()
+                            throw CancellationException("Process cancelled")
+                        }
+                        if (process.waitFor(100L, TimeUnit.MILLISECONDS)) {
+                            break
+                        }
+                        if (System.currentTimeMillis() > deadline) {
+                            process.destroyForcibly()
+                            throw seraError(SeraErrorCode.TIMEOUT, detail = "${binary.name} timed out after ${timeoutMs}ms")
+                        }
+                    }
+
+                    val stdout = withTimeoutOrNull(2_000L) { stdoutJob.await() }.orEmpty()
+                    val stderr = withTimeoutOrNull(2_000L) { stderrJob.await() }.orEmpty()
+                    CommandOutput(
+                        exitCode = process.exitValue(),
+                        stdout = stdout,
+                        stderrTail = stderr,
+                    )
+                }
+            } finally {
+                destroyHandle?.dispose()
+                if (process.isAlive) process.destroyForcibly()
+            }
+        }
     }
 }

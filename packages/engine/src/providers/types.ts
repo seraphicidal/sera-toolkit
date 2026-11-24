@@ -28,6 +28,8 @@ export interface MediaProvider {
   normalize?(url: URL): URL;
 
   resolve(url: URL, context: ProviderContext): Promise<ResolvedMedia>;
+
+  close?(): Promise<void> | void;
 }
 
 export interface ProviderContext {

@@ -14,6 +14,7 @@ data class YtdlpProbeOptions(
     val proxy: String? = null,
     val timeoutMs: Long = 60_000L,
     val maxEntries: Int? = null,
+    val allowPrivateAddresses: Boolean = false,
     val isCancelled: () -> Boolean = { false },
 )
 
@@ -58,6 +59,7 @@ data class YtdlpDownloadOptions(
     val subtitles: YtdlpSubtitleFilter? = null,
     val sections: YtdlpSectionSpec? = null,
     val loadInfoJsonPath: File? = null,
+    val allowPrivateAddresses: Boolean = false,
     val isCancelled: () -> Boolean = { false },
     val onProgress: (YtdlpProgress) -> Unit = {},
 )
@@ -75,6 +77,7 @@ data class YtdlpSubtitleOptions(
     val extraArgs: List<String> = emptyList(),
     val remoteComponents: List<String> = emptyList(),
     val useExtractors: String? = null,
+    val allowPrivateAddresses: Boolean = false,
     val isCancelled: () -> Boolean = { false },
 )
 

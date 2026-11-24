@@ -2,9 +2,14 @@ import { readFile, readdir, rm } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import type { ApiErrorBody, ErrorCode } from '@sera/contracts/types';
 import type { SeraEngine } from '@sera/engine';
 import { totalUsage, USAGE_RETENTION_DAYS } from '@sera/engine';
 import { checkAdminAuth } from '../plugins/admin-auth.js';
+
+function adminError(code: ErrorCode, message: string): ApiErrorBody {
+  return { error: { code, message, retryable: false } };
+}
 
 const usageQuerySchema = z.object({
   days: z.coerce.number().int().min(1).max(USAGE_RETENTION_DAYS).default(7),
@@ -38,7 +43,7 @@ export function registerAdminRoutes(app: FastifyInstance, engine: SeraEngine): v
     { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
     async (request, reply) => {
       if (!checkAdminAuth(request.headers.authorization, config.adminToken)) {
-        return reply.status(401).send({ error: { code: 'NOT_FOUND', message: 'Not found.' } });
+        return reply.status(401).send(adminError('NOT_FOUND', 'Not found.'));
       }
 
       const { days } = usageQuerySchema.parse(request.query);
@@ -54,7 +59,7 @@ export function registerAdminRoutes(app: FastifyInstance, engine: SeraEngine): v
     { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
     async (request, reply) => {
       if (!checkAdminAuth(request.headers.authorization, config.adminToken)) {
-        return reply.status(401).send({ error: { code: 'NOT_FOUND', message: 'Not found.' } });
+        return reply.status(401).send(adminError('NOT_FOUND', 'Not found.'));
       }
 
       const { limit, offset } = reportsQuerySchema.parse(request.query);
@@ -102,37 +107,29 @@ export function registerAdminRoutes(app: FastifyInstance, engine: SeraEngine): v
     { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
     async (request, reply) => {
       if (!checkAdminAuth(request.headers.authorization, config.adminToken)) {
-        return reply.status(401).send({ error: { code: 'NOT_FOUND', message: 'Not found.' } });
+        return reply.status(401).send(adminError('NOT_FOUND', 'Not found.'));
       }
 
       const parsedParams = reportParamsSchema.safeParse(request.params);
       if (!parsedParams.success) {
-        return reply
-          .status(400)
-          .send({ error: { code: 'INVALID_PARAMS', message: 'Invalid report ID.' } });
+        return reply.status(400).send(adminError('VALIDATION_ERROR', 'Invalid report ID.'));
       }
 
       if (!config.dataDir) {
-        return reply
-          .status(404)
-          .send({ error: { code: 'NOT_FOUND', message: 'Report not found.' } });
+        return reply.status(404).send(adminError('NOT_FOUND', 'Report not found.'));
       }
 
       const reportsDir = resolve(config.dataDir, 'reports');
       const filePath = resolve(reportsDir, `${parsedParams.data.id}.json`);
       if (filePath !== reportsDir && !filePath.startsWith(reportsDir + sep)) {
-        return reply
-          .status(404)
-          .send({ error: { code: 'NOT_FOUND', message: 'Report not found.' } });
+        return reply.status(404).send(adminError('NOT_FOUND', 'Report not found.'));
       }
 
       try {
         const content = await readFile(filePath, 'utf-8');
         return reply.header('cache-control', 'no-store').send(JSON.parse(content));
       } catch {
-        return reply
-          .status(404)
-          .send({ error: { code: 'NOT_FOUND', message: 'Report not found.' } });
+        return reply.status(404).send(adminError('NOT_FOUND', 'Report not found.'));
       }
     },
   );
@@ -142,28 +139,22 @@ export function registerAdminRoutes(app: FastifyInstance, engine: SeraEngine): v
     { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
     async (request, reply) => {
       if (!checkAdminAuth(request.headers.authorization, config.adminToken)) {
-        return reply.status(401).send({ error: { code: 'NOT_FOUND', message: 'Not found.' } });
+        return reply.status(401).send(adminError('NOT_FOUND', 'Not found.'));
       }
 
       const parsedParams = reportParamsSchema.safeParse(request.params);
       if (!parsedParams.success) {
-        return reply
-          .status(400)
-          .send({ error: { code: 'INVALID_PARAMS', message: 'Invalid report ID.' } });
+        return reply.status(400).send(adminError('VALIDATION_ERROR', 'Invalid report ID.'));
       }
 
       if (!config.dataDir) {
-        return reply
-          .status(404)
-          .send({ error: { code: 'NOT_FOUND', message: 'Report not found.' } });
+        return reply.status(404).send(adminError('NOT_FOUND', 'Report not found.'));
       }
 
       const reportsDir = resolve(config.dataDir, 'reports');
       const filePath = resolve(reportsDir, `${parsedParams.data.id}.json`);
       if (filePath !== reportsDir && !filePath.startsWith(reportsDir + sep)) {
-        return reply
-          .status(404)
-          .send({ error: { code: 'NOT_FOUND', message: 'Report not found.' } });
+        return reply.status(404).send(adminError('NOT_FOUND', 'Report not found.'));
       }
 
       try {
@@ -173,9 +164,7 @@ export function registerAdminRoutes(app: FastifyInstance, engine: SeraEngine): v
           .header('cache-control', 'no-store')
           .send({ deleted: true, id: parsedParams.data.id });
       } catch {
-        return reply
-          .status(404)
-          .send({ error: { code: 'NOT_FOUND', message: 'Report not found.' } });
+        return reply.status(404).send(adminError('NOT_FOUND', 'Report not found.'));
       }
     },
   );
@@ -185,7 +174,7 @@ export function registerAdminRoutes(app: FastifyInstance, engine: SeraEngine): v
     { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
     async (request, reply) => {
       if (!checkAdminAuth(request.headers.authorization, config.adminToken)) {
-        return reply.status(401).send({ error: { code: 'NOT_FOUND', message: 'Not found.' } });
+        return reply.status(401).send(adminError('NOT_FOUND', 'Not found.'));
       }
 
       return reply
@@ -199,14 +188,12 @@ export function registerAdminRoutes(app: FastifyInstance, engine: SeraEngine): v
     { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
     async (request, reply) => {
       if (!checkAdminAuth(request.headers.authorization, config.adminToken)) {
-        return reply.status(401).send({ error: { code: 'NOT_FOUND', message: 'Not found.' } });
+        return reply.status(401).send(adminError('NOT_FOUND', 'Not found.'));
       }
 
       const parsedBody = denylistCreateSchema.safeParse(request.body);
       if (!parsedBody.success) {
-        return reply
-          .status(400)
-          .send({ error: { code: 'INVALID_PARAMS', message: 'Invalid denylist payload.' } });
+        return reply.status(400).send(adminError('VALIDATION_ERROR', 'Invalid denylist payload.'));
       }
 
       const { type, target, reason } = parsedBody.data;
@@ -216,9 +203,7 @@ export function registerAdminRoutes(app: FastifyInstance, engine: SeraEngine): v
           : engine.denylist.blockUrl(target, reason);
 
       if (!entry) {
-        return reply
-          .status(400)
-          .send({ error: { code: 'INVALID_TARGET', message: 'Invalid denylist target.' } });
+        return reply.status(400).send(adminError('VALIDATION_ERROR', 'Invalid denylist target.'));
       }
 
       return reply.status(201).header('cache-control', 'no-store').send(entry);
@@ -230,22 +215,18 @@ export function registerAdminRoutes(app: FastifyInstance, engine: SeraEngine): v
     { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
     async (request, reply) => {
       if (!checkAdminAuth(request.headers.authorization, config.adminToken)) {
-        return reply.status(401).send({ error: { code: 'NOT_FOUND', message: 'Not found.' } });
+        return reply.status(401).send(adminError('NOT_FOUND', 'Not found.'));
       }
 
       const parsedParams = denylistParamsSchema.safeParse(request.params);
       if (!parsedParams.success) {
-        return reply
-          .status(400)
-          .send({ error: { code: 'INVALID_PARAMS', message: 'Invalid denylist entry ID.' } });
+        return reply.status(400).send(adminError('VALIDATION_ERROR', 'Invalid denylist entry ID.'));
       }
 
       const { id } = parsedParams.data;
       const removed = engine.denylist.unblock(id);
       if (!removed) {
-        return reply
-          .status(404)
-          .send({ error: { code: 'NOT_FOUND', message: 'Denylist entry not found.' } });
+        return reply.status(404).send(adminError('NOT_FOUND', 'Denylist entry not found.'));
       }
 
       return reply.status(200).header('cache-control', 'no-store').send({ deleted: true, id });

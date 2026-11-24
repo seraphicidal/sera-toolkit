@@ -28,10 +28,13 @@ data class ActiveTaskInfo(
     val percent: Double,
     val bytesDownloaded: Long? = null,
     val bytesTotal: Long? = null,
+    val speedBytesPerSecond: Double? = null,
+    val etaSeconds: Double? = null,
 )
 
 data class NodeRuntimeSnapshot(
     val serviceState: NodeServiceState = NodeServiceState.STOPPED,
+    val isServiceRunning: Boolean = false,
     val transport: NetworkTransport = NetworkTransport.NONE,
     val isConnected: Boolean = false,
     val isCharging: Boolean = false,
@@ -40,6 +43,7 @@ data class NodeRuntimeSnapshot(
     val authFailureCount: Int = 0,
     val completedTasksSession: Long = 0L,
     val startedAtMs: Long? = null,
+    val lastPollSuccessAtMs: Long? = null,
 )
 
 class NodeRuntimeTracker {
@@ -63,7 +67,31 @@ class NodeRuntimeTracker {
         }
     }
 
-    fun resetStopped() {
-        _snapshot.value = NodeRuntimeSnapshot(serviceState = NodeServiceState.STOPPED)
+    fun resetStopped(preserveAuthError: Boolean = false) {
+        _snapshot.update { current ->
+            if (preserveAuthError && current.serviceState == NodeServiceState.AUTH_ERROR) {
+                NodeRuntimeSnapshot(
+                    serviceState = NodeServiceState.AUTH_ERROR,
+                    isServiceRunning = false,
+                    transport = current.transport,
+                    isConnected = current.isConnected,
+                    isCharging = current.isCharging,
+                    activeTasks = emptyList(),
+                    lastError = current.lastError,
+                    authFailureCount = current.authFailureCount,
+                    completedTasksSession = current.completedTasksSession,
+                    startedAtMs = null,
+                    lastPollSuccessAtMs = current.lastPollSuccessAtMs,
+                )
+            } else {
+                NodeRuntimeSnapshot(
+                    serviceState = NodeServiceState.STOPPED,
+                    isServiceRunning = false,
+                    transport = current.transport,
+                    isConnected = current.isConnected,
+                    isCharging = current.isCharging,
+                )
+            }
+        }
     }
 }

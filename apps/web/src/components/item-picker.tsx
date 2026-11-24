@@ -2,7 +2,7 @@
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import type { MediaInfo, MediaItem } from '@sera/contracts/types';
-import { AudioIcon, CheckIcon, CloseIcon, GifIcon, ImageIcon, VideoIcon } from './icons';
+import { AudioIcon, CheckIcon, CloseIcon, FileIcon, GifIcon, ImageIcon, VideoIcon } from './icons';
 import { cx, formatDuration, isSafeDownloadPath, KIND_LABELS, pluralize } from '@/lib/format';
 import { filterMediaItems, selectItemRange, selectItemsUpToMax } from '@/lib/selection';
 
@@ -11,10 +11,11 @@ const KIND_ICON = {
   audio: AudioIcon,
   image: ImageIcon,
   gif: GifIcon,
+  file: FileIcon,
   unknown: VideoIcon,
 } as const;
 
-export function ItemPicker({
+export const ItemPicker = memo(function ItemPicker({
   info,
   selectedIds,
   onToggle,
@@ -32,11 +33,18 @@ export function ItemPicker({
   const [filterQuery, setFilterQuery] = useState('');
   const [rangeStart, setRangeStart] = useState('1');
   const [rangeEnd, setRangeEnd] = useState(() => String(info.items.length));
-  const [lastClickedIndex, setLastClickedIndex] = useState<number | undefined>(undefined);
+  const [capNotice, setCapNotice] = useState<string | undefined>(undefined);
+  const lastClickedIndexRef = useRef<number | undefined>(undefined);
+  const selectedIdsRef = useRef<ReadonlySet<string>>(selectedIds);
+  selectedIdsRef.current = selectedIds;
 
   useEffect(() => {
+    setFilterQuery('');
+    setRangeStart('1');
     setRangeEnd(String(info.items.length));
-  }, [info.items.length]);
+    setCapNotice(undefined);
+    lastClickedIndexRef.current = undefined;
+  }, [info.id, info.items.length]);
 
   const visibleItems = useMemo(
     () => filterMediaItems(info.items, filterQuery),
@@ -57,57 +65,90 @@ export function ItemPicker({
         onSelectAll(true);
         return;
       }
+      const current = selectedIdsRef.current;
       for (const item of info.items) {
-        const hasNow = selectedIds.has(item.id);
+        const hasNow = current.has(item.id);
         const shouldHave = nextSet.has(item.id);
         if (hasNow !== shouldHave) {
           onToggle(item.id);
         }
       }
     },
-    [info.items, onSelectAll, onSelectIds, onToggle, selectedIds],
+    [info.items, onSelectAll, onSelectIds, onToggle],
   );
 
   const handleSelectAllVisible = (): void => {
     const next = selectItemsUpToMax(visibleItems, maxItems);
     applySelection(next);
+    if (maxItems !== undefined && visibleItems.length > maxItems) {
+      setCapNotice(`Selected the first ${maxItems} items (server limit per download).`);
+    } else {
+      setCapNotice(undefined);
+    }
   };
 
   const handleSelectRange = (): void => {
     const fromNum = Number.parseInt(rangeStart, 10);
     const toNum = Number.parseInt(rangeEnd, 10);
     if (!Number.isFinite(fromNum) || !Number.isFinite(toNum)) return;
+    const start = Math.min(fromNum, toNum);
+    const end = Math.max(fromNum, toNum);
+    const matchingCount = visibleItems.filter(
+      (item) => item.index >= start && item.index <= end,
+    ).length;
     const next = selectItemRange(visibleItems, fromNum, toNum, maxItems);
     applySelection(next);
+    if (maxItems !== undefined && matchingCount > maxItems) {
+      setCapNotice(`Range capped at ${maxItems} items (server limit per download).`);
+    } else {
+      setCapNotice(undefined);
+    }
   };
 
   const handleClear = (): void => {
+    setCapNotice(undefined);
     applySelection(new Set());
   };
 
   const handleTileClick = useCallback(
     (item: MediaItem, event?: MouseEvent): void => {
-      if (event?.shiftKey && lastClickedIndex !== undefined) {
-        const rangeSet = selectItemRange(visibleItems, lastClickedIndex, item.index, maxItems);
+      const prevIndex = lastClickedIndexRef.current;
+      const currentSelected = selectedIdsRef.current;
+      if (event?.shiftKey && prevIndex !== undefined) {
+        const rangeSet = selectItemRange(visibleItems, prevIndex, item.index, maxItems);
         const merged = selectItemsUpToMax(
           visibleItems.filter((candidate) => rangeSet.has(candidate.id)),
           maxItems,
-          selectedIds,
+          currentSelected,
         );
         applySelection(merged);
-        setLastClickedIndex(item.index);
+        lastClickedIndexRef.current = item.index;
+        if (maxItems !== undefined && merged.size >= maxItems) {
+          setCapNotice(`Selection limit reached (${maxItems} items max per download).`);
+        }
         return;
       }
-      setLastClickedIndex(item.index);
+      lastClickedIndexRef.current = item.index;
+      if (
+        maxItems !== undefined &&
+        !currentSelected.has(item.id) &&
+        currentSelected.size >= maxItems
+      ) {
+        setCapNotice(`Selection limit reached (${maxItems} items max per download).`);
+        return;
+      }
+      setCapNotice(undefined);
       onToggle(item.id);
     },
-    [applySelection, lastClickedIndex, maxItems, onToggle, selectedIds, visibleItems],
+    [applySelection, maxItems, onToggle, visibleItems],
   );
 
   const noneSelected = selectedIds.size === 0;
+  const atCap = maxItems !== undefined && selectedIds.size >= maxItems;
+  const cappedPlaylist = maxItems !== undefined && info.items.length > maxItems;
 
   return (
-    <fieldset className="flex flex-col gap-3">
+    <fieldset data-item-picker="true" className="flex flex-col gap-3">
       <legend className="mb-1 text-xs font-medium tracking-wide text-[var(--color-ink-faint)] uppercase">
         {pluralize(info.items.length, 'item')} found
         {visibleItems.length !== info.items.length
@@ -120,12 +161,12 @@ export function ItemPicker({
           <button
             type="button"
             onClick={handleSelectAllVisible}
-            className="cursor-pointer rounded-md px-2 py-1 text-[0.8125rem] font-medium text-[var(--color-accent)] transition-colors hover:bg-[var(--color-sunken)]"
+            className="min-h-9 cursor-pointer rounded-md px-2.5 py-1 text-[0.8125rem] font-medium text-[var(--color-accent)] transition-colors hover:bg-[var(--color-sunken)]"
           >
-            Select All
+            {cappedPlaylist ? `Select first ${maxItems}` : 'Select All'}
           </button>
 
-          <div className="flex items-center gap-1 rounded-lg border border-[var(--color-line)] bg-[var(--color-canvas)] px-2 py-0.5 text-xs">
+          <div className="flex min-h-9 items-center gap-1 rounded-lg border border-[var(--color-line)] bg-[var(--color-canvas)] px-2 py-0.5 text-xs transition-colors focus-within:border-[var(--color-accent)] focus-within:shadow-[var(--shadow-focus)]">
             <input
               type="number"
               min={1}
@@ -133,7 +174,7 @@ export function ItemPicker({
               value={rangeStart}
               onChange={(event) => setRangeStart(event.target.value)}
               aria-label="Range start index"
-              className="tabular w-10 bg-transparent text-center text-[var(--color-ink)] outline-none"
+              className="tabular w-14 [appearance:textfield] bg-transparent text-center text-[var(--color-ink)] outline-none [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
             />
             <span className="text-[var(--color-ink-faint)]">–</span>
             <input
@@ -143,12 +184,12 @@ export function ItemPicker({
               value={rangeEnd}
               onChange={(event) => setRangeEnd(event.target.value)}
               aria-label="Range end index"
-              className="tabular w-10 bg-transparent text-center text-[var(--color-ink)] outline-none"
+              className="tabular w-14 [appearance:textfield] bg-transparent text-center text-[var(--color-ink)] outline-none [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
             />
             <button
               type="button"
               onClick={handleSelectRange}
-              className="cursor-pointer rounded px-1.5 py-0.5 font-medium text-[var(--color-accent)] transition-opacity hover:opacity-80"
+              className="cursor-pointer rounded px-2 py-1 font-medium text-[var(--color-accent)] transition-opacity hover:opacity-80"
             >
               Select Range
             </button>
@@ -158,7 +199,7 @@ export function ItemPicker({
             type="button"
             onClick={handleClear}
             disabled={noneSelected}
-            className="cursor-pointer rounded-md px-2 py-1 text-[0.8125rem] font-medium text-[var(--color-ink-muted)] transition-colors hover:bg-[var(--color-sunken)] hover:text-[var(--color-ink)] disabled:cursor-not-allowed disabled:opacity-50"
+            className="min-h-9 cursor-pointer rounded-md px-2.5 py-1 text-[0.8125rem] font-medium text-[var(--color-ink-muted)] transition-colors hover:bg-[var(--color-sunken)] hover:text-[var(--color-ink)] disabled:cursor-not-allowed disabled:opacity-50"
           >
             Clear
           </button>
@@ -172,14 +213,14 @@ export function ItemPicker({
           onChange={(event) => setFilterQuery(event.target.value)}
           placeholder="Filter items..."
           aria-label="Filter playlist items"
-          className="w-full rounded-xl border border-[var(--color-line)] bg-[var(--color-canvas)] py-2 pr-8 pl-3 text-[0.8125rem] text-[var(--color-ink)] transition-colors outline-none placeholder:text-[var(--color-ink-faint)] focus:border-[var(--color-accent)]"
+          className="w-full rounded-xl border border-[var(--color-line)] bg-[var(--color-canvas)] py-2 pr-9 pl-3 text-[0.8125rem] text-[var(--color-ink)] transition-colors outline-none placeholder:text-[var(--color-ink-faint)] focus:border-[var(--color-accent)] focus-visible:shadow-[var(--shadow-focus)]"
         />
         {filterQuery && (
           <button
             type="button"
             onClick={() => setFilterQuery('')}
             aria-label="Clear filter"
-            className="absolute top-1/2 right-2 -translate-y-1/2 cursor-pointer rounded p-1 text-[var(--color-ink-faint)] hover:text-[var(--color-ink)]"
+            className="absolute top-1/2 right-1.5 grid size-7 -translate-y-1/2 cursor-pointer place-items-center rounded text-[var(--color-ink-faint)] hover:bg-[var(--color-sunken)] hover:text-[var(--color-ink)]"
           >
             <CloseIcon size={14} />
           </button>
@@ -191,40 +232,57 @@ export function ItemPicker({
           No items match &ldquo;{filterQuery}&rdquo;.
         </p>
       ) : (
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-          {visibleItems.map((item) => (
-            <ItemTile
-              key={item.id}
-              item={item}
-              selected={selectedIds.has(item.id)}
-              onToggle={handleTileClick}
-            />
-          ))}
+        <div
+          className={cx(
+            'grid grid-cols-2 gap-2 sm:grid-cols-3',
+            visibleItems.length > 9 && 'max-h-[26rem] overflow-y-auto p-0.5',
+          )}
+        >
+          {visibleItems.map((item) => {
+            const selected = selectedIds.has(item.id);
+            return (
+              <ItemTile
+                key={item.id}
+                item={item}
+                selected={selected}
+                disabled={!selected && atCap}
+                onToggle={handleTileClick}
+              />
+            );
+          })}
         </div>
       )}
 
-      <p
-        aria-live="polite"
-        className={cx(
-          'text-[0.8125rem]',
-          noneSelected ? 'text-[var(--color-danger)]' : 'text-[var(--color-ink-muted)]',
+      <div aria-live="polite" className="flex flex-col gap-0.5 text-[0.8125rem]">
+        <p
+          className={cx(
+            noneSelected ? 'text-[var(--color-danger)]' : 'text-[var(--color-ink-muted)]',
+          )}
+        >
+          {noneSelected
+            ? 'Select at least one item.'
+            : `${pluralize(selectedIds.size, 'item')} selected${cappedPlaylist ? ` (max ${maxItems})` : ''}`}
+        </p>
+        {(Boolean(capNotice) || (atCap && cappedPlaylist)) && (
+          <p className="text-xs text-[var(--color-ink-faint)]">
+            {capNotice ??
+              `Limit of ${maxItems} items per download reached. Deselect one to pick another.`}
+          </p>
         )}
-      >
-        {noneSelected
-          ? 'Select at least one item.'
-          : `${pluralize(selectedIds.size, 'item')} selected`}
-      </p>
+      </div>
     </fieldset>
   );
-}
+});
 
 const ItemTile = memo(function ItemTile({
   item,
   selected,
+  disabled,
   onToggle,
 }: {
   readonly item: MediaItem;
   readonly selected: boolean;
+  readonly disabled: boolean;
   readonly onToggle: (item: MediaItem, event?: MouseEvent) => void;
 }) {
   const [retries, setRetries] = useState(0);
@@ -250,23 +308,31 @@ const ItemTile = memo(function ItemTile({
 
   return (
     <label
+      title={disabled ? 'Maximum items selected' : displayTitle}
       onClick={(event) => {
+        if (disabled) {
+          event.preventDefault();
+          return;
+        }
         if (event.shiftKey) {
           event.preventDefault();
           onToggle(item, event);
         }
       }}
       className={cx(
-        'group relative flex cursor-pointer flex-col overflow-hidden rounded-xl border transition-all duration-150',
-        selected
-          ? 'border-[var(--color-accent)] bg-[var(--color-accent-wash)]'
-          : 'border-[var(--color-line)] bg-[var(--color-surface)] hover:border-[var(--color-line-strong)]',
-        'focus-within:shadow-[var(--shadow-focus)]',
+        'group relative flex flex-col overflow-hidden rounded-xl border transition-all duration-150',
+        disabled
+          ? 'cursor-not-allowed border-[var(--color-line)] bg-[var(--color-surface)] opacity-45'
+          : selected
+            ? 'cursor-pointer border-[var(--color-accent)] bg-[var(--color-accent-wash)]'
+            : 'cursor-pointer border-[var(--color-line)] bg-[var(--color-surface)] hover:border-[var(--color-line-strong)]',
+        'has-[:focus-visible]:shadow-[var(--shadow-focus)] has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-[var(--color-accent)]',
       )}
     >
       <input
         type="checkbox"
         checked={selected}
+        disabled={disabled}
         onChange={() => onToggle(item)}
         className="sr-only"
         aria-label={`Item ${item.index}, ${displayTitle}`}

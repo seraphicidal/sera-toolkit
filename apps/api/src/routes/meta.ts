@@ -2,14 +2,26 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { HealthReport } from '@sera/contracts/types';
 import type { SeraEngine } from '@sera/engine';
 import { checkAdminAuth } from '../plugins/admin-auth.js';
+import { normalizeClientAddress } from '../plugins/client.js';
 
 function isLoopback(address: string): boolean {
-  return (
-    address === '127.0.0.1' ||
-    address === '::1' ||
-    address === '::ffff:127.0.0.1' ||
-    address === 'localhost'
-  );
+  let bare = address.trim();
+  if (bare.startsWith('[') && bare.endsWith(']')) {
+    bare = bare.slice(1, -1);
+  }
+  const zoneIndex = bare.indexOf('%');
+  if (zoneIndex !== -1) {
+    bare = bare.slice(0, zoneIndex);
+  }
+  if (
+    bare === 'localhost' ||
+    bare === '::1' ||
+    /^(?:0{1,4}:){7}0{0,3}1$/i.test(bare) ||
+    /^(?:0{1,4}:){1,6}:0{0,3}1$/i.test(bare)
+  ) {
+    return true;
+  }
+  return normalizeClientAddress(bare) === '127.0.0.1';
 }
 
 function isAuthorized(request: FastifyRequest, engine: SeraEngine): boolean {
@@ -40,6 +52,10 @@ export function registerMetaRoutes(app: FastifyInstance, engine: SeraEngine): vo
             !request.headers.forwarded &&
             !request.headers['x-real-ip'] &&
             !request.headers['cf-connecting-ip'] &&
+            !request.headers['true-client-ip'] &&
+            !request.headers['x-forwarded-host'] &&
+            !request.headers['x-forwarded-proto'] &&
+            !request.headers.via &&
             isLoopback(request.ip)),
       },
     },

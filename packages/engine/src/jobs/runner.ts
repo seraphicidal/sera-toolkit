@@ -174,6 +174,7 @@ export class JobRunner {
         this.deps.remote,
       );
       let files: readonly { name: string; mimeType: string; path: string }[] = [];
+      const remoteTaskIds = new Set<string>();
       try {
         files = await this.deps.remote.dispatchJob(
           {
@@ -192,6 +193,9 @@ export class JobRunner {
             ...(spec.subtitles ? { subtitles: spec.subtitles } : {}),
           },
           {
+            onTaskId: (taskId) => {
+              remoteTaskIds.add(taskId);
+            },
             onProgress: (progress) =>
               report({
                 state: 'downloading',
@@ -202,6 +206,10 @@ export class JobRunner {
                     ? { bytesDownloaded: progress.bytesDownloaded }
                     : {}),
                   ...(progress.bytesTotal !== undefined ? { bytesTotal: progress.bytesTotal } : {}),
+                  ...(progress.speedBytesPerSecond !== undefined
+                    ? { speedBytesPerSecond: progress.speedBytesPerSecond }
+                    : {}),
+                  ...(progress.etaSeconds !== undefined ? { etaSeconds: progress.etaSeconds } : {}),
                 },
               }),
             ...(signal ? { signal } : {}),
@@ -219,12 +227,16 @@ export class JobRunner {
           produced.push({ path: destination, name });
         }
       } finally {
-        const uploads = new Set(
-          files
-            .map((file) => dirname(file.path))
-            .filter((directory) => basename(directory).startsWith('remote-')),
-        );
-        uploads.add(join(config.dataDir, `remote-${spec.jobId}`));
+        const uploads = new Set<string>();
+        for (const file of files) {
+          const directory = dirname(file.path);
+          if (basename(directory).startsWith('remote-')) {
+            uploads.add(directory);
+          }
+        }
+        for (const taskId of remoteTaskIds) {
+          uploads.add(join(config.dataDir, `remote-${taskId}`));
+        }
         for (const directory of uploads) {
           await rm(directory, { recursive: true, force: true }).catch(() => undefined);
         }
@@ -261,6 +273,18 @@ export class JobRunner {
       const results = new Array<ItemResult>(totalFiles);
       const itemFractions = new Array<number>(totalFiles).fill(0);
       let lastReportedPercent = 0;
+      const willPackageZip =
+        spec.packaging === 'zip' ||
+        (spec.packaging === 'auto' &&
+          (totalFiles > 1 ||
+            Boolean(spec.subtitles && !spec.subtitles.only && spec.subtitles.format !== 'embed')));
+      const itemProgressCap = willPackageZip ? 90 : 99;
+
+      let sharedInfoJsonPath: string | undefined;
+      if (isResolvedFresh && spec.rawInfoJson) {
+        sharedInfoJsonPath = join(workspace.scratchDir, 'info.json');
+        await writeFile(sharedInfoJsonPath, spec.rawInfoJson, 'utf8');
+      }
 
       const concurrency = Math.max(1, Math.min(config.itemConcurrency, totalFiles));
       const itemAbort = new AbortController();
@@ -282,7 +306,10 @@ export class JobRunner {
         const fileProgress = (fraction: number, extra: Partial<JobProgress> = {}): JobProgress => {
           itemFractions[index] = Math.min(1, Math.max(0, fraction));
           const sum = itemFractions.reduce((a, b) => a + b, 0);
-          const percent = Math.min(99, Math.max(lastReportedPercent, (sum / totalFiles) * 100));
+          const percent = Math.min(
+            itemProgressCap,
+            Math.max(lastReportedPercent, (sum / totalFiles) * itemProgressCap),
+          );
           lastReportedPercent = percent;
           const currentFile = Math.min(totalFiles, itemFractions.filter((f) => f >= 1).length + 1);
           return {
@@ -325,7 +352,7 @@ export class JobRunner {
           index,
           report: itemReport,
           fileProgress,
-          rawInfoJson: isResolvedFresh ? spec.rawInfoJson : undefined,
+          ...(sharedInfoJsonPath ? { loadInfoJsonPath: sharedInfoJsonPath } : {}),
           ...(spec.imported ? { imported: true } : {}),
           ...(spec.trim ? { trim: spec.trim } : {}),
           ...(spec.subtitles?.format === 'embed' ? { embedSubtitles: spec.subtitles } : {}),
@@ -495,7 +522,7 @@ export class JobRunner {
     index: number;
     report: ReportFn;
     fileProgress: (fraction: number, extra?: Partial<JobProgress>) => JobProgress;
-    rawInfoJson?: string;
+    loadInfoJsonPath?: string;
     imported?: boolean;
     trim?: TrimRange;
     embedSubtitles?: JobSubtitles;
@@ -535,7 +562,7 @@ export class JobRunner {
     index: number;
     report: ReportFn;
     fileProgress: (fraction: number, extra?: Partial<JobProgress>) => JobProgress;
-    rawInfoJson?: string;
+    loadInfoJsonPath?: string;
     imported?: boolean;
     trim?: TrimRange;
     embedSubtitles?: JobSubtitles;
@@ -547,13 +574,7 @@ export class JobRunner {
     const scratch = join(workspace.scratchDir, `sel-${index}`);
     await mkdir(scratch, { recursive: true });
 
-    let loadInfoJsonPath: string | undefined;
-    if (args.rawInfoJson) {
-      const infoDir = join(workspace.baseDir, `info-${index}`);
-      await mkdir(infoDir, { recursive: true });
-      loadInfoJsonPath = join(infoDir, 'info.json');
-      await writeFile(loadInfoJsonPath, args.rawInfoJson, 'utf8');
-    }
+    const loadInfoJsonPath = args.loadInfoJsonPath;
 
     const step = args.resolved.items.length > 1 ? `Downloading ${index + 1}` : 'Downloading';
     report({ state: 'downloading', step, progress: fileProgress(0) });
@@ -1045,7 +1066,7 @@ export class JobRunner {
     report({
       state: 'packaging',
       step: `Packaging ${produced.length} files`,
-      progress: { percent: 99, totalFiles: produced.length },
+      progress: { percent: 90, totalFiles: produced.length },
     });
 
     const takenArchiveNames = new Set(produced.map((file) => file.name.toLowerCase()));
@@ -1064,18 +1085,25 @@ export class JobRunner {
       ({ sizeBytes } = await createZip({
         entries: produced.map((file) => ({ path: file.path, name: file.name })),
         destination: stagingArchivePath,
+        maxOutputBytes: config.maxFilesizeBytes,
         ...(signal ? { signal } : {}),
         onProgress: (percent, currentFile, totalFiles) => {
+          const scaled = Math.min(99, 90 + Math.round(percent * 0.09));
           report({
             state: 'packaging',
             step: `Packaging ${currentFile} of ${totalFiles}`,
-            progress: { percent: 99, currentFile, totalFiles },
+            progress: { percent: scaled, currentFile, totalFiles },
           });
         },
       }));
       await rename(stagingArchivePath, archivePath);
     } finally {
       await unlink(stagingArchivePath).catch(() => undefined);
+    }
+
+    const keepIndividualFiles = spec.packaging !== 'zip';
+    if (!keepIndividualFiles) {
+      await Promise.all(produced.map((file) => unlink(file.path).catch(() => undefined)));
     }
 
     await workspace.writeManifest({
@@ -1086,11 +1114,13 @@ export class JobRunner {
       isArchive: true,
       files: [
         { name: archiveName, sizeBytes, mimeType: 'application/zip' },
-        ...files.map(({ name, sizeBytes: size, mimeType }) => ({
-          name,
-          sizeBytes: size,
-          mimeType,
-        })),
+        ...(keepIndividualFiles
+          ? files.map(({ name, sizeBytes: size, mimeType }) => ({
+              name,
+              sizeBytes: size,
+              mimeType,
+            }))
+          : []),
       ],
     });
 
@@ -1100,7 +1130,7 @@ export class JobRunner {
       sizeBytes,
       mimeType: 'application/zip',
       isArchive: true,
-      files,
+      ...(keepIndividualFiles ? { files } : {}),
       expiresAt,
     };
   }
@@ -1111,6 +1141,8 @@ export class JobRunner {
   ): Promise<void> {
     const { config } = this.deps;
     let totalBytes = 0;
+    const probeTargets: { path: string; name: string }[] = [];
+
     for (const file of produced) {
       const info = await stat(file.path).catch(() => undefined);
       if (!info || info.size === 0) {
@@ -1158,29 +1190,60 @@ export class JobRunner {
           extension,
         )
       ) {
-        const probed = await probe(file.path, {
-          ffmpegPath: config.ffmpegPath,
-          ffprobePath: config.ffprobePath,
-          timeoutMs: 30_000,
-          ...(signal ? { signal } : {}),
-        }).catch(() => undefined);
-        if (signal?.aborted) {
-          throw seraError('CANCELLED');
-        }
-        if (probed?.durationSeconds !== undefined && probed.durationSeconds <= 0) {
-          throw seraError('CONVERSION_FAILED', {
-            message: 'The download finished but the file has no playable content.',
-            detail: `zero duration: ${file.name}`,
-          });
-        }
-        if (!probed || (!probed.video && !probed.audio)) {
-          throw seraError('CONVERSION_FAILED', {
-            message: 'The download finished but the file could not be verified.',
-            detail: `unreadable output: ${file.name}`,
-          });
-        }
+        probeTargets.push(file);
       }
     }
+
+    if (!probeTargets.length) return;
+    const probeAbort = new AbortController();
+    const onAbort = () => probeAbort.abort();
+    signal?.addEventListener('abort', onAbort, { once: true });
+    let cursor = 0;
+    let firstError: Error | undefined;
+    const workerCount = Math.max(1, Math.min(config.itemConcurrency, probeTargets.length));
+    try {
+      await Promise.all(
+        Array.from({ length: workerCount }, async () => {
+          for (;;) {
+            if (firstError !== undefined || probeAbort.signal.aborted) return;
+            const index = cursor;
+            cursor += 1;
+            if (index >= probeTargets.length) return;
+            const file = probeTargets[index]!;
+            const probed = await probe(file.path, {
+              ffmpegPath: config.ffmpegPath,
+              ffprobePath: config.ffprobePath,
+              timeoutMs: 30_000,
+              signal: probeAbort.signal,
+            }).catch(() => undefined);
+            if (signal?.aborted) {
+              firstError ??= seraError('CANCELLED');
+              probeAbort.abort();
+              return;
+            }
+            if (probed?.durationSeconds !== undefined && probed.durationSeconds <= 0) {
+              firstError ??= seraError('CONVERSION_FAILED', {
+                message: 'The download finished but the file has no playable content.',
+                detail: `zero duration: ${file.name}`,
+              });
+              probeAbort.abort();
+              return;
+            }
+            if (!probed || (!probed.video && !probed.audio)) {
+              firstError ??= seraError('CONVERSION_FAILED', {
+                message: 'The download finished but the file could not be verified.',
+                detail: `unreadable output: ${file.name}`,
+              });
+              probeAbort.abort();
+              return;
+            }
+          }
+        }),
+      );
+    } finally {
+      signal?.removeEventListener('abort', onAbort);
+    }
+    if (firstError !== undefined) throw firstError;
   }
 
   private validateResultSize(result: JobResult): void {

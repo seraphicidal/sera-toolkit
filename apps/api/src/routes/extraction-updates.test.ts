@@ -85,7 +85,9 @@ describe('extraction update endpoints', () => {
     ]) {
       const anon = await app.inject({ method: 'GET', url: path });
       expect(anon.statusCode, path).toBe(401);
-      expect(anon.json()).toEqual({ error: { code: 'NOT_FOUND', message: 'Not found.' } });
+      expect(anon.json()).toEqual({
+        error: { code: 'NOT_FOUND', message: 'Not found.', retryable: false },
+      });
 
       const worker = await app.inject({
         method: 'GET',
@@ -429,5 +431,128 @@ describe('extraction update endpoints', () => {
     const cacheDir = join(dataDir, 'updates', 'cache');
     const files = existsSync(cacheDir) ? await readdir(cacheDir) : [];
     expect(files.filter((name) => !name.endsWith('.sha256'))).toEqual([]);
+  });
+
+  it('enforces per-node rate limits on valid update tokens and sanitizes Content-Disposition', async () => {
+    const ytdlpBinary = Buffer.from('#!/usr/bin/env python3\nprint("rl")\n');
+    const ytdlpSha = sha256Hex(ytdlpBinary);
+    const mockFetch: typeof globalThis.fetch = async (input) => {
+      const url =
+        typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.endsWith('/SHA2-256SUMS')) {
+        return new Response(`${ytdlpSha}  yt-dlp\n`, { status: 200 });
+      }
+      return new Response(ytdlpBinary, { status: 200 });
+    };
+
+    const { app, engine, dataDir } = await createUpdatesApp(
+      { SERA_EXTRACTION_NODE_TOKENS: `android:${NODE_TOKEN},laptop:laptop-token-9876543210` },
+      { fetch: mockFetch, enableRemoteLookup: true },
+    );
+    cleanups.push(async () => {
+      await app.close();
+      await engine.close();
+      await rm(dataDir, { recursive: true, force: true });
+    });
+
+    const headRes = await app.inject({
+      method: 'HEAD',
+      url: '/internal/extraction/updates/ytdlp',
+      headers: { authorization: `Bearer ${NODE_TOKEN}` },
+    });
+    expect(headRes.statusCode).toBe(200);
+    expect(headRes.headers['content-disposition']).toContain('attachment; filename=');
+    expect(headRes.headers['content-disposition']).toContain("filename*=UTF-8''");
+    expect(headRes.headers['content-length']).toBe(String(ytdlpBinary.length));
+
+    let hit429 = false;
+    for (let i = 0; i < 25; i += 1) {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/internal/extraction/updates/ytdlp',
+        headers: {
+          authorization: `Bearer ${NODE_TOKEN}`,
+          'if-none-match': `"${ytdlpSha}"`,
+        },
+      });
+      if (res.statusCode === 429) {
+        hit429 = true;
+        break;
+      }
+    }
+    expect(hit429).toBe(true);
+
+    const otherNode = await app.inject({
+      method: 'GET',
+      url: '/internal/extraction/updates/ytdlp',
+      headers: {
+        authorization: 'Bearer laptop-token-9876543210',
+        'if-none-match': `"${ytdlpSha}"`,
+      },
+    });
+    expect(otherNode.statusCode).toBe(304);
+  });
+
+  it('fails closed with 503 when artifact cache directory is unwritable and rejects unsafe extraArgs', async () => {
+    const ytdlpBinary = Buffer.from('#!/usr/bin/env python3\nprint("no-ram")\n');
+    const ytdlpSha = sha256Hex(ytdlpBinary);
+    let binaryFetchCount = 0;
+    const mockFetch: typeof globalThis.fetch = async (input) => {
+      const url =
+        typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.endsWith('/SHA2-256SUMS')) {
+        return new Response(`${ytdlpSha}  yt-dlp\n`, { status: 200 });
+      }
+      if (url.endsWith('/yt-dlp')) {
+        binaryFetchCount += 1;
+        return new Response(ytdlpBinary, { status: 200 });
+      }
+      return new Response('not found', { status: 404 });
+    };
+
+    const { app, engine, dataDir } = await createUpdatesApp(
+      {},
+      { fetch: mockFetch, enableRemoteLookup: true },
+    );
+    cleanups.push(async () => {
+      await app.close();
+      await engine.close();
+      await rm(dataDir, { recursive: true, force: true });
+    });
+
+    await mkdir(join(dataDir, 'updates'), { recursive: true });
+    await writeFile(
+      join(dataDir, 'updates', 'manifest.json'),
+      JSON.stringify({
+        ytdlp: { sha256: ytdlpSha },
+        providerConfig: {
+          youtube: {
+            extraArgs: ['--exec', 'id'],
+          },
+        },
+      }),
+    );
+
+    const manifestRes = await app.inject({
+      method: 'GET',
+      url: '/internal/extraction/updates/manifest',
+      headers: { authorization: `Bearer ${NODE_TOKEN}` },
+    });
+    expect(manifestRes.statusCode).toBe(200);
+    expect(manifestRes.json<NodeUpdateManifest>().providerConfig.youtube.extraArgs).toEqual([]);
+
+    await rm(join(dataDir, 'updates', 'cache'), { recursive: true, force: true });
+    await writeFile(join(dataDir, 'updates', 'cache'), 'not-a-directory');
+
+    const failClosed = await app.inject({
+      method: 'GET',
+      url: '/internal/extraction/updates/ytdlp',
+      headers: { authorization: `Bearer ${NODE_TOKEN}` },
+    });
+    expect(failClosed.statusCode).toBe(503);
+    expect(failClosed.json()).toMatchObject({
+      error: { code: 'PROVIDER_UNAVAILABLE', retryable: true },
+    });
+    expect(binaryFetchCount).toBe(0);
   });
 });

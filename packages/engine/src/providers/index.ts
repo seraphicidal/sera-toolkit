@@ -136,6 +136,12 @@ export class ProviderRegistry {
         capabilities: provider.capabilities,
       }));
   }
+
+  async close(): Promise<void> {
+    await Promise.all(
+      this.providers.map((provider) => Promise.resolve(provider.close?.()).catch(() => undefined)),
+    );
+  }
 }
 
 export function normalizeForProvider(provider: MediaProvider, url: URL): URL {

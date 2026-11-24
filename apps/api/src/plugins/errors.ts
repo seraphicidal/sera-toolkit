@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import fp from 'fastify-plugin';
 import { SeraError } from '@sera/engine';
-import type { ApiErrorBody } from '@sera/contracts/types';
+import type { ApiErrorBody, ErrorCode } from '@sera/contracts/types';
 import { ZodError } from 'zod';
 
 export const errorHandlerPlugin = fp(function errorHandlerPlugin(
@@ -36,7 +36,7 @@ export const errorHandlerPlugin = fp(function errorHandlerPlugin(
       const first = error.issues[0];
       const body: ApiErrorBody = {
         error: {
-          code: 'INVALID_URL',
+          code: 'VALIDATION_ERROR',
           message: first?.message ?? 'That request was not valid.',
           retryable: false,
         },
@@ -50,15 +50,29 @@ export const errorHandlerPlugin = fp(function errorHandlerPlugin(
         ? (error as { statusCode: number }).statusCode
         : 500;
     if (status < 500) {
+      const code: ErrorCode =
+        status === 429
+          ? 'RATE_LIMITED'
+          : status === 413
+            ? 'TOO_LARGE'
+            : status === 404
+              ? 'NOT_FOUND'
+              : status === 403
+                ? 'FORBIDDEN'
+                : 'VALIDATION_ERROR';
       const body: ApiErrorBody = {
         error: {
-          code: status === 429 ? 'RATE_LIMITED' : status === 413 ? 'TOO_LARGE' : 'INVALID_URL',
+          code,
           message:
             status === 429
               ? 'Too many requests. Try again in a moment.'
               : status === 413
                 ? 'That request is too large.'
-                : 'That request was not valid.',
+                : status === 404
+                  ? "We couldn't find that."
+                  : status === 403
+                    ? 'That request is not permitted.'
+                    : 'That request was not valid.',
           retryable: status === 429,
         },
       };

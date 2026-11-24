@@ -5,7 +5,15 @@
 {$SERA_DOMAIN} {
 	encode zstd gzip
 
-	@api path /internal/extraction/* /api/* /health /ready
+	@worker_only path /internal/extraction/nodes /internal/extraction/nodes/* /internal/extraction/dispatch /internal/extraction/dispatch/*
+	handle @worker_only {
+		respond 404
+	}
+
+	@api {
+		path /internal/extraction/* /api/* /health /ready
+		not path /internal/extraction/nodes /internal/extraction/nodes/* /internal/extraction/dispatch /internal/extraction/dispatch/*
+	}
 	handle @api {
 		reverse_proxy api:4000 {
 			transport http {

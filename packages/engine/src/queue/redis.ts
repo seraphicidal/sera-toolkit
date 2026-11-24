@@ -1,5 +1,6 @@
 import { Queue, Worker, type Job as BullJob } from 'bullmq';
 import { Redis } from 'ioredis';
+import { MESSAGES } from '../errors.js';
 import type { Logger } from '../logging.js';
 import {
   isActive,
@@ -89,9 +90,19 @@ export class RedisJobBackend implements JobBackend {
 
   async submit(record: JobRecord): Promise<void> {
     await this.ready();
+    const {
+      resolvedMedia: _droppedMedia,
+      rawInfoJson: _droppedInfo,
+      resolvedAt: _droppedAt,
+      ...slimSpec
+    } = record.spec;
+    const storedRecord: JobRecord = {
+      ...record,
+      spec: slimSpec,
+    };
     await this.connection
       .multi()
-      .set(RECORD_PREFIX + record.id, JSON.stringify(record), 'EX', this.recordTtlSeconds)
+      .set(RECORD_PREFIX + record.id, JSON.stringify(storedRecord), 'EX', this.recordTtlSeconds)
       .sadd(CLIENT_PREFIX + record.clientKey, record.id)
       .expire(CLIENT_PREFIX + record.clientKey, this.recordTtlSeconds)
       .exec();
@@ -185,6 +196,7 @@ export class RedisJobBackend implements JobBackend {
     this.worker = new Worker<{ jobId: string }>(
       QUEUE_NAME,
       async (job: BullJob<{ jobId: string }>) => {
+        await this.ready();
         const record = await this.get(job.data.jobId);
         if (!record) {
           this.logger.warn({ jobId: job.data.jobId }, 'queued job has no record; skipping');
@@ -204,7 +216,7 @@ export class RedisJobBackend implements JobBackend {
           progress: { percent: 0 },
           error: {
             code: 'INTERNAL',
-            message: error?.message || 'Worker terminated unexpectedly',
+            message: MESSAGES.INTERNAL,
             retryable: true,
           },
         }).catch((err: unknown) => {

@@ -25,21 +25,38 @@ val YTDLP_POSTPROCESS_TEMPLATE = listOf(
     "%(progress.postprocessor)s",
 ).joinToString(PROGRESS_SEP)
 
-private val DISALLOWED_EXTRA_FLAGS = setOf(
-    "--exec",
-    "--exec-before-download",
-    "--paths",
-    "-P",
-    "--output",
-    "-o",
-    "--config-location",
-    "--config-locations",
-    "--plugin-dirs",
-    "--batch-file",
-    "-a",
-    "--cookies",
-    "--cookies-from-browser",
+private val ALLOWED_BOOLEAN_EXTRA_FLAGS = setOf(
+    "--no-remote-components",
+    "--force-ipv4",
+    "-4",
+    "--force-ipv6",
+    "-6",
+    "--geo-bypass",
+    "--no-geo-bypass",
+    "--no-check-formats",
+    "--ignore-no-formats-error",
+    "--hls-prefer-native",
+    "--hls-use-mpegts",
+    "--prefer-free-formats",
 )
+
+private val ALLOWED_VALUE_EXTRA_FLAGS: Map<String, Regex> = mapOf(
+    "--remote-components" to Regex("^[a-z0-9_.:,-]{1,128}$", RegexOption.IGNORE_CASE),
+    "--impersonate" to Regex("^[A-Za-z0-9_.:,-]{1,64}$"),
+    "--sleep-requests" to Regex("^\\d{1,3}(?:\\.\\d{1,3})?$"),
+    "--sleep-interval" to Regex("^\\d{1,3}(?:\\.\\d{1,3})?$"),
+    "--max-sleep-interval" to Regex("^\\d{1,3}(?:\\.\\d{1,3})?$"),
+    "--sleep-subtitles" to Regex("^\\d{1,3}(?:\\.\\d{1,3})?$"),
+    "--retries" to Regex("^\\d{1,2}$"),
+    "--fragment-retries" to Regex("^\\d{1,2}$"),
+    "--extractor-retries" to Regex("^\\d{1,2}$"),
+    "--socket-timeout" to Regex("^\\d{1,3}$"),
+    "--concurrent-fragments" to Regex("^[1-8]$"),
+    "--geo-bypass-country" to Regex("^[A-Z]{2}$", RegexOption.IGNORE_CASE),
+    "--compat-options" to Regex("^[a-z0-9_,-]{1,64}$", RegexOption.IGNORE_CASE),
+)
+
+private val VALID_REMOTE_COMPONENT = Regex("^[a-z0-9_.:-]{1,64}$", RegexOption.IGNORE_CASE)
 
 data class YtdlpRuntimePaths(
     val ffmpegLocation: String? = null,
@@ -83,7 +100,9 @@ object YtdlpCommandBuilder {
             flag == "--remote-components" || flag == "--no-remote-components"
         }
         if (!hasRemoteOverride) {
-            val effectiveComponents = remoteComponents.map { it.trim() }.filter { it.isNotEmpty() }
+            val effectiveComponents = remoteComponents
+                .map { it.trim() }
+                .filter { it.isNotEmpty() && VALID_REMOTE_COMPONENT.matches(it) }
             if (effectiveComponents.isNotEmpty()) {
                 args.addAll(listOf("--remote-components", effectiveComponents.joinToString(",")))
             } else if (runtimePaths.ejsCacheDir != null || !runtimePaths.quickjsPath.isNullOrBlank()) {
@@ -246,22 +265,48 @@ object YtdlpCommandBuilder {
     fun subtitleArgs(track: YtdlpSubtitleFilter): List<String> =
         listOf(if (track.auto) "--write-auto-subs" else "--write-subs", "--sub-langs", track.lang)
 
-    private fun filterSafeExtraArgs(raw: List<String>): List<String> {
+    fun filterSafeExtraArgs(raw: List<String>): List<String> {
         val out = ArrayList<String>(raw.size)
-        var skipNext = false
-        for (token in raw) {
-            if (skipNext) {
-                skipNext = false
+        var i = 0
+        while (i < raw.size) {
+            val trimmed = raw[i].trim()
+            i += 1
+            if (trimmed.isEmpty() || !trimmed.startsWith("-")) continue
+
+            val eqIdx = trimmed.indexOf('=')
+            val flagName = if (eqIdx >= 0) trimmed.substring(0, eqIdx) else trimmed
+            val inlineValue = if (eqIdx >= 0) trimmed.substring(eqIdx + 1) else null
+
+            if (inlineValue == null && flagName in ALLOWED_BOOLEAN_EXTRA_FLAGS) {
+                out.add(flagName)
                 continue
             }
-            val trimmed = token.trim()
-            if (trimmed.isEmpty()) continue
-            val flagName = trimmed.substringBefore('=')
-            if (flagName in DISALLOWED_EXTRA_FLAGS) {
-                if (!trimmed.contains('=')) skipNext = true
+
+            val valuePattern = ALLOWED_VALUE_EXTRA_FLAGS[flagName]
+            if (valuePattern != null) {
+                val value = if (inlineValue != null) {
+                    inlineValue
+                } else if (i < raw.size) {
+                    val candidate = raw[i].trim()
+                    if (!candidate.startsWith("-")) {
+                        i += 1
+                        candidate
+                    } else {
+                        null
+                    }
+                } else {
+                    null
+                }
+                if (value != null && !value.startsWith("-") && valuePattern.matches(value)) {
+                    out.add(flagName)
+                    out.add(value)
+                }
                 continue
             }
-            out.add(trimmed)
+
+            if (inlineValue == null && i < raw.size && !raw[i].trim().startsWith("-")) {
+                i += 1
+            }
         }
         return out
     }

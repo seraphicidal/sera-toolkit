@@ -113,6 +113,15 @@ export async function downloadDirect(
     throw seraError('MEDIA_UNAVAILABLE', { detail: 'server returned an empty file' });
   }
 
+  const contentEncoding = header(opened.headers, 'content-encoding')?.trim().toLowerCase();
+  const isEncoded = Boolean(contentEncoding && contentEncoding !== 'identity');
+  if (bytesTotal !== undefined && !isEncoded && received !== bytesTotal) {
+    await rm(request.destination, { force: true }).catch(() => undefined);
+    throw seraError('NETWORK_ERROR', {
+      detail: `incomplete download: received ${received} of ${bytesTotal} bytes`,
+    });
+  }
+
   request.onProgress?.({ bytesDownloaded: received, ...(bytesTotal ? { bytesTotal } : {}) });
 
   const contentType = header(opened.headers, 'content-type');

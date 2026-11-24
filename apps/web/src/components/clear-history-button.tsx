@@ -6,9 +6,11 @@ import { clearHistory } from '@/lib/history';
 export function ClearHistoryButton({
   label = 'Clear local history',
   className,
+  onCleared,
 }: {
   readonly label?: string;
   readonly className?: string;
+  readonly onCleared?: () => void;
 }) {
   const [cleared, setCleared] = useState(false);
   const resetTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -22,6 +24,7 @@ export function ClearHistoryButton({
   const handleClick = () => {
     clearHistory();
     setCleared(true);
+    onCleared?.();
     if (resetTimer.current) clearTimeout(resetTimer.current);
     resetTimer.current = setTimeout(() => setCleared(false), 2500);
   };
@@ -39,7 +42,11 @@ export function ClearHistoryButton({
         {cleared ? 'History cleared' : label}
       </button>
       {cleared && (
-        <span role="status" aria-live="polite" className="text-xs text-[var(--color-success)]">
+        <span
+          role="status"
+          aria-live="polite"
+          className="text-xs font-medium text-[var(--color-success)]"
+        >
           Local history wiped
         </span>
       )}

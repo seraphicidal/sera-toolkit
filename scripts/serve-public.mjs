@@ -24,7 +24,7 @@ function loadOrCreateSecret() {
   return secret;
 }
 
-function productionEnv(secret) {
+function productionEnv(secret, behindTunnel) {
   return {
     ...process.env,
     NODE_ENV: 'production',
@@ -51,7 +51,7 @@ function productionEnv(secret) {
     SERA_RATE_LIMIT_JOBS_PER_MINUTE: '8',
     SERA_MAX_CONCURRENT_JOBS_PER_CLIENT: '2',
 
-    SERA_TRUST_PROXY: 'true',
+    SERA_TRUST_PROXY: behindTunnel ? '1' : 'false',
 
     LOG_LEVEL: 'info',
   };
@@ -154,8 +154,15 @@ function prepareStandalone() {
   return join(runDir, 'apps', 'web', 'server.js');
 }
 
+const cloudflared = join(
+  ROOT,
+  '.tools',
+  process.platform === 'win32' ? 'cloudflared.exe' : 'cloudflared',
+);
+const useTunnel = !LOCAL_ONLY && existsSync(cloudflared);
+
 const secret = loadOrCreateSecret();
-const env = productionEnv(secret);
+const env = productionEnv(secret, useTunnel);
 const serverEntry = prepareStandalone();
 
 console.log('[sera] starting production API on 127.0.0.1:' + API_PORT);
@@ -182,12 +189,7 @@ supervise(
 );
 
 if (!LOCAL_ONLY) {
-  const cloudflared = join(
-    ROOT,
-    '.tools',
-    process.platform === 'win32' ? 'cloudflared.exe' : 'cloudflared',
-  );
-  if (!existsSync(cloudflared)) {
+  if (!useTunnel) {
     console.error('[sera] cloudflared not found in .tools/. Serving locally only.');
   } else {
     setTimeout(() => {

@@ -126,6 +126,13 @@ export function parseGalleryDlJson(
   };
 }
 
+const MISSING_BINARY_TTL_MS = 5 * 60_000;
+const missingBinaries = new Map<string, number>();
+
+export function resetGalleryDlAvailabilityCache(): void {
+  missingBinaries.clear();
+}
+
 export async function extractWithGalleryDl(
   url: URL,
   context: ProviderContext,
@@ -135,6 +142,12 @@ export async function extractWithGalleryDl(
     throw seraError('BLOCKED_ADDRESS', { detail: `gallery-dl: protocol ${url.protocol}` });
   }
   const binary = options.binary ?? locateTool('gallery-dl', process.env.SERA_GALLERYDL_PATH ?? '');
+  const missingUntil = missingBinaries.get(binary);
+  if (missingUntil !== undefined && Date.now() < missingUntil) {
+    throw seraError('UNSUPPORTED_SOURCE', {
+      detail: 'gallery-dl binary not installed',
+    });
+  }
   const provider = options.providerId ?? 'generic';
   const upstream = options.proxy ?? context.config.proxyFor(provider);
   const proxy = context.egressProxy ? await context.egressProxy(url, upstream) : upstream;
@@ -169,8 +182,19 @@ export async function extractWithGalleryDl(
     }
     stdout = result.stdout;
   } catch (error) {
-    if (error instanceof SeraError) throw error;
+    if (error instanceof SeraError) {
+      const causeCode = (error.cause as NodeJS.ErrnoException | undefined)?.code;
+      if (error.code === 'INTERNAL' && causeCode === 'ENOENT') {
+        missingBinaries.set(binary, Date.now() + MISSING_BINARY_TTL_MS);
+        throw seraError('UNSUPPORTED_SOURCE', {
+          detail: 'gallery-dl binary not installed',
+          cause: error.cause,
+        });
+      }
+      throw error;
+    }
     if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
+      missingBinaries.set(binary, Date.now() + MISSING_BINARY_TTL_MS);
       throw seraError('UNSUPPORTED_SOURCE', {
         detail: 'gallery-dl binary not installed',
         cause: error,

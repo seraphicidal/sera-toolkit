@@ -197,9 +197,6 @@ export const MEDIA_EXTENSIONS = new Set([
   'zip',
   'tar',
   '7z',
-  'apk',
-  'dmg',
-  'exe',
   'epub',
 ]);
 

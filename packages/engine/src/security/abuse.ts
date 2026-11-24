@@ -3,6 +3,7 @@ import { seraError } from '../errors.js';
 
 const SUSPICIOUS_CODES: ReadonlySet<ErrorCode> = new Set<ErrorCode>([
   'INVALID_URL',
+  'VALIDATION_ERROR',
   'BLOCKED_ADDRESS',
   'UNSUPPORTED_SOURCE',
   'EXPIRED',

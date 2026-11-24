@@ -2,6 +2,7 @@ import type { ContainerFormat, MediaKind, ProviderCapabilities } from '@sera/con
 import { declare } from './capabilities.js';
 import { seraError } from '../errors.js';
 import { normalizeContainer as normalizeFormatContainer } from '../normalize/formats.js';
+import { discard, header } from '../security/http.js';
 import { hostMatchesAny, MEDIA_EXTENSIONS, parseUserUrl, urlExtension } from '../security/url.js';
 import { formatBytes } from '../util/format.js';
 import { sanitizeStem } from '../util/filename.js';
@@ -32,7 +33,7 @@ export class DirectFileProvider implements MediaProvider {
   }
 
   async resolve(url: URL, context: ProviderContext): Promise<ResolvedMedia> {
-    const head = await context.head(url);
+    const head = await probeHeadOrRange(url, context);
     if (head.status >= 400) {
       throw seraError(head.status === 404 ? 'MEDIA_UNAVAILABLE' : 'NETWORK_ERROR', {
         detail: `HEAD ${head.status}`,
@@ -183,20 +184,44 @@ function convertedVideoPlan(
   };
 }
 
+export async function probeHeadOrRange(
+  url: URL,
+  context: ProviderContext,
+): Promise<{ status: number; contentType?: string; contentLength?: number; url: string }> {
+  const head = await context.head(url);
+  if ((head.status === 405 || head.status === 403 || head.status === 501) && context.open) {
+    const opened = await context.open(url, {
+      method: 'GET',
+      headers: { range: 'bytes=0-0' },
+      ...(context.signal ? { signal: context.signal } : {}),
+    });
+    discard(opened.body);
+    const contentType = header(opened.headers, 'content-type');
+    const contentRange = header(opened.headers, 'content-range');
+    const rangeMatch = contentRange ? /^bytes\s+\d+-\d+\/(\d+)$/i.exec(contentRange.trim()) : null;
+    const rangeTotal = rangeMatch?.[1] ? Number(rangeMatch[1]) : NaN;
+    const fallbackLength =
+      opened.status === 200 ? Number(header(opened.headers, 'content-length')) : NaN;
+    const contentLength =
+      Number.isSafeInteger(rangeTotal) && rangeTotal > 0
+        ? rangeTotal
+        : Number.isFinite(fallbackLength) && fallbackLength > 0
+          ? fallbackLength
+          : undefined;
+    return {
+      status: opened.status === 206 ? 200 : opened.status,
+      ...(contentType ? { contentType } : {}),
+      ...(contentLength !== undefined ? { contentLength } : {}),
+      url: opened.url,
+    };
+  }
+  return head;
+}
+
 const IMAGE_EXTS = new Set(['jpg', 'jpeg', 'png', 'webp', 'avif', 'bmp', 'tif', 'tiff', 'heic']);
 const AUDIO_EXTS = new Set(['mp3', 'm4a', 'aac', 'opus', 'ogg', 'oga', 'wav', 'flac', 'wma']);
 const VIDEO_EXTS = new Set(['mp4', 'm4v', 'mov', 'webm', 'mkv', 'avi', 'flv', 'ts', 'm3u8', 'mpd']);
-export const ARCHIVE_DOC_EXTS = new Set([
-  'pdf',
-  'iso',
-  'zip',
-  'tar',
-  '7z',
-  'apk',
-  'dmg',
-  'exe',
-  'epub',
-]);
+export const ARCHIVE_DOC_EXTS = new Set(['pdf', 'iso', 'zip', 'tar', '7z', 'epub']);
 
 const ARCHIVE_DOC_MIMES: Readonly<Record<string, ContainerFormat>> = {
   'application/pdf': 'pdf',
@@ -207,14 +232,8 @@ const ARCHIVE_DOC_MIMES: Readonly<Record<string, ContainerFormat>> = {
   'application/tar': 'tar',
   'application/x-gtar': 'tar',
   'application/x-7z-compressed': '7z',
-  'application/vnd.android.package-archive': 'apk',
-  'application/x-apple-diskimage': 'dmg',
   'application/x-iso9660-image': 'iso',
   'application/x-cd-image': 'iso',
-  'application/x-msdownload': 'exe',
-  'application/x-msdos-program': 'exe',
-  'application/x-executable': 'exe',
-  'application/vnd.microsoft.portable-executable': 'exe',
   'application/epub+zip': 'epub',
 };
 
@@ -233,13 +252,13 @@ export function classify(contentType: string, extension: string): MediaKind {
     Object.hasOwn(ARCHIVE_DOC_MIMES, contentType) ||
     (!contentType && ARCHIVE_DOC_EXTS.has(extension))
   )
-    return 'image';
+    return 'file';
 
   if (contentType === 'application/octet-stream' || contentType === 'binary/octet-stream') {
     if (VIDEO_EXTS.has(extension)) return 'video';
     if (AUDIO_EXTS.has(extension)) return 'audio';
     if (IMAGE_EXTS.has(extension)) return 'image';
-    if (ARCHIVE_DOC_EXTS.has(extension)) return 'image';
+    if (ARCHIVE_DOC_EXTS.has(extension)) return 'file';
   }
   if (contentType.includes('mpegurl') || contentType.includes('dash+xml')) return 'video';
   return 'unknown';

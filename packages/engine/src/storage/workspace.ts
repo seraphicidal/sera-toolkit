@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import {
   lstat,
   mkdir,
@@ -29,7 +30,12 @@ export interface JobManifest {
 
 const MANIFEST_NAME = 'manifest.json';
 const ACTIVE_LEASE_NAME = '.active';
+const DOWNLOAD_LEASE_PREFIX = '.dl-';
+const DOWNLOAD_LEASE_REFRESH_MS = 60_000;
+const DOWNLOAD_LEASE_TTL_SECONDS = 180;
 const MAX_ACTIVE_LEASE_SECONDS = 3600;
+const WORKSPACE_DIR_PATTERN = /^(?:remote-)?[a-f0-9]{16,64}$/i;
+const USAGE_SCAN_CONCURRENCY = 8;
 const OUTPUT_DIR = 'out';
 const SCRATCH_DIR = 'work';
 
@@ -57,10 +63,32 @@ export class WorkspaceManager {
 
   acquireDownload(jobId: string): () => void {
     this.activeDownloads.set(jobId, (this.activeDownloads.get(jobId) ?? 0) + 1);
+    let leasePath: string | undefined;
+    try {
+      leasePath = join(
+        this.jobDir(jobId),
+        `${DOWNLOAD_LEASE_PREFIX}${String(process.pid)}-${randomBytes(6).toString('hex')}`,
+      );
+      void writeFile(leasePath, String(process.pid)).catch(() => undefined);
+    } catch {
+      leasePath = undefined;
+    }
+    const refreshTimer = leasePath
+      ? setInterval(() => {
+          const now = new Date();
+          void utimes(leasePath!, now, now).catch(() => undefined);
+        }, DOWNLOAD_LEASE_REFRESH_MS)
+      : undefined;
+    refreshTimer?.unref();
+
     let released = false;
     return () => {
       if (released) return;
       released = true;
+      if (refreshTimer) clearInterval(refreshTimer);
+      if (leasePath) {
+        void unlink(leasePath).catch(() => undefined);
+      }
       const next = (this.activeDownloads.get(jobId) ?? 1) - 1;
       if (next <= 0) this.activeDownloads.delete(jobId);
       else this.activeDownloads.set(jobId, next);
@@ -136,7 +164,7 @@ export class WorkspaceManager {
 
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
-      if (!/^(?:remote-)?[a-f0-9]{16,64}$/i.test(entry.name)) continue;
+      if (!WORKSPACE_DIR_PATTERN.test(entry.name)) continue;
       if (this.activeJobs.has(entry.name) || this.activeDownloads.has(entry.name)) continue;
 
       const path = join(this.rootDir, entry.name);
@@ -146,6 +174,9 @@ export class WorkspaceManager {
           lease &&
           (now - lease.mtimeMs) / 1000 < Math.max(this.retentionSeconds, MAX_ACTIVE_LEASE_SECONDS)
         ) {
+          continue;
+        }
+        if (await hasActiveDownloadLease(path, now)) {
           continue;
         }
         const info = await stat(path);
@@ -200,15 +231,41 @@ export class WorkspaceManager {
 
   private async computeUsage(): Promise<{ workspaces: number; bytes: number }> {
     const entries = await readdir(this.rootDir, { withFileTypes: true }).catch(() => []);
-    const dirs = entries.filter((entry) => entry.isDirectory());
-    const sizes = await Promise.all(
-      dirs.map((entry) => directorySize(join(this.rootDir, entry.name))),
+    const dirs = entries.filter(
+      (entry) => entry.isDirectory() && WORKSPACE_DIR_PATTERN.test(entry.name),
     );
+    let bytes = 0;
+    let cursor = 0;
+    const workerCount = Math.min(USAGE_SCAN_CONCURRENCY, dirs.length);
+    const workers = Array.from({ length: workerCount }, async () => {
+      for (;;) {
+        const index = cursor;
+        cursor += 1;
+        if (index >= dirs.length) return;
+        const size = await directorySize(join(this.rootDir, dirs[index]!.name));
+        bytes += size;
+      }
+    });
+    await Promise.all(workers);
     return {
       workspaces: dirs.length,
-      bytes: sizes.reduce((sum, size) => sum + size, 0),
+      bytes,
     };
   }
+}
+
+async function hasActiveDownloadLease(dir: string, now: number): Promise<boolean> {
+  const entries = await readdir(dir).catch(() => [] as string[]);
+  for (const name of entries) {
+    if (!name.startsWith(DOWNLOAD_LEASE_PREFIX)) continue;
+    const info = await stat(join(dir, name)).catch(() => undefined);
+    if (!info) continue;
+    if ((now - info.mtimeMs) / 1000 < DOWNLOAD_LEASE_TTL_SECONDS) {
+      return true;
+    }
+    await unlink(join(dir, name)).catch(() => undefined);
+  }
+  return false;
 }
 
 async function latestEntryMtime(dir: string): Promise<number> {

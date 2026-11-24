@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import nextConfig from '../../next.config';
+import { config as proxyConfig } from '../proxy';
 import { buildCspHeader } from './csp';
 
 interface HeaderRule {
@@ -30,11 +31,14 @@ describe('the site-wide COOP policy', () => {
       'x-frame-options',
       'permissions-policy',
       'cross-origin-opener-policy',
+      'x-permitted-cross-domain-policies',
       'strict-transport-security',
     ]) {
       expect(keys(site), key).toContain(key);
     }
     expect(value(site, 'cross-origin-opener-policy')).toBe('same-origin');
+    expect(value(site, 'x-permitted-cross-domain-policies')).toBe('none');
+    expect(value(site, 'permissions-policy')).not.toContain('interest-cohort');
   });
 });
 
@@ -60,6 +64,8 @@ describe('the installable app under the site-wide policy', () => {
     expect(directive(csp, 'connect-src')).toBe("connect-src 'self'");
     expect(directive(csp, 'script-src')).not.toContain('unsafe-inline');
     expect(directive(csp, 'script-src')).toContain("'sha256-");
+    expect(directive(csp, 'style-src-elem')).toBe("style-src-elem 'self'");
+    expect(directive(csp, 'style-src-attr')).toBe("style-src-attr 'unsafe-inline'");
     expect(csp).not.toContain('unsafe-eval');
     expect(csp).not.toMatch(/https?:\/\//);
 
@@ -71,6 +77,14 @@ describe('the installable app under the site-wide policy', () => {
     expect(buildCspHeader({ nonce: 'abc123', forceHttps: false })).not.toContain(
       'upgrade-insecure-requests',
     );
+  });
+
+  it('does not bypass nonce middleware on prefetch headers and skips /health and /ready', () => {
+    expect(proxyConfig.matcher).toHaveLength(1);
+    const pattern = proxyConfig.matcher[0];
+    expect(typeof pattern).toBe('string');
+    expect(pattern).toContain('health$');
+    expect(pattern).toContain('ready$');
   });
 
   it('names only same-origin paths in the manifest, and shares into /share', async () => {

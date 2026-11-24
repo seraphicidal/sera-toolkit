@@ -179,7 +179,7 @@ const ROBOTS_CACHE_TTL_MS = 60_000;
 const ROBOTS_CACHE_MAX_ORIGINS = 200;
 const robotsCacheByConfig = new WeakMap<
   object,
-  Map<string, { readonly rules: RobotsRules; readonly expiresAt: number }>
+  Map<string, { readonly rules: RobotsRules | null; readonly expiresAt: number }>
 >();
 
 function sameOriginUrl(resolved: ResolvedMedia, originalUrl: URL): ResolvedMedia {
@@ -191,7 +191,7 @@ function sameOriginUrl(resolved: ResolvedMedia, originalUrl: URL): ResolvedMedia
 
 function getRobotsCache(
   config: ProviderContext['config'],
-): Map<string, { readonly rules: RobotsRules; readonly expiresAt: number }> {
+): Map<string, { readonly rules: RobotsRules | null; readonly expiresAt: number }> {
   let cache = robotsCacheByConfig.get(config);
   if (!cache) {
     cache = new Map();
@@ -212,7 +212,7 @@ export async function assertRobotsAllows(url: URL, context: ProviderContext): Pr
   const originCache = getRobotsCache(context.config);
   const now = Date.now();
   const cached = originCache.get(url.origin);
-  let rules: RobotsRules | undefined;
+  let rules: RobotsRules | null | undefined;
   if (cached && cached.expiresAt > now) {
     rules = cached.rules;
   } else {
@@ -223,6 +223,11 @@ export async function assertRobotsAllows(url: URL, context: ProviderContext): Pr
       if (error instanceof SeraError && error.code === 'BLOCKED_ADDRESS') {
         throw error;
       }
+      if (originCache.size >= ROBOTS_CACHE_MAX_ORIGINS) {
+        const oldest = originCache.keys().next().value;
+        if (oldest !== undefined) originCache.delete(oldest);
+      }
+      originCache.set(url.origin, { rules: null, expiresAt: now + ROBOTS_CACHE_TTL_MS });
       return;
     }
 
@@ -242,6 +247,8 @@ export async function assertRobotsAllows(url: URL, context: ProviderContext): Pr
     }
     originCache.set(url.origin, { rules, expiresAt: now + ROBOTS_CACHE_TTL_MS });
   }
+
+  if (!rules) return;
 
   const targetPath = `${url.pathname}${url.search}`;
   if (!isAllowed(rules, targetPath)) {

@@ -17,15 +17,26 @@ if [ -z "$topic" ]; then
 fi
 encoded_topic=$(jq -rn --arg t "$topic" '$t | @uri')
 
+escape_curl_cfg() {
+  local v="$1"
+  v="${v//$'\r'/}"
+  v="${v//$'\n'/}"
+  v="${v//\\/\\\\}"
+  v="${v//\"/\\\"}"
+  printf '%s' "$v"
+}
+
 notify() {
   local click_header=()
   if [ -n "$domain" ]; then
     click_header=(-H "Click: https://$domain/health")
   fi
-  if ! curl -fsS --max-time 15 -o /dev/null \
+  local cfg
+  cfg=$(printf 'url = "https://ntfy.sh/%s"\n' "$(escape_curl_cfg "$encoded_topic")")
+  if ! curl -fsS --max-time 15 -o /dev/null -K - \
     -H "Title: $1" -H "Priority: $3" -H "Tags: $4" \
     ${click_header[@]+"${click_header[@]}"} \
-    -d "$2" "https://ntfy.sh/$encoded_topic"; then
+    -d "$2" <<<"$cfg"; then
     echo "[alert] could not reach ntfy.sh"
     return 1
   fi
@@ -90,17 +101,24 @@ observe() {
 
 admin_token=$(env_value SERA_ADMIN_TOKEN)
 canary_token=$(env_value SERA_CANARY_TOKEN)
-auth_headers=()
-if [ -n "$admin_token" ]; then
-  auth_headers=(-H "Authorization: Bearer $admin_token")
-elif [ -n "$canary_token" ]; then
-  auth_headers=(-H "x-sera-canary: $canary_token")
-fi
+curl_api() {
+  local auth_cfg=''
+  if [ -n "$admin_token" ]; then
+    auth_cfg=$(printf 'header = "Authorization: Bearer %s"\n' "$(escape_curl_cfg "$admin_token")")
+  elif [ -n "$canary_token" ]; then
+    auth_cfg=$(printf 'header = "x-sera-canary: %s"\n' "$(escape_curl_cfg "$canary_token")")
+  fi
+  if [ -n "$auth_cfg" ]; then
+    curl -K - "$@" <<<"$auth_cfg"
+  else
+    curl "$@"
+  fi
+}
 
 if [ -z "$domain" ]; then
   observe api down "SERA_DOMAIN is not configured in $DIR/.env"
 else
-  body=$(curl -fsS --max-time 15 --resolve "$domain:443:127.0.0.1" ${auth_headers[@]+"${auth_headers[@]}"} "https://$domain/health" || true)
+  body=$(curl_api -fsS --max-time 15 --resolve "$domain:443:127.0.0.1" "https://$domain/health" || true)
   if [ -z "$body" ] || ! echo "$body" | jq -e .checks >/dev/null 2>&1; then
     observe api down "the API is not answering"
   else

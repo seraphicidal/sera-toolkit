@@ -3,7 +3,4 @@
     <files-path
         name="updates"
         path="updates/" />
-    <cache-path
-        name="node_work"
-        path="work/" />
 </paths>

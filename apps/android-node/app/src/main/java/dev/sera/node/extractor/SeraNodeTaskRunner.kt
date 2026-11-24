@@ -15,6 +15,7 @@ import dev.sera.node.model.ResolvedMedia
 import dev.sera.node.model.ResolvedPlan
 import dev.sera.node.model.TaskExecutionOutcome
 import dev.sera.node.model.TaskProgress
+import dev.sera.node.model.isValidTaskId
 import dev.sera.node.model.planKey
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -34,7 +35,7 @@ import okhttp3.HttpUrl
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
-import java.util.concurrent.ConcurrentHashMap
+import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.max
@@ -44,7 +45,8 @@ import kotlin.math.roundToLong
 private const val DOWNLOAD_SHARE = 0.85
 private const val NODE_DOWNLOAD_SCALE = 0.85
 private const val RESOLVE_CACHE_TTL_MS = 5 * 60_000L
-private const val RESOLVE_CACHE_MAX_ENTRIES = 100
+private const val RESOLVE_CACHE_MAX_ENTRIES = 20
+private const val RESOLVE_CACHE_MAX_JSON_BYTES = 8L * 1024L * 1024L
 private const val SECTION_STALL_MS = 20_000L
 private const val DEFAULT_MAX_DURATION_SECONDS = 4 * 60 * 60
 private val VALID_SUBTITLE_LANG = Regex("""^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$""")
@@ -82,6 +84,8 @@ data class MatchedSelection(
 private data class CachedResolution(
     val result: ExtractorResolveResult,
     val resolvedAtMs: Long,
+    val degraded: Boolean,
+    val jsonBytes: Long,
 )
 
 private sealed interface ItemExecutionResult {
@@ -160,7 +164,9 @@ class SeraNodeTaskRunner(
     ).associateBy { it.id }
 
     private val ffmpegProcessor = FfmpegMediaProcessor(executor)
-    private val resolveCache = ConcurrentHashMap<String, CachedResolution>()
+    private val resolveCacheLock = Any()
+    private val resolveCache = LinkedHashMap<String, CachedResolution>(24, 0.75f, true)
+    private var resolveCacheBytes = 0L
 
     override suspend fun executeTask(
         task: RemoteTask,
@@ -170,7 +176,14 @@ class SeraNodeTaskRunner(
     ): TaskExecutionOutcome {
         val localCancelled = AtomicBoolean(false)
 
-        suspend fun report(percent: Double, step: String, bytesDown: Long? = null, bytesTotal: Long? = null) {
+        suspend fun report(
+            percent: Double,
+            step: String,
+            bytesDown: Long? = null,
+            bytesTotal: Long? = null,
+            speedBytesPerSecond: Double? = null,
+            etaSeconds: Double? = null,
+        ) {
             currentCoroutineContext().ensureActive()
             val keepGoing = onProgress(
                 TaskProgress(
@@ -178,6 +191,8 @@ class SeraNodeTaskRunner(
                     step = step,
                     bytesDownloaded = bytesDown,
                     bytesTotal = bytesTotal,
+                    speedBytesPerSecond = speedBytesPerSecond?.takeIf { it.isFinite() && it >= 0.0 },
+                    etaSeconds = etaSeconds?.takeIf { it.isFinite() && it >= 0.0 },
                 ),
             )
             if (!keepGoing) {
@@ -189,6 +204,10 @@ class SeraNodeTaskRunner(
         val isCancelled: () -> Boolean = { localCancelled.get() }
 
         return try {
+            if (!isValidTaskId(task.id)) {
+                throw seraError(SeraErrorCode.INVALID_URL, detail = "node: invalid task id")
+            }
+
             val activeProviders = config.providers.map { it.lowercase() }.toSet()
             val requestedProvider = task.providerId.lowercase()
             val providerAllowed = activeProviders.isEmpty() ||
@@ -240,6 +259,9 @@ class SeraNodeTaskRunner(
                 report = ::report,
             )
         } catch (cancelled: CancellationException) {
+            if (!currentCoroutineContext().isActive && !localCancelled.get()) {
+                throw cancelled
+            }
             TaskExecutionOutcome.Cancelled
         } catch (error: Throwable) {
             val sera = SeraException.from(error)
@@ -250,6 +272,21 @@ class SeraNodeTaskRunner(
     private fun extractorFor(providerId: String): YtdlpBaseExtractor? =
         extractorsById[providerId.lowercase()]
 
+    private fun buildResolveCacheKey(
+        extractorId: String,
+        canonical: HttpUrl,
+        config: NodeRuntimeConfig,
+        hotConfig: ProviderHotConfig?,
+    ): String {
+        val fingerprint = when (extractorId) {
+            "instagram" -> "ig:${shortHash(config.instagramSessionId.orEmpty())}"
+            "youtube" -> "yt:${config.youtubePlayerClients.orEmpty()}|${config.youtubePotProviderUrl.orEmpty()}|${hotConfig?.youtube?.playerClients.orEmpty().joinToString(",")}|${hotConfig?.youtube?.potProviderUrl.orEmpty()}|${hotConfig?.youtube?.extraArgs.orEmpty().joinToString("\u001F")}|${hotConfig?.youtube?.remoteComponents.orEmpty().joinToString(",")}"
+            "reddit" -> "rd:${config.redditClientId.orEmpty()}|${shortHash(config.redditClientSecret.orEmpty())}"
+            else -> ""
+        }
+        return "$extractorId|$canonical|${config.allowPrivateAddresses}|$fingerprint"
+    }
+
     private suspend fun resolveWithCache(
         extractor: YtdlpBaseExtractor,
         canonical: HttpUrl,
@@ -258,11 +295,20 @@ class SeraNodeTaskRunner(
         requireSession: Boolean,
         isCancelled: () -> Boolean,
     ): ExtractorResolveResult {
-        val cacheKey = "${extractor.id}|$canonical"
+        val cacheKey = buildResolveCacheKey(extractor.id, canonical, config, hotConfig)
         val now = System.currentTimeMillis()
-        val cached = resolveCache[cacheKey]
-        if (cached != null && now - cached.resolvedAtMs < RESOLVE_CACHE_TTL_MS) {
-            return cached.result
+        synchronized(resolveCacheLock) {
+            val cached = resolveCache[cacheKey]
+            if (cached != null) {
+                if (now - cached.resolvedAtMs < RESOLVE_CACHE_TTL_MS) {
+                    if (!cached.degraded || !requireSession) {
+                        return cached.result
+                    }
+                } else {
+                    resolveCache.remove(cacheKey)
+                    resolveCacheBytes = (resolveCacheBytes - cached.jsonBytes).coerceAtLeast(0L)
+                }
+            }
         }
 
         val execContext = ExtractionExecutionContext(
@@ -273,9 +319,11 @@ class SeraNodeTaskRunner(
             isCancelled = isCancelled,
         )
 
+        var wasDegraded = false
         val result = try {
             extractor.resolve(canonical, execContext)
         } catch (error: Throwable) {
+            if (error is CancellationException) throw error
             val sera = SeraException.from(error)
             val failure = classifyFailure(sera)
             if (
@@ -284,8 +332,10 @@ class SeraNodeTaskRunner(
                 !isDefinitive(failure)
             ) {
                 try {
+                    wasDegraded = true
                     extractor.resolve(canonical, execContext.copy(allowDegraded = true))
-                } catch (_: Throwable) {
+                } catch (degradedError: Throwable) {
+                    if (degradedError is CancellationException) throw degradedError
                     throw sera
                 }
             } else if (
@@ -297,6 +347,7 @@ class SeraNodeTaskRunner(
                 try {
                     genericExtractor.resolve(canonical, execContext)
                 } catch (fallbackError: Throwable) {
+                    if (fallbackError is CancellationException) throw fallbackError
                     val refusal = SeraException.from(fallbackError)
                     if (refusal.detail?.startsWith("robots.txt disallows") == true) throw refusal
                     throw sera
@@ -306,15 +357,45 @@ class SeraNodeTaskRunner(
             }
         }
 
-        if (resolveCache.size >= RESOLVE_CACHE_MAX_ENTRIES) {
-            val cutoff = now - RESOLVE_CACHE_TTL_MS
-            resolveCache.entries.removeIf { it.value.resolvedAtMs < cutoff }
-            if (resolveCache.size >= RESOLVE_CACHE_MAX_ENTRIES) {
-                resolveCache.clear()
-            }
+        val sanitizedResult = result.copy(media = sanitizeResolvedMedia(result.media))
+        val rawBytes = (sanitizedResult.rawInfoJson?.length?.toLong() ?: 0L) * 2L
+        val storedResult = if (rawBytes > RESOLVE_CACHE_MAX_JSON_BYTES) {
+            sanitizedResult.copy(rawInfoJson = null)
+        } else {
+            sanitizedResult
         }
-        resolveCache[cacheKey] = CachedResolution(result = result, resolvedAtMs = now)
-        return result
+        val storedBytes = if (storedResult.rawInfoJson != null) rawBytes else 0L
+        val storeTime = System.currentTimeMillis()
+        synchronized(resolveCacheLock) {
+            val cutoff = storeTime - RESOLVE_CACHE_TTL_MS
+            val iter = resolveCache.entries.iterator()
+            while (iter.hasNext()) {
+                val entry = iter.next()
+                if (entry.value.resolvedAtMs < cutoff) {
+                    resolveCacheBytes = (resolveCacheBytes - entry.value.jsonBytes).coerceAtLeast(0L)
+                    iter.remove()
+                }
+            }
+            resolveCache.remove(cacheKey)?.let { previous ->
+                resolveCacheBytes = (resolveCacheBytes - previous.jsonBytes).coerceAtLeast(0L)
+            }
+            while (
+                resolveCache.isNotEmpty() &&
+                (resolveCache.size >= RESOLVE_CACHE_MAX_ENTRIES || resolveCacheBytes + storedBytes > RESOLVE_CACHE_MAX_JSON_BYTES)
+            ) {
+                val eldest = resolveCache.entries.iterator().next()
+                resolveCacheBytes = (resolveCacheBytes - eldest.value.jsonBytes).coerceAtLeast(0L)
+                resolveCache.remove(eldest.key)
+            }
+            resolveCache[cacheKey] = CachedResolution(
+                result = storedResult,
+                resolvedAtMs = storeTime,
+                degraded = wasDegraded,
+                jsonBytes = storedBytes,
+            )
+            resolveCacheBytes += storedBytes
+        }
+        return sanitizedResult
     }
 
     private suspend fun runJobTask(
@@ -325,9 +406,9 @@ class SeraNodeTaskRunner(
         hotConfig: ProviderHotConfig?,
         requireSession: Boolean,
         isCancelled: () -> Boolean,
-        report: suspend (Double, String, Long?, Long?) -> Unit,
+        report: suspend (Double, String, Long?, Long?, Double?, Double?) -> Unit,
     ): TaskExecutionOutcome {
-        report(0.0, "Reading the link", null, null)
+        report(0.0, "Reading the link", null, null, null, null)
 
         val resolveResult = resolveWithCache(
             extractor = extractor,
@@ -348,12 +429,20 @@ class SeraNodeTaskRunner(
         assertWithinLimits(matched, config)
 
         val workRootBase = if (config.workDirPath.isNotBlank()) File(config.workDirPath) else defaultWorkRoot
-        val workspaceDir = File(workRootBase, "job-${task.id}")
+        val workspaceDir = withContext(Dispatchers.IO) {
+            val canonicalRoot = workRootBase.canonicalFile
+            val candidate = File(canonicalRoot, "job-${task.id}").canonicalFile
+            val rootPrefix = canonicalRoot.path.trimEnd(File.separatorChar) + File.separatorChar
+            if (!candidate.path.startsWith(rootPrefix)) {
+                throw seraError(SeraErrorCode.INVALID_URL, detail = "node: unsafe workspace path")
+            }
+            candidate.deleteRecursively()
+            File(candidate, "work").mkdirs()
+            File(candidate, "out").mkdirs()
+            candidate
+        }
         val scratchDir = File(workspaceDir, "work")
         val outputDir = File(workspaceDir, "out")
-        workspaceDir.deleteRecursively()
-        scratchDir.mkdirs()
-        outputDir.mkdirs()
 
         val totalFiles = matched.size
         val itemFractions = DoubleArray(totalFiles)
@@ -388,10 +477,10 @@ class SeraNodeTaskRunner(
                             workspaceDir = workspaceDir,
                             scratchDir = scratchDir,
                             isCancelled = isCancelled,
-                            onFraction = { fraction, step, down, total ->
+                            onFraction = { fraction, step, down, total, speed, eta ->
                                 val runnerPct = computeJobPercent(index, fraction)
                                 val scaledPct = min(85.0, (runnerPct / 100.0) * 85.0)
-                                report(scaledPct, step, down, total)
+                                report(scaledPct, step, down, total, speed, eta)
                             },
                         )
                     }
@@ -399,64 +488,67 @@ class SeraNodeTaskRunner(
             }.awaitAll()
         }
 
-        val taken = HashSet<String>()
-        val produced = ArrayList<ProducedFile>(totalFiles * 2)
+        val produced = withContext(Dispatchers.IO) {
+            val taken = HashSet<String>()
+            val out = ArrayList<ProducedFile>(totalFiles * 2)
 
-        for (res in itemResults) {
-            when (res) {
-                is ItemExecutionResult.Subtitles -> {
-                    val baseName = nameFor(task, resolved, res.item, res.plan, res.file, totalFiles)
-                    val name = dedupeFilename(assertSafeFilename(subtitleName(baseName, subtitles!!.lang)), taken)
-                    val dest = File(outputDir, name)
-                    moveFile(res.file, dest)
-                    produced.add(
-                        ProducedFile(
-                            name = name,
-                            mimeType = mimeTypeFor(name),
-                            filePath = dest.absolutePath,
-                            sizeBytes = dest.length(),
-                        ),
-                    )
-                }
-                is ItemExecutionResult.Media -> {
-                    val name = dedupeFilename(
-                        assertSafeFilename(nameFor(task, resolved, res.item, res.usedPlan, res.file, totalFiles)),
-                        taken,
-                    )
-                    val dest = File(outputDir, name)
-                    moveFile(res.file, dest)
-                    produced.add(
-                        ProducedFile(
-                            name = name,
-                            mimeType = mimeTypeFor(name),
-                            filePath = dest.absolutePath,
-                            sizeBytes = dest.length(),
-                        ),
-                    )
-                    if (res.subtitleFile != null && subtitles != null) {
-                        val subExt = ".${subtitles.format}"
-                        val subBase = if (Regex("""\.[^.]+$""").containsMatchIn(name)) {
-                            name.replace(Regex("""\.[^.]+$"""), subExt)
-                        } else {
-                            "$name$subExt"
-                        }
-                        val subName = dedupeFilename(assertSafeFilename(subtitleName(subBase, subtitles.lang)), taken)
-                        val subDest = File(outputDir, subName)
-                        moveFile(res.subtitleFile, subDest)
-                        produced.add(
+            for (res in itemResults) {
+                when (res) {
+                    is ItemExecutionResult.Subtitles -> {
+                        val baseName = nameFor(task, resolved, res.item, res.plan, res.file, totalFiles)
+                        val name = dedupeFilename(assertSafeFilename(subtitleName(baseName, subtitles!!.lang)), taken)
+                        val dest = File(outputDir, name)
+                        moveFile(res.file, dest)
+                        out.add(
                             ProducedFile(
-                                name = subName,
-                                mimeType = mimeTypeFor(subName),
-                                filePath = subDest.absolutePath,
-                                sizeBytes = subDest.length(),
+                                name = name,
+                                mimeType = mimeTypeFor(name),
+                                filePath = dest.absolutePath,
+                                sizeBytes = dest.length(),
                             ),
                         )
                     }
+                    is ItemExecutionResult.Media -> {
+                        val name = dedupeFilename(
+                            assertSafeFilename(nameFor(task, resolved, res.item, res.usedPlan, res.file, totalFiles)),
+                            taken,
+                        )
+                        val dest = File(outputDir, name)
+                        moveFile(res.file, dest)
+                        out.add(
+                            ProducedFile(
+                                name = name,
+                                mimeType = mimeTypeFor(name),
+                                filePath = dest.absolutePath,
+                                sizeBytes = dest.length(),
+                            ),
+                        )
+                        if (res.subtitleFile != null && subtitles != null) {
+                            val subExt = ".${subtitles.format}"
+                            val subBase = if (Regex("""\.[^.]+$""").containsMatchIn(name)) {
+                                name.replace(Regex("""\.[^.]+$"""), subExt)
+                            } else {
+                                "$name$subExt"
+                            }
+                            val subName = dedupeFilename(assertSafeFilename(subtitleName(subBase, subtitles.lang)), taken)
+                            val subDest = File(outputDir, subName)
+                            moveFile(res.subtitleFile, subDest)
+                            out.add(
+                                ProducedFile(
+                                    name = subName,
+                                    mimeType = mimeTypeFor(subName),
+                                    filePath = subDest.absolutePath,
+                                    sizeBytes = subDest.length(),
+                                ),
+                            )
+                        }
+                    }
                 }
             }
-        }
 
-        scratchDir.deleteRecursively()
+            scratchDir.deleteRecursively()
+            out
+        }
         validateProduced(produced, config.maxFilesizeBytes, isCancelled)
 
         if (produced.isEmpty()) {
@@ -482,13 +574,13 @@ class SeraNodeTaskRunner(
         workspaceDir: File,
         scratchDir: File,
         isCancelled: () -> Boolean,
-        onFraction: suspend (Double, String, Long?, Long?) -> Unit,
+        onFraction: suspend (Double, String, Long?, Long?, Double?, Double?) -> Unit,
     ): ItemExecutionResult {
         if (isCancelled()) throw seraError(SeraErrorCode.CANCELLED)
         if (subtitles != null) assertSubtitlesOffered(item, subtitles)
 
         if (subtitles?.only == true) {
-            onFraction(0.0, "Downloading subtitles", null, null)
+            onFraction(0.0, "Downloading subtitles", null, null, null, null)
             val subFile = fetchSubtitles(
                 resolved = resolved,
                 item = item,
@@ -499,7 +591,7 @@ class SeraNodeTaskRunner(
                 hotConfig = hotConfig,
                 isCancelled = isCancelled,
             )
-            onFraction(1.0, "Downloading subtitles", null, null)
+            onFraction(1.0, "Downloading subtitles", null, null, null, null)
             return ItemExecutionResult.Subtitles(index = index, file = subFile, item = item, plan = plan)
         }
 
@@ -550,7 +642,7 @@ class SeraNodeTaskRunner(
 
         var subtitleFile: File? = null
         if (subtitles != null && subtitles.format != "embed") {
-            onFraction(0.99, "Downloading subtitles", null, null)
+            onFraction(0.99, "Downloading subtitles", null, null, null, null)
             subtitleFile = fetchSubtitles(
                 resolved = resolved,
                 item = item,
@@ -563,7 +655,7 @@ class SeraNodeTaskRunner(
             )
         }
 
-        onFraction(1.0, "Finalizing", null, null)
+        onFraction(1.0, "Finalizing", null, null, null, null)
         return ItemExecutionResult.Media(
             index = index,
             file = finished,
@@ -587,7 +679,7 @@ class SeraNodeTaskRunner(
         config: NodeRuntimeConfig,
         hotConfig: ProviderHotConfig?,
         isCancelled: () -> Boolean,
-        onFraction: suspend (Double, String, Long?, Long?) -> Unit,
+        onFraction: suspend (Double, String, Long?, Long?, Double?, Double?) -> Unit,
     ): Pair<File, ResolvedPlan> {
         val candidates = listOf(requestedPlan) + lowerQualityAlternatives(item, requestedPlan)
         for (attempt in candidates.indices) {
@@ -610,6 +702,7 @@ class SeraNodeTaskRunner(
                 )
                 return path to candidate
             } catch (error: Throwable) {
+                if (error is CancellationException) throw error
                 val failure = classifyFailure(error)
                 val hasNext = attempt + 1 < candidates.size
                 if (!hasNext || failure !in FORMAT_FALLBACK_ANSWERS) throw error
@@ -631,21 +724,22 @@ class SeraNodeTaskRunner(
         config: NodeRuntimeConfig,
         hotConfig: ProviderHotConfig?,
         isCancelled: () -> Boolean,
-        onFraction: suspend (Double, String, Long?, Long?) -> Unit,
+        onFraction: suspend (Double, String, Long?, Long?, Double?, Double?) -> Unit,
     ): File {
         val itemScratch = File(scratchDir, "sel-$index")
-        itemScratch.mkdirs()
-
-        val loadInfoJsonPath: File? = if (!rawInfoJson.isNullOrEmpty()) {
-            val infoDir = File(workspaceDir, "info-$index")
-            infoDir.mkdirs()
-            File(infoDir, "info.json").also { it.writeText(rawInfoJson, Charsets.UTF_8) }
-        } else {
-            null
+        val loadInfoJsonPath: File? = withContext(Dispatchers.IO) {
+            itemScratch.mkdirs()
+            if (!rawInfoJson.isNullOrEmpty()) {
+                val infoDir = File(workspaceDir, "info-$index")
+                infoDir.mkdirs()
+                File(infoDir, "info.json").also { it.writeText(rawInfoJson, Charsets.UTF_8) }
+            } else {
+                null
+            }
         }
 
         val step = if (resolved.items.size > 1) "Downloading ${index + 1}" else "Downloading"
-        onFraction(0.0, step, null, null)
+        onFraction(0.0, step, null, null, null, null)
 
         val timeoutMs = config.jobTimeoutSeconds.toLong() * 1000L
 
@@ -659,27 +753,45 @@ class SeraNodeTaskRunner(
             }
             val destination = File(itemScratch, "media.${plan.container}")
             val resultRef = AtomicReference<DirectDownloadProgress?>(null)
-            httpFetcher.downloadDirect(
-                url = plan.fetch.url,
-                destination = destination,
-                maxBytes = config.maxFilesizeBytes,
-                timeoutMs = timeoutMs,
-                allowPrivateAddresses = config.allowPrivateAddresses,
-                isCancelled = isCancelled,
-                onProgress = { progress -> resultRef.set(progress) },
-            )
+            coroutineScope {
+                val pumpJob = launch {
+                    while (isActive) {
+                        delay(250L)
+                        val p = resultRef.get() ?: continue
+                        val frac = if (p.bytesTotal != null && p.bytesTotal > 0L) {
+                            (p.bytesDownloaded.toDouble() / p.bytesTotal.toDouble()).coerceIn(0.0, 1.0) * DOWNLOAD_SHARE
+                        } else {
+                            0.0
+                        }
+                        onFraction(frac, step, p.bytesDownloaded, p.bytesTotal, p.speedBytesPerSecond, p.etaSeconds)
+                    }
+                }
+                try {
+                    httpFetcher.downloadDirect(
+                        url = plan.fetch.url,
+                        destination = destination,
+                        maxBytes = config.maxFilesizeBytes,
+                        timeoutMs = timeoutMs,
+                        allowPrivateAddresses = config.allowPrivateAddresses,
+                        isCancelled = isCancelled,
+                        onProgress = { progress -> resultRef.set(progress) },
+                    )
+                } finally {
+                    pumpJob.cancel()
+                }
+            }
             resultRef.get()?.let { p ->
                 val frac = if (p.bytesTotal != null && p.bytesTotal > 0L) {
-                    (p.bytesDownloaded.toDouble() / p.bytesTotal.toDouble()) * DOWNLOAD_SHARE
+                    (p.bytesDownloaded.toDouble() / p.bytesTotal.toDouble()).coerceIn(0.0, 1.0) * DOWNLOAD_SHARE
                 } else {
                     DOWNLOAD_SHARE
                 }
-                onFraction(frac, step, p.bytesDownloaded, p.bytesTotal)
+                onFraction(frac, step, p.bytesDownloaded, p.bytesTotal, p.speedBytesPerSecond, p.etaSeconds)
             }
-            val fetched = renameToActualFormat(destination, plan.container)
+            val fetched = withContext(Dispatchers.IO) { renameToActualFormat(destination, plan.container) }
             if (trim == null) return fetched
 
-            onFraction(DOWNLOAD_SHARE, "Trimming", null, null)
+            onFraction(DOWNLOAD_SHARE, "Trimming", null, null, null, null)
             val ext = fetched.extension.ifEmpty { plan.container }
             val trimmed = File(itemScratch, "trimmed.$ext")
             ffmpegProcessor.trimMedia(
@@ -690,7 +802,7 @@ class SeraNodeTaskRunner(
                 timeoutMs = timeoutMs,
                 isCancelled = isCancelled,
             )
-            fetched.delete()
+            withContext(Dispatchers.IO) { fetched.delete() }
             return trimmed
         }
 
@@ -709,19 +821,28 @@ class SeraNodeTaskRunner(
             downloadCancelled: () -> Boolean,
             formatSelector: String,
         ) {
-            itemScratch.deleteRecursively()
-            itemScratch.mkdirs()
-            var sawPostprocessor: String? = null
-            var latestProgress: YtdlpProgress? = null
-            var latestStep = step
+            withContext(Dispatchers.IO) {
+                itemScratch.deleteRecursively()
+                itemScratch.mkdirs()
+            }
+            val sawPostprocessorRef = AtomicReference<String?>(null)
+            val latestProgressRef = AtomicReference<YtdlpProgress?>(null)
+            val latestStepRef = AtomicReference(step)
 
             coroutineScope {
                 val pumpJob = launch {
                     while (isActive) {
                         delay(250L)
-                        val p = latestProgress ?: continue
+                        val p = latestProgressRef.get() ?: continue
                         val frac = (p.percent / 100.0) * DOWNLOAD_SHARE
-                        onFraction(frac, latestStep, p.bytesDownloaded, p.bytesTotal)
+                        onFraction(
+                            frac,
+                            latestStepRef.get(),
+                            p.bytesDownloaded,
+                            p.bytesTotal,
+                            p.speedBytesPerSecond,
+                            p.etaSeconds,
+                        )
                     }
                 }
                 try {
@@ -746,13 +867,14 @@ class SeraNodeTaskRunner(
                             subtitles = embedSubtitles?.let { YtdlpSubtitleFilter(it.lang, it.auto) },
                             sections = sections,
                             loadInfoJsonPath = infoPath,
+                            allowPrivateAddresses = config.allowPrivateAddresses,
                             isCancelled = downloadCancelled,
                             onProgress = { progress ->
-                                if (progress.postprocessor != null && progress.postprocessor != sawPostprocessor) {
-                                    sawPostprocessor = progress.postprocessor
-                                    latestStep = stepForPostprocessor(progress.postprocessor, plan)
+                                if (progress.postprocessor != null && progress.postprocessor != sawPostprocessorRef.get()) {
+                                    sawPostprocessorRef.set(progress.postprocessor)
+                                    latestStepRef.set(stepForPostprocessor(progress.postprocessor, plan))
                                 }
-                                latestProgress = progress
+                                latestProgressRef.set(progress)
                             },
                         ),
                     )
@@ -760,9 +882,16 @@ class SeraNodeTaskRunner(
                     pumpJob.cancel()
                 }
             }
-            latestProgress?.let { p ->
+            latestProgressRef.get()?.let { p ->
                 val frac = (p.percent / 100.0) * DOWNLOAD_SHARE
-                onFraction(frac, latestStep, p.bytesDownloaded, p.bytesTotal)
+                onFraction(
+                    frac,
+                    latestStepRef.get(),
+                    p.bytesDownloaded,
+                    p.bytesTotal,
+                    p.speedBytesPerSecond,
+                    p.etaSeconds,
+                )
             }
         }
 
@@ -776,6 +905,7 @@ class SeraNodeTaskRunner(
                     runDownload(loadInfoJsonPath, sections, downloadCancelled, formatSelector)
                     return
                 } catch (error: Throwable) {
+                    if (error is CancellationException) throw error
                     if (downloadCancelled() || isCancelled()) throw error
                     val failure = classifyFailure(error)
                     if (
@@ -802,6 +932,7 @@ class SeraNodeTaskRunner(
             try {
                 attemptFormat(fetchPlan.selector, sections, downloadCancelled)
             } catch (error: Throwable) {
+                if (error is CancellationException) throw error
                 if (downloadCancelled() || isCancelled() || sameHeightFallback == null) throw error
                 val failure = classifyFailure(error)
                 if (failure !in FORMAT_FALLBACK_ANSWERS) throw error
@@ -811,7 +942,7 @@ class SeraNodeTaskRunner(
 
         if (trim == null) {
             downloadWithSameHeight()
-            return findSingleFile(itemScratch)
+            return withContext(Dispatchers.IO) { findSingleFile(itemScratch) }
         }
 
         val stalled = AtomicBoolean(false)
@@ -830,13 +961,14 @@ class SeraNodeTaskRunner(
                     downloadCancelled = combinedCancelled,
                 )
                 watcher.cancel()
-                val cut = findSingleFile(itemScratch)
+                val cut = withContext(Dispatchers.IO) { findSingleFile(itemScratch) }
                 val probed = runCatching {
                     executor.probeMedia(cut, timeoutMs = 30_000L, isCancelled = isCancelled)
                 }.getOrNull()
                 if (sectionIsUsable(probed, trim, item.duration)) cut else null
             } catch (error: Throwable) {
                 watcher.cancel()
+                if (error is CancellationException) throw error
                 if (isCancelled()) throw error
                 null
             }
@@ -845,8 +977,8 @@ class SeraNodeTaskRunner(
         if (sectionOk != null) return sectionOk
 
         downloadWithSameHeight()
-        val full = findSingleFile(itemScratch)
-        onFraction(DOWNLOAD_SHARE, "Trimming", null, null)
+        val full = withContext(Dispatchers.IO) { findSingleFile(itemScratch) }
+        onFraction(DOWNLOAD_SHARE, "Trimming", null, null, null, null)
         val ext = full.extension.ifEmpty { plan.container }
         val trimmed = File(itemScratch, "trimmed.$ext")
         ffmpegProcessor.trimMedia(
@@ -857,7 +989,7 @@ class SeraNodeTaskRunner(
             timeoutMs = timeoutMs,
             isCancelled = isCancelled,
         )
-        full.delete()
+        withContext(Dispatchers.IO) { full.delete() }
         return trimmed
     }
 
@@ -869,26 +1001,49 @@ class SeraNodeTaskRunner(
         durationSeconds: Double?,
         config: NodeRuntimeConfig,
         isCancelled: () -> Boolean,
-        onFraction: suspend (Double, String, Long?, Long?) -> Unit,
+        onFraction: suspend (Double, String, Long?, Long?, Double?, Double?) -> Unit,
     ): File {
         val target = targetExtension(spec)
         val output = File(File(scratchDir, "sel-$index"), "converted.$target")
         val step = "Converting to ${target.uppercase()}"
-        onFraction(DOWNLOAD_SHARE, step, null, null)
+        onFraction(DOWNLOAD_SHARE, step, null, null, null, null)
 
-        var lastPct = 0.0
-        ffmpegProcessor.convert(
-            input = input,
-            output = output,
-            spec = spec,
-            durationSeconds = durationSeconds,
-            maxOutputBytes = config.maxFilesizeBytes,
-            timeoutMs = config.jobTimeoutSeconds.toLong() * 1000L,
-            isCancelled = isCancelled,
-            onProgress = { pct -> lastPct = pct },
-        )
-        if (lastPct > 0.0) {
-            onFraction(DOWNLOAD_SHARE + (lastPct / 100.0) * (1.0 - DOWNLOAD_SHARE), step, null, null)
+        val lastPctRef = AtomicReference(0.0)
+        coroutineScope {
+            val pumpJob = launch {
+                while (isActive) {
+                    delay(250L)
+                    val pct = lastPctRef.get()
+                    if (pct > 0.0) {
+                        onFraction(
+                            DOWNLOAD_SHARE + (pct / 100.0) * (1.0 - DOWNLOAD_SHARE),
+                            step,
+                            null,
+                            null,
+                            null,
+                            null,
+                        )
+                    }
+                }
+            }
+            try {
+                ffmpegProcessor.convert(
+                    input = input,
+                    output = output,
+                    spec = spec,
+                    durationSeconds = durationSeconds,
+                    maxOutputBytes = config.maxFilesizeBytes,
+                    timeoutMs = config.jobTimeoutSeconds.toLong() * 1000L,
+                    isCancelled = isCancelled,
+                    onProgress = { pct -> lastPctRef.set(pct) },
+                )
+            } finally {
+                pumpJob.cancel()
+            }
+        }
+        val finalPct = lastPctRef.get()
+        if (finalPct > 0.0) {
+            onFraction(DOWNLOAD_SHARE + (finalPct / 100.0) * (1.0 - DOWNLOAD_SHARE), step, null, null, null, null)
         }
         return output
     }
@@ -959,7 +1114,7 @@ class SeraNodeTaskRunner(
         isCancelled: () -> Boolean,
     ): File {
         val subDir = File(scratchDir, "subs-$index")
-        subDir.mkdirs()
+        withContext(Dispatchers.IO) { subDir.mkdirs() }
         val youtubeExtra = if (resolved.provider == "youtube") hotConfig?.youtube?.extraArgs.orEmpty() else emptyList()
         val youtubeRemoteComponents = if (resolved.provider == "youtube") {
             hotConfig?.youtube?.remoteComponents.orEmpty().map { it.trim() }.filter { it.isNotEmpty() }
@@ -977,6 +1132,7 @@ class SeraNodeTaskRunner(
                 playlistItem = if (resolved.items.size > 1) item.index + 1 else null,
                 extraArgs = youtubeExtra,
                 remoteComponents = youtubeRemoteComponents,
+                allowPrivateAddresses = config.allowPrivateAddresses,
                 isCancelled = isCancelled,
             ),
         )
@@ -990,14 +1146,16 @@ class SeraNodeTaskRunner(
         var totalBytes = 0L
         for (fileInfo in produced) {
             val file = File(fileInfo.filePath)
-            if (!file.exists() || file.length() == 0L) {
+            val (exists, size) = withContext(Dispatchers.IO) {
+                file.exists() to file.length()
+            }
+            if (!exists || size == 0L) {
                 throw seraError(
                     SeraErrorCode.CONVERSION_FAILED,
                     message = "The download finished but produced an empty file.",
                     detail = "empty output: ${fileInfo.name}",
                 )
             }
-            val size = file.length()
             if (size > maxFilesizeBytes) {
                 throw seraError(
                     SeraErrorCode.TOO_LARGE,
@@ -1017,7 +1175,7 @@ class SeraNodeTaskRunner(
 
             val ext = fileInfo.name.substringAfterLast('.', "").lowercase()
             if (ext != "srt" && ext != "vtt") {
-                val head = headOf(file)
+                val head = withContext(Dispatchers.IO) { headOf(file) }
                 val imposter = sniffTextImposter(head)
                 if (imposter != null) {
                     throw seraError(
@@ -1303,10 +1461,12 @@ private suspend fun CoroutineScope.watchDirectoryGrowth(
     val pollMs = min(1_000L, max(50L, stallMs / 4L))
     while (isActive) {
         delay(pollMs)
-        val current = directory.listFiles()
-            ?.filter { it.isFile }
-            ?.sumOf { it.length() }
-            ?: 0L
+        val current = withContext(Dispatchers.IO) {
+            directory.listFiles()
+                ?.filter { it.isFile }
+                ?.sumOf { it.length() }
+                ?: 0L
+        }
         if (current != lastSize) {
             lastSize = current
             since = System.currentTimeMillis()
@@ -1381,3 +1541,72 @@ private fun stepForPostprocessor(name: String, plan: ResolvedPlan): String =
         "MoveFiles" -> "Finishing up"
         else -> "Processing"
     }
+
+private fun shortHash(value: String): String {
+    if (value.isEmpty()) return ""
+    val digest = MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.UTF_8))
+    return digest.take(8).joinToString("") { "%02x".format(it) }
+}
+
+fun sanitizeResolvedMedia(media: ResolvedMedia): ResolvedMedia {
+    val sanitizedItems = media.items.map { item ->
+        val sanitizedSubtitles = item.subtitles?.mapNotNull { track ->
+            val lang = track.lang.trim().take(40)
+            if (!VALID_SUBTITLE_LANG.matches(lang)) {
+                null
+            } else {
+                track.copy(
+                    lang = lang,
+                    label = track.label.trim().take(100).ifEmpty { lang },
+                )
+            }
+        }
+        val sanitizedPlans = item.plans.map { plan ->
+            val sanitizedFetch = when (val fetch = plan.fetch) {
+                is FetchPlan.Ytdlp -> fetch.copy(
+                    extractorArgs = fetch.extractorArgs?.map { it.trim().take(200) }?.filter { it.isNotEmpty() },
+                    useExtractors = fetch.useExtractors?.trim()?.take(128)?.ifEmpty { null },
+                )
+                is FetchPlan.Direct -> fetch
+            }
+            plan.copy(
+                label = plan.label.trim().take(64).ifEmpty { plan.container.uppercase() },
+                detail = plan.detail?.trim()?.take(500)?.ifEmpty { null },
+                width = plan.width?.takeIf { it > 0 },
+                height = plan.height?.takeIf { it > 0 },
+                fps = plan.fps?.takeIf { it.isFinite() && it > 0.0 },
+                audioBitrateKbps = plan.audioBitrateKbps?.takeIf { it.isFinite() && it >= 0.0 },
+                videoCodec = plan.videoCodec?.trim()?.take(32)?.ifEmpty { null },
+                audioCodec = plan.audioCodec?.trim()?.take(32)?.ifEmpty { null },
+                filesizeBytes = plan.filesizeBytes?.takeIf { it >= 0L },
+                fetch = sanitizedFetch,
+            )
+        }
+        val sanitizedTags = item.tags?.let { tags ->
+            val artist = tags.artist?.trim()?.take(200)?.ifEmpty { null }
+            val album = tags.album?.trim()?.take(200)?.ifEmpty { null }
+            val track = tags.track?.trim()?.take(200)?.ifEmpty { null }
+            if (artist == null && album == null && track == null) null
+            else tags.copy(artist = artist, album = album, track = track)
+        }
+        item.copy(
+            sourceId = item.sourceId?.trim()?.takeIf { it.isNotEmpty() }?.let { stableSourceId(it) },
+            title = item.title?.trim()?.take(500)?.ifEmpty { null },
+            width = item.width?.takeIf { it > 0 },
+            height = item.height?.takeIf { it > 0 },
+            duration = item.duration?.takeIf { it.isFinite() && it >= 0.0 },
+            filesizeBytes = item.filesizeBytes?.takeIf { it >= 0L },
+            subtitles = sanitizedSubtitles,
+            tags = sanitizedTags,
+            plans = sanitizedPlans,
+        )
+    }
+    return media.copy(
+        providerLabel = media.providerLabel.trim().take(64).ifEmpty { media.provider.take(64) },
+        title = media.title.trim().take(500).ifEmpty { "Untitled" },
+        description = media.description?.trim()?.take(5_000)?.ifEmpty { null },
+        author = media.author?.trim()?.take(200)?.ifEmpty { null },
+        duration = media.duration?.takeIf { it.isFinite() && it >= 0.0 },
+        items = sanitizedItems,
+    )
+}

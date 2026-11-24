@@ -40,8 +40,14 @@ import {
 } from './providers/types.js';
 import { Denylist } from './security/denylist.js';
 import { EgressGuard } from './security/egress.js';
-import { createSafeDispatcher, header, safeFetch, safeOpen } from './security/http.js';
-import { hostMatchesAny, normalizeUrl, parseUserUrl } from './security/url.js';
+import { createSafeDispatcher, discard, header, safeFetch, safeOpen } from './security/http.js';
+import {
+  hostMatchesAny,
+  normalizeUrl,
+  parseUserUrl,
+  stripWww,
+  validateProviderUrl,
+} from './security/url.js';
 import { TtlCache } from './util/cache.js';
 import { InFlightCoalescer } from './util/coalesce.js';
 import { readToken, signToken, verifyToken } from './util/tokens.js';
@@ -108,6 +114,18 @@ export interface ResolverDependencies {
   readonly denylist?: Denylist;
 }
 
+const RESOLVE_CACHE_MAX_BYTES = 24 * 1024 * 1024;
+
+function estimateOutcomeBytes(outcome: ExtractionOutcome): number {
+  let bytes = outcome.rawInfoJson ? Buffer.byteLength(outcome.rawInfoJson, 'utf8') : 0;
+  try {
+    bytes += Buffer.byteLength(JSON.stringify(outcome.media), 'utf8');
+  } catch {
+    bytes += 4096;
+  }
+  return bytes;
+}
+
 export class MediaResolver {
   readonly config: EngineConfig;
   readonly logger: Logger;
@@ -118,7 +136,10 @@ export class MediaResolver {
   readonly denylist: Denylist;
 
   private readonly probeImpl: NonNullable<ResolverDependencies['probe']>;
-  private readonly cache = new TtlCache<ExtractionOutcome>(200, 5 * 60_000);
+  private readonly cache = new TtlCache<ExtractionOutcome>(200, 5 * 60_000, {
+    maxBytes: RESOLVE_CACHE_MAX_BYTES,
+    sizeOf: estimateOutcomeBytes,
+  });
   private readonly inFlightResolves = new InFlightCoalescer<ExtractionOutcome>();
 
   constructor(deps: ResolverDependencies) {
@@ -128,13 +149,24 @@ export class MediaResolver {
       deps.logger ??
       createLogger({ level: deps.config.logLevel, pretty: !deps.config.isProduction });
     this.registry = deps.registry ?? new ProviderRegistry(undefined, deps.config);
-    this.egress =
-      deps.egress ?? new EgressGuard({ allowPrivateAddresses: deps.config.allowPrivateAddresses });
     this.denylist =
       deps.denylist ??
       new Denylist({
         staticHosts: deps.config.blockedHosts,
         filePath: deps.config.dataDir ? join(deps.config.dataDir, 'denylist.json') : undefined,
+        canonicalizeUrl: (url) => {
+          const provider = this.registry.detect(url);
+          return provider ? normalizeForProvider(provider, url) : url;
+        },
+      });
+    this.egress =
+      deps.egress ??
+      new EgressGuard({
+        allowPrivateAddresses: deps.config.allowPrivateAddresses,
+        isBlockedHost: (hostname) =>
+          hostMatchesAny(hostname, deps.config.blockedHosts) ||
+          this.denylist.isBlockedHost(hostname),
+        isBlockedUrl: (url) => this.isBlocked(url),
       });
     this.denylist.onUpdate(() => this.cache.clear());
 
@@ -525,8 +557,11 @@ export class MediaResolver {
       cacheKey,
       async (coalescedSignal) => {
         const outcome = await this.router.resolve(canonical, providerId, coalescedSignal);
+        const sanitizedMedia = outcome.remote
+          ? this.validateRemoteMedia(outcome.media, providerId, canonical)
+          : outcome.media;
         const media: ResolvedMedia = {
-          ...outcome.media,
+          ...sanitizedMedia,
           ...(outcome.remote ? { remoteBackend: outcome.backend } : { remoteBackend: undefined }),
         };
 
@@ -542,16 +577,20 @@ export class MediaResolver {
             : { rawInfoJson: undefined }),
         };
         this.cache.set(cacheKey, withMedia);
-        if (media.url !== canonical.toString()) {
-          let sameOrigin = true;
-          if (providerId === 'generic') {
-            try {
-              sameOrigin = new URL(media.url).origin === canonical.origin;
-            } catch {
-              sameOrigin = false;
+        if (!outcome.remote && media.url !== canonical.toString()) {
+          let allowSecondary = false;
+          try {
+            const parsedMediaUrl = new URL(media.url);
+            if (!this.isBlocked(parsedMediaUrl)) {
+              allowSecondary =
+                providerId === 'generic'
+                  ? parsedMediaUrl.origin === canonical.origin
+                  : provider.canHandle(parsedMediaUrl, stripWww(parsedMediaUrl.hostname));
             }
+          } catch {
+            allowSecondary = false;
           }
-          if (sameOrigin) {
+          if (allowSecondary) {
             this.cache.set(`${providerId}|${media.url}`, withMedia);
           }
         }
@@ -575,6 +614,89 @@ export class MediaResolver {
 
   cacheSize(): number {
     return this.cache.size;
+  }
+
+  private validateRemoteMedia(
+    media: ResolvedMedia,
+    expectedProviderId: string,
+    canonical: URL,
+  ): ResolvedMedia {
+    if (media.provider !== expectedProviderId) {
+      throw seraError('PROVIDER_UNAVAILABLE', {
+        detail: `remote: provider mismatch (${media.provider} != ${expectedProviderId})`,
+      });
+    }
+    const urlCheckOptions = {
+      allowPrivateAddresses: this.config.allowPrivateAddresses,
+      blockedHosts: this.config.blockedHosts,
+      allowUrl: (candidate: string | URL) => {
+        const parsed = typeof candidate === 'string' ? new URL(candidate) : candidate;
+        if (this.isBlocked(parsed)) {
+          throw seraError('UNSUPPORTED_SOURCE', { detail: 'remote: url is blocked' });
+        }
+        return parsed;
+      },
+    };
+    const safeMainUrl = validateProviderUrl(media.url, urlCheckOptions);
+    if (!safeMainUrl) {
+      throw seraError('PROVIDER_UNAVAILABLE', { detail: 'remote: invalid media url' });
+    }
+    const safeThumb = media.thumbnailUrl
+      ? validateProviderUrl(media.thumbnailUrl, urlCheckOptions)
+      : undefined;
+    const safeAuthorUrl = media.authorUrl
+      ? validateProviderUrl(media.authorUrl, urlCheckOptions)
+      : undefined;
+
+    const items: ResolvedItem[] = media.items.map((item) => {
+      const itemThumb = item.thumbnailUrl
+        ? validateProviderUrl(item.thumbnailUrl, urlCheckOptions)
+        : undefined;
+      const itemFallbackThumb = item.thumbnailFallbackUrl
+        ? validateProviderUrl(item.thumbnailFallbackUrl, urlCheckOptions)
+        : undefined;
+      const plans: DownloadPlan[] = [];
+      for (const plan of item.plans) {
+        if (plan.fetch.via === 'direct') {
+          const validDirect = validateProviderUrl(plan.fetch.url, urlCheckOptions);
+          if (!validDirect) continue;
+          plans.push({ ...plan, fetch: { via: 'direct', url: validDirect } });
+        } else {
+          if (plan.fetch.target !== undefined) {
+            const validTarget = validateProviderUrl(plan.fetch.target, urlCheckOptions);
+            if (!validTarget) continue;
+            plans.push({ ...plan, fetch: { ...plan.fetch, target: validTarget } });
+          } else {
+            plans.push(plan);
+          }
+        }
+      }
+      if (!plans.length) {
+        throw seraError('PROVIDER_UNAVAILABLE', {
+          detail: 'remote: resolved item had no safe fetch plans',
+        });
+      }
+      const {
+        thumbnailUrl: _droppedThumb,
+        thumbnailFallbackUrl: _droppedFallback,
+        ...restItem
+      } = item;
+      return {
+        ...restItem,
+        ...(itemThumb ? { thumbnailUrl: itemThumb } : {}),
+        ...(itemFallbackThumb ? { thumbnailFallbackUrl: itemFallbackThumb } : {}),
+        plans,
+      };
+    });
+
+    const { thumbnailUrl: _droppedMediaThumb, authorUrl: _droppedAuthorUrl, ...restMedia } = media;
+    return {
+      ...restMedia,
+      url: canonical.toString(),
+      ...(safeThumb ? { thumbnailUrl: safeThumb } : {}),
+      ...(safeAuthorUrl ? { authorUrl: safeAuthorUrl } : {}),
+      items,
+    };
   }
 
   private async runProvider(
@@ -656,6 +778,31 @@ export class MediaResolver {
           allowPrivateAddresses: this.config.allowPrivateAddresses,
           ...(signal ? { signal } : {}),
         });
+        if (response.status === 405 || response.status === 403 || response.status === 501) {
+          const opened = await safeOpen(url, {
+            dispatcher: this.dispatcher,
+            method: 'GET',
+            headers: { range: 'bytes=0-0' },
+            timeoutMs: this.config.resolveTimeoutSeconds * 1000,
+            allowUrl: allowCandidate,
+            allowPrivateAddresses: this.config.allowPrivateAddresses,
+            ...(signal ? { signal } : {}),
+          });
+          discard(opened.body);
+          const rangeContentType = header(opened.headers, 'content-type');
+          const rangeTotal = parseContentRangeTotal(header(opened.headers, 'content-range'));
+          const fallbackLen =
+            opened.status === 200 ? Number(header(opened.headers, 'content-length')) : NaN;
+          const length =
+            rangeTotal ??
+            (Number.isFinite(fallbackLen) && fallbackLen > 0 ? fallbackLen : undefined);
+          return {
+            status: opened.status === 206 ? 200 : opened.status,
+            ...(rangeContentType ? { contentType: rangeContentType } : {}),
+            ...(length !== undefined ? { contentLength: length } : {}),
+            url: opened.url,
+          };
+        }
         const contentType = header(response.headers, 'content-type');
         const length = Number(header(response.headers, 'content-length'));
         return {
@@ -879,6 +1026,14 @@ export class MediaResolver {
 }
 
 const NUL = Buffer.alloc(1);
+
+function parseContentRangeTotal(value: string | undefined): number | undefined {
+  if (!value) return undefined;
+  const match = /^bytes\s+\d+-\d+\/(\d+)$/i.exec(value.trim());
+  if (!match?.[1]) return undefined;
+  const parsed = Number(match[1]);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
 
 function importDigest(entries: readonly ImportedEntry[]): string {
   const canonical = entries.map((entry) => [

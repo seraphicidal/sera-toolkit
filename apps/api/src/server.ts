@@ -23,14 +23,53 @@ export async function buildServer(engine: SeraEngine): Promise<FastifyInstance> 
       ? (_address: string, hop: number) => hop <= (config.trustProxy as number)
       : config.trustProxy;
 
+  const requestTimeout = config.extractionNodes.enabled
+    ? Math.min(Math.max(60_000, config.jobTimeoutSeconds * 1000), 15 * 60_000)
+    : 60_000;
+
   const app = Fastify({
     loggerInstance: engine.logger as FastifyBaseLogger,
     trustProxy,
     bodyLimit: 256 * 1024,
     routerOptions: { maxParamLength: 4096 },
     logController: new LogController({ disableRequestLogging: true }),
-    requestTimeout: 0,
+    requestTimeout,
     keepAliveTimeout: 72_000,
+  });
+
+  app.server.headersTimeout = 15_000;
+
+  app.addHook('onRequest', (request, reply, done) => {
+    if (
+      request.routeOptions.url !== '/internal/extraction/:taskId/file' &&
+      !request.raw.complete &&
+      request.method !== 'GET' &&
+      request.method !== 'HEAD' &&
+      request.method !== 'OPTIONS'
+    ) {
+      let cleared = false;
+      const clear = () => {
+        if (cleared) return;
+        cleared = true;
+        clearTimeout(timer);
+        request.raw.removeListener('end', clear);
+        request.raw.removeListener('close', clear);
+        request.raw.removeListener('error', clear);
+        reply.raw.removeListener('finish', clear);
+      };
+      const timer = setTimeout(() => {
+        clear();
+        if (!request.raw.complete && !request.raw.destroyed) {
+          request.raw.destroy(new Error('Request body timeout'));
+        }
+      }, 30_000);
+      timer.unref();
+      request.raw.once('end', clear);
+      request.raw.once('close', clear);
+      request.raw.once('error', clear);
+      reply.raw.once('finish', clear);
+    }
+    done();
   });
 
   await app.register(errorHandlerPlugin);

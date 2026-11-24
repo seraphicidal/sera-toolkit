@@ -278,22 +278,22 @@ private fun buildCloudMedia(
     }
 
     val item = ResolvedItem(
-        sourceId = downloadUrl,
+        sourceId = stableSourceId(downloadUrl),
         index = 0,
         kind = kind,
         title = title,
         container = container,
-        filesizeBytes = contentLength,
+        filesizeBytes = contentLength?.takeIf { it >= 0L },
         plans = ensureRecommendations(plans),
     )
 
     return ResolvedMedia(
         provider = providerId,
-        providerLabel = providerLabel,
+        providerLabel = providerLabel.take(64),
         url = sourceUrl.toString(),
         type = "single",
-        title = title,
-        author = sourceUrl.host,
+        title = title.take(500),
+        author = sourceUrl.host.take(200),
         items = listOf(item),
         metadata = mapOf("contentType" to JsonPrimitive(cleanType.ifEmpty { "application/octet-stream" })),
     )
@@ -1042,8 +1042,11 @@ class GenericExtractor(
             val resolvedUrl = parseUserUrl(resp.url.ifEmpty { url.toString() }, allowPrivateAddresses = allowPrivate).url
             discoverHtmlMedia(resp.body, resolvedUrl)
         } catch (error: Throwable) {
+            if (error is kotlinx.coroutines.CancellationException) throw error
             if (error is SeraException && (
                     error.code == SeraErrorCode.BLOCKED_ADDRESS ||
+                        error.code == SeraErrorCode.INVALID_URL ||
+                        error.code == SeraErrorCode.NETWORK_ERROR ||
                         error.code == SeraErrorCode.DRM_PROTECTED ||
                         error.code == SeraErrorCode.CANCELLED ||
                         error.code == SeraErrorCode.TIMEOUT ||
@@ -1076,12 +1079,12 @@ class GenericExtractor(
                 return ExtractorResolveResult(
                     media = ResolvedMedia(
                         provider = id,
-                        providerLabel = page.siteName ?: label,
+                        providerLabel = (page.siteName ?: label).take(64),
                         url = url.toString(),
                         type = if (items.size > 1) "collection" else "single",
                         title = page.title?.let { truncateText(it, 200) } ?: url.host,
                         description = page.description?.let { truncateText(it, 500) },
-                        author = page.author,
+                        author = page.author?.take(200),
                         thumbnailUrl = thumbnailUrl,
                         items = items,
                         metadata = mapOf("discoveredFrom" to JsonPrimitive(selected.firstOrNull()?.source ?: "unknown")),
@@ -1174,6 +1177,10 @@ class GenericExtractor(
             mime.contains("dash+xml")
         val container = if (isManifest) "mp4" else normalizeDirectContainer(mime, ext)
 
+        val safeWidth = media.width?.takeIf { it > 0 }
+        val safeHeight = media.height?.takeIf { it > 0 }
+        val safeSourceId = stableSourceId(media.url)
+
         if (isManifest) {
             val plans = listOf(
                 ResolvedPlan(
@@ -1181,8 +1188,8 @@ class GenericExtractor(
                     container = "mp4",
                     label = "Original",
                     detail = if (ext == "mpd") "MP4 \u00b7 DASH stream" else "MP4 \u00b7 HLS stream",
-                    width = media.width,
-                    height = media.height,
+                    width = safeWidth,
+                    height = safeHeight,
                     requiresConversion = false,
                     recommended = true,
                     fetch = FetchPlan.Ytdlp(
@@ -1209,11 +1216,11 @@ class GenericExtractor(
                 ),
             )
             return ResolvedItem(
-                sourceId = media.url,
+                sourceId = safeSourceId,
                 index = index,
                 kind = "video",
-                width = media.width,
-                height = media.height,
+                width = safeWidth,
+                height = safeHeight,
                 container = "mp4",
                 plans = ensureRecommendations(plans),
             )
@@ -1226,8 +1233,8 @@ class GenericExtractor(
                 container = container,
                 label = "Original",
                 detail = container.uppercase(),
-                width = media.width,
-                height = media.height,
+                width = safeWidth,
+                height = safeHeight,
                 requiresConversion = false,
                 recommended = true,
                 fetch = FetchPlan.Direct(url = media.url),
@@ -1249,11 +1256,11 @@ class GenericExtractor(
             )
         }
         return ResolvedItem(
-            sourceId = media.url,
+            sourceId = safeSourceId,
             index = index,
             kind = kind,
-            width = media.width,
-            height = media.height,
+            width = safeWidth,
+            height = safeHeight,
             container = container,
             plans = ensureRecommendations(plans),
         )

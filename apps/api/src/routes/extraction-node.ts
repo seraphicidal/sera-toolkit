@@ -1,6 +1,6 @@
 import { createWriteStream } from 'node:fs';
 import { mkdir, readdir, rm, stat, truncate } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { randomUUID } from 'node:crypto';
@@ -11,11 +11,18 @@ import {
   failedSchema,
   progressSchema,
   resolvedBodySchema,
+  type ApiErrorBody,
   type ErrorCode,
+  type RemoteProgress,
+  type RemoteResolvedMedia,
 } from '@sera/contracts';
 import {
   buildFilename,
+  hostMatchesAny,
+  isIpLiteral,
+  isPublicAddress,
   MESSAGES,
+  parseUserUrl,
   sanitizeExtension,
   sanitizeStem,
   seraError,
@@ -23,14 +30,62 @@ import {
   type SeraEngine,
 } from '@sera/engine';
 import { z } from 'zod';
-import { matchesToken } from '../plugins/client.js';
 import {
   authenticateExtractionNode,
+  authenticateExtractionWorker,
   createExtractionUpdatesService,
   extractionInternalRateLimit,
   type ExtractionUpdatesService,
   type NodeAuthIdentity,
 } from './extraction-updates.js';
+
+function apiError(code: ErrorCode, message: string): ApiErrorBody {
+  return { error: { code, message, retryable: false } };
+}
+
+function assertSafeResolvedUrl(raw: string, engine: SeraEngine): void {
+  const parsed = parseUserUrl(raw, { allowPrivateAddresses: engine.config.allowPrivateAddresses });
+  const host = parsed.url.hostname.toLowerCase();
+  if (hostMatchesAny(host, engine.config.blockedHosts)) {
+    throw seraError('BLOCKED_ADDRESS', { detail: `node: blocked host ${host}` });
+  }
+  if (engine.denylist.isBlocked(parsed.url.toString()).blocked) {
+    throw seraError('UNSUPPORTED_SOURCE', { detail: `node: denylisted url ${host}` });
+  }
+  if (!engine.config.allowPrivateAddresses) {
+    if (isIpLiteral(host)) {
+      const bare = host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host;
+      if (!isPublicAddress(bare)) {
+        throw seraError('BLOCKED_ADDRESS', { detail: `node: non-public ip ${host}` });
+      }
+    } else if (
+      host === 'localhost' ||
+      host.endsWith('.localhost') ||
+      host.endsWith('.local') ||
+      host.endsWith('.internal') ||
+      !host.includes('.')
+    ) {
+      throw seraError('BLOCKED_ADDRESS', { detail: `node: non-public host ${host}` });
+    }
+  }
+}
+
+function validateResolvedMediaPayload(media: RemoteResolvedMedia, engine: SeraEngine): void {
+  assertSafeResolvedUrl(media.url, engine);
+  if (media.authorUrl) assertSafeResolvedUrl(media.authorUrl, engine);
+  if (media.thumbnailUrl) assertSafeResolvedUrl(media.thumbnailUrl, engine);
+  for (const item of media.items) {
+    if (item.thumbnailUrl) assertSafeResolvedUrl(item.thumbnailUrl, engine);
+    if (item.thumbnailFallbackUrl) assertSafeResolvedUrl(item.thumbnailFallbackUrl, engine);
+    for (const plan of item.plans) {
+      if (plan.fetch.via === 'direct') {
+        assertSafeResolvedUrl(plan.fetch.url, engine);
+      } else if (plan.fetch.target) {
+        assertSafeResolvedUrl(plan.fetch.target, engine);
+      }
+    }
+  }
+}
 
 const fileUploadQuerySchema = z.object({
   name: z.string().max(240).optional(),
@@ -95,17 +150,13 @@ function sanitizeUploadedFilename(requested: string): string {
 
 interface Dispatched {
   state: 'pending' | 'done' | 'failed';
-  progress?: {
-    percent: number;
-    step: string;
-    bytesDownloaded?: number;
-    bytesTotal?: number;
-  };
+  progress?: RemoteProgress;
   claimedBy?: string;
   media?: unknown;
   files?: readonly { name: string; mimeType: string; path: string }[];
   error?: { code: string; message: string; detail?: string };
   readonly controller: AbortController;
+  readonly nodeTaskIds: Set<string>;
   settledAt?: number;
   readonly listeners: Set<() => void>;
 }
@@ -153,33 +204,70 @@ export function registerExtractionNodeRoutes(
   const DISPATCH_KEEP_MS = 60_000;
   const TASK_UPLOAD_IDLE_MS = 15 * 60_000;
   const taskUploads = new Map<string, TaskUploadState>();
+  const resolvedDataDir = resolve(config.dataDir);
+
+  const removeRemoteDir = async (dirPath: string): Promise<void> => {
+    const target = resolve(dirPath);
+    if (!target.startsWith(resolvedDataDir + sep)) return;
+    if (!basename(target).startsWith('remote-')) return;
+    await rm(target, { recursive: true, force: true }).catch(() => undefined);
+  };
+
+  const cleanupTaskUpload = async (taskId: string): Promise<void> => {
+    const upload = taskUploads.get(taskId);
+    taskUploads.delete(taskId);
+    if (upload) {
+      const waiters: Promise<void>[] = [];
+      for (const file of upload.files.values()) {
+        file.activeAbort?.abort();
+        if (file.donePromise) {
+          waiters.push(file.donePromise.catch(() => undefined));
+        }
+      }
+      if (waiters.length > 0) {
+        await Promise.allSettled(waiters);
+      }
+    }
+    await removeRemoteDir(join(config.dataDir, `remote-${taskId}`));
+  };
+
+  const cleanupDispatched = (entry: Dispatched): void => {
+    for (const nodeTaskId of entry.nodeTaskIds) {
+      void cleanupTaskUpload(nodeTaskId);
+    }
+    if (entry.files) {
+      const dirs = new Set<string>();
+      for (const file of entry.files) {
+        if (file.path) dirs.add(dirname(file.path));
+      }
+      for (const dir of dirs) {
+        void removeRemoteDir(dir);
+      }
+    }
+  };
+
+  const unsubscribeTaskCleanup = extractionNodes.onTaskCleanup((nodeTaskId) => {
+    void cleanupTaskUpload(nodeTaskId);
+  });
 
   const sweep = setInterval(() => {
     const now = Date.now();
     for (const [id, entry] of dispatched) {
       if (entry.settledAt && now - entry.settledAt > DISPATCH_KEEP_MS) {
         dispatched.delete(id);
-        taskUploads.delete(id);
-        void rm(join(config.dataDir, `remote-${id}`), { recursive: true, force: true }).catch(
-          () => undefined,
-        );
+        cleanupDispatched(entry);
       }
     }
     for (const [id, upload] of taskUploads) {
       if (now - upload.updatedAt > TASK_UPLOAD_IDLE_MS) {
-        for (const file of upload.files.values()) {
-          file.activeAbort?.abort();
-        }
-        taskUploads.delete(id);
-        void rm(join(config.dataDir, `remote-${id}`), { recursive: true, force: true }).catch(
-          () => undefined,
-        );
+        void cleanupTaskUpload(id);
       }
     }
   }, 30_000);
   sweep.unref();
   rootApp.addHook('onClose', async () => {
     clearInterval(sweep);
+    unsubscribeTaskCleanup();
   });
 
   void rootApp.register(async (app) => {
@@ -192,32 +280,17 @@ export function registerExtractionNodeRoutes(
       reply: FastifyReply,
     ): NodeAuthIdentity | undefined => authenticateExtractionNode(request, reply, engine);
 
-    const authenticateWorker = (request: FastifyRequest, reply: FastifyReply): boolean => {
-      const header = request.headers.authorization ?? '';
-      const presented = header.startsWith('Bearer ') ? header.slice(7) : '';
-      if (!presented) {
-        void reply.status(401).send({ error: { code: 'NOT_FOUND', message: 'Not found.' } });
-        return false;
-      }
-      if (
-        config.extractionNodes.workerToken &&
-        matchesToken(presented, config.extractionNodes.workerToken)
-      ) {
-        return true;
-      }
-      if (
-        !config.extractionNodes.workerToken &&
-        config.extractionNodes.legacyTokenUsed &&
-        config.extractionNodes.token &&
-        matchesToken(presented, config.extractionNodes.token)
-      ) {
-        return true;
-      }
-      void reply.status(401).send({ error: { code: 'NOT_FOUND', message: 'Not found.' } });
-      return false;
-    };
+    const authenticateWorker = (request: FastifyRequest, reply: FastifyReply): boolean =>
+      authenticateExtractionWorker(request, reply, engine);
 
-    const internalRateLimit = extractionInternalRateLimit(engine);
+    const nodeRateLimit = extractionInternalRateLimit(engine, {
+      authenticatedMax: 600,
+      scope: 'node',
+    });
+    const workerRateLimit = extractionInternalRateLimit(engine, {
+      authenticatedMax: 600,
+      scope: 'worker',
+    });
 
     const validateTaskOwnership = (
       taskId: string,
@@ -225,16 +298,16 @@ export function registerExtractionNodeRoutes(
       reply: FastifyReply,
     ): boolean => {
       if (!/^[a-f0-9]{16,64}$/.test(taskId)) {
-        void reply.status(404).send({ error: { code: 'NOT_FOUND', message: 'Not found.' } });
+        void reply.status(404).send(apiError('NOT_FOUND', 'Not found.'));
         return false;
       }
       const owner = extractionNodes.claimedBy(taskId);
       if (!owner) {
-        void reply.status(404).send({ error: { code: 'NOT_FOUND', message: 'Not found.' } });
+        void reply.status(404).send(apiError('NOT_FOUND', 'Not found.'));
         return false;
       }
       if (!auth.isLegacy && auth.nodeId !== owner) {
-        void reply.status(403).send({ error: { code: 'FORBIDDEN', message: 'Forbidden.' } });
+        void reply.status(403).send(apiError('FORBIDDEN', 'Forbidden.'));
         return false;
       }
       return true;
@@ -282,13 +355,13 @@ export function registerExtractionNodeRoutes(
       return uploadState;
     };
 
-    app.post('/internal/extraction/claim', internalRateLimit, async (request, reply) => {
+    app.post('/internal/extraction/claim', nodeRateLimit, async (request, reply) => {
       const auth = authenticateNode(request, reply);
       if (!auth) return reply;
 
       const parsed = claimSchema.safeParse(request.body);
       if (!parsed.success) {
-        throw seraError('INVALID_URL', {
+        throw seraError('VALIDATION_ERROR', {
           message: 'Malformed claim.',
           detail: 'node: bad claim body',
         });
@@ -306,7 +379,7 @@ export function registerExtractionNodeRoutes(
         ffmpegVersion,
       } = parsed.data;
       if (!auth.isLegacy && auth.nodeId !== nodeId) {
-        void reply.status(403).send({ error: { code: 'FORBIDDEN', message: 'Forbidden.' } });
+        void reply.status(403).send(apiError('FORBIDDEN', 'Forbidden.'));
         return reply;
       }
 
@@ -334,7 +407,7 @@ export function registerExtractionNodeRoutes(
 
     app.post<{ Params: { taskId: string } }>(
       '/internal/extraction/:taskId/progress',
-      internalRateLimit,
+      nodeRateLimit,
       async (request, reply) => {
         const auth = authenticateNode(request, reply);
         if (!auth) return reply;
@@ -348,7 +421,7 @@ export function registerExtractionNodeRoutes(
 
     app.post<{ Params: { taskId: string } }>(
       '/internal/extraction/:taskId/resolved',
-      { ...internalRateLimit, bodyLimit: RESOLVED_BODY_LIMIT },
+      { ...nodeRateLimit, bodyLimit: RESOLVED_BODY_LIMIT },
       async (request, reply) => {
         const auth = authenticateNode(request, reply);
         if (!auth) return reply;
@@ -356,11 +429,29 @@ export function registerExtractionNodeRoutes(
 
         const parsed = resolvedBodySchema.safeParse(request.body);
         if (!parsed.success) {
-          throw seraError('INVALID_URL', {
+          throw seraError('VALIDATION_ERROR', {
             message: 'Malformed resolved media.',
             detail: 'node: bad resolved body',
           });
         }
+
+        const pendingTask = extractionNodes.getTask(request.params.taskId);
+        if (!pendingTask) {
+          return reply.send({ accepted: false });
+        }
+        if (pendingTask.kind !== 'resolve') {
+          throw seraError('VALIDATION_ERROR', {
+            message: 'Task does not accept resolved media.',
+            detail: 'node: resolved submitted for non-resolve task',
+          });
+        }
+        if (parsed.data.media.provider !== pendingTask.providerId) {
+          throw seraError('VALIDATION_ERROR', {
+            message: 'Resolved provider does not match task.',
+            detail: `node: provider mismatch ${parsed.data.media.provider} !== ${pendingTask.providerId}`,
+          });
+        }
+        validateResolvedMediaPayload(parsed.data.media, engine);
 
         const accepted = extractionNodes.completeResolve(
           request.params.taskId,
@@ -372,7 +463,7 @@ export function registerExtractionNodeRoutes(
 
     app.post<{ Params: { taskId: string } }>(
       '/internal/extraction/:taskId/failed',
-      internalRateLimit,
+      nodeRateLimit,
       async (request, reply) => {
         const auth = authenticateNode(request, reply);
         if (!auth) return reply;
@@ -390,19 +481,15 @@ export function registerExtractionNodeRoutes(
             })
           : seraError('PROVIDER_UNAVAILABLE', { detail: 'node: malformed failure report' });
 
-        await rm(join(config.dataDir, `remote-${request.params.taskId}`), {
-          recursive: true,
-          force: true,
-        }).catch(() => undefined);
-        taskUploads.delete(request.params.taskId);
         const accepted = extractionNodes.fail(request.params.taskId, error);
+        await cleanupTaskUpload(request.params.taskId);
         return reply.send({ accepted });
       },
     );
 
     app.get<{ Params: { taskId: string } }>(
       '/internal/extraction/:taskId/file',
-      internalRateLimit,
+      nodeRateLimit,
       async (request, reply) => {
         const auth = authenticateNode(request, reply);
         if (!auth) return reply;
@@ -425,7 +512,7 @@ export function registerExtractionNodeRoutes(
 
     app.post<{ Params: { taskId: string } }>(
       '/internal/extraction/:taskId/file',
-      internalRateLimit,
+      nodeRateLimit,
       async (request, reply) => {
         const auth = authenticateNode(request, reply);
         if (!auth) return reply;
@@ -436,9 +523,28 @@ export function registerExtractionNodeRoutes(
           ?.trim()
           .toLowerCase();
         if (rawContentType && rawContentType !== 'application/octet-stream') {
-          return reply.status(415).send({
-            error: { code: 'INVALID_URL', message: 'Expected application/octet-stream.' },
-          });
+          return reply
+            .status(415)
+            .send(apiError('VALIDATION_ERROR', 'Expected application/octet-stream.'));
+        }
+
+        const rawContentLength = request.headers['content-length'];
+        let declaredContentLength: number | undefined;
+        if (typeof rawContentLength === 'string' && rawContentLength.trim().length > 0) {
+          const trimmedLength = rawContentLength.trim();
+          if (!/^\d+$/.test(trimmedLength)) {
+            throw seraError('VALIDATION_ERROR', {
+              message: 'Malformed Content-Length.',
+              detail: 'node: invalid Content-Length header',
+            });
+          }
+          declaredContentLength = Number.parseInt(trimmedLength, 10);
+          if (!Number.isSafeInteger(declaredContentLength) || declaredContentLength < 0) {
+            throw seraError('VALIDATION_ERROR', {
+              message: 'Malformed Content-Length.',
+              detail: 'node: invalid Content-Length value',
+            });
+          }
         }
 
         const rawContentRange = request.headers['content-range'];
@@ -446,7 +552,7 @@ export function registerExtractionNodeRoutes(
           typeof rawContentRange === 'string' ? rawContentRange : undefined,
         );
         if (contentRange === 'invalid') {
-          throw seraError('INVALID_URL', {
+          throw seraError('VALIDATION_ERROR', {
             message: 'Malformed Content-Range.',
             detail: 'node: invalid Content-Range header',
           });
@@ -456,16 +562,29 @@ export function registerExtractionNodeRoutes(
           contentRange !== undefined &&
           query.offset !== contentRange.start
         ) {
-          throw seraError('INVALID_URL', {
+          throw seraError('VALIDATION_ERROR', {
             message: 'Conflicting upload offset.',
             detail: 'node: offset query disagrees with Content-Range',
           });
         }
-        if (contentRange?.total !== undefined && contentRange.total > config.maxFilesizeBytes) {
-          throw seraError('TOO_LARGE', { detail: 'node: upload exceeds the size limit' });
+
+        const expectedChunkBytes =
+          contentRange?.end !== undefined ? contentRange.end - contentRange.start + 1 : undefined;
+        if (
+          expectedChunkBytes !== undefined &&
+          declaredContentLength !== undefined &&
+          declaredContentLength !== expectedChunkBytes
+        ) {
+          throw seraError('VALIDATION_ERROR', {
+            message: 'Content-Length does not match Content-Range.',
+            detail: 'node: content-length disagrees with content-range',
+          });
         }
 
         const startOffset = contentRange?.start ?? query.offset ?? 0;
+        if (contentRange?.total !== undefined && contentRange.total > config.maxFilesizeBytes) {
+          throw seraError('TOO_LARGE', { detail: 'node: upload exceeds the size limit' });
+        }
 
         const { taskId } = request.params;
         if (!/^[a-f0-9]{16,64}$/.test(taskId)) {
@@ -489,12 +608,13 @@ export function registerExtractionNodeRoutes(
         }
 
         while (existing?.activeAbort) {
+          existing.generation += 1;
           existing.activeAbort.abort();
           await existing.donePromise?.catch(() => undefined);
           existing = uploadState.files.get(key);
         }
 
-        if (extractionNodes.isCancelled(taskId)) {
+        if (extractionNodes.isCancelled(taskId) || !extractionNodes.getTask(taskId)) {
           return reply.status(409).send({ accepted: false, cancelled: true });
         }
 
@@ -529,7 +649,7 @@ export function registerExtractionNodeRoutes(
               .status(416)
               .header('x-sera-received-bytes', String(diskSize))
               .send({
-                error: { code: 'INVALID_URL', message: 'Upload offset exceeds received bytes.' },
+                ...apiError('VALIDATION_ERROR', 'Upload offset exceeds received bytes.'),
                 receivedBytes: diskSize,
               });
           }
@@ -538,15 +658,57 @@ export function registerExtractionNodeRoutes(
           }
 
           entry.sizeBytes = startOffset;
-          if (totalTaskBytes(uploadState) > config.maxFilesizeBytes) {
+          if (
+            totalTaskBytes(uploadState) > config.maxFilesizeBytes ||
+            (declaredContentLength !== undefined &&
+              totalTaskBytes(uploadState) + declaredContentLength > config.maxFilesizeBytes) ||
+            (expectedChunkBytes !== undefined &&
+              totalTaskBytes(uploadState) + expectedChunkBytes > config.maxFilesizeBytes)
+          ) {
+            if (startOffset === 0) uploadState.files.delete(key);
             throw seraError('TOO_LARGE', { detail: 'node: upload exceeds the size limit' });
           }
 
+          let receivedThisRequest = 0;
           let lastLeaseRenewAt = Date.now();
           const limiter = new Transform({
             transform(chunk: Buffer, _encoding, done) {
               if (extractionNodes.isCancelled(taskId) || entry.generation !== myGeneration) {
                 done(seraError('CANCELLED'));
+                return;
+              }
+              receivedThisRequest += chunk.length;
+              if (expectedChunkBytes !== undefined && receivedThisRequest > expectedChunkBytes) {
+                done(
+                  seraError('VALIDATION_ERROR', {
+                    message: 'Upload exceeded Content-Range length.',
+                    detail: 'node: chunk exceeded Content-Range',
+                  }),
+                );
+                return;
+              }
+              if (
+                declaredContentLength !== undefined &&
+                receivedThisRequest > declaredContentLength
+              ) {
+                done(
+                  seraError('VALIDATION_ERROR', {
+                    message: 'Upload exceeded Content-Length.',
+                    detail: 'node: upload exceeded Content-Length',
+                  }),
+                );
+                return;
+              }
+              if (
+                contentRange?.total !== undefined &&
+                entry.sizeBytes + chunk.length > contentRange.total
+              ) {
+                done(
+                  seraError('VALIDATION_ERROR', {
+                    message: 'Upload exceeded Content-Range total.',
+                    detail: 'node: upload exceeded Content-Range total',
+                  }),
+                );
                 return;
               }
               entry.sizeBytes += chunk.length;
@@ -580,7 +742,10 @@ export function registerExtractionNodeRoutes(
             if (entry.generation !== myGeneration) {
               return await reply.status(409).send({ accepted: false, superseded: true });
             }
-            if (error instanceof SeraError && error.code === 'CANCELLED') {
+            if (
+              uploadAbort.signal.aborted ||
+              (error instanceof SeraError && error.code === 'CANCELLED')
+            ) {
               uploadState.files.delete(key);
               await rm(path, { force: true }).catch(() => undefined);
               await cleanupEmptyTaskDir(directory);
@@ -592,7 +757,14 @@ export function registerExtractionNodeRoutes(
               await cleanupEmptyTaskDir(directory);
               throw error;
             }
-            if (error instanceof SeraError) throw error;
+            if (error instanceof SeraError) {
+              entry.sizeBytes = await stat(path).then(
+                (info) => (info.isFile() ? info.size : 0),
+                () => 0,
+              );
+              entry.complete = false;
+              throw error;
+            }
             entry.sizeBytes = await stat(path).then(
               (info) => (info.isFile() ? info.size : 0),
               () => 0,
@@ -606,14 +778,44 @@ export function registerExtractionNodeRoutes(
           if (entry.generation !== myGeneration) {
             return await reply.status(409).send({ accepted: false, superseded: true });
           }
+          if (uploadAbort.signal.aborted || extractionNodes.isCancelled(taskId)) {
+            uploadState.files.delete(key);
+            await rm(path, { force: true }).catch(() => undefined);
+            await cleanupEmptyTaskDir(directory);
+            return await reply.status(409).send({ accepted: false, cancelled: true });
+          }
 
           const written = await stat(path);
           entry.sizeBytes = written.size;
 
-          const isPartialRange =
-            contentRange?.total !== undefined && written.size < contentRange.total;
-          if (isPartialRange) {
-            return await reply.send({ accepted: true, complete: false, sizeBytes: written.size });
+          if (expectedChunkBytes !== undefined && receivedThisRequest !== expectedChunkBytes) {
+            entry.complete = false;
+            throw seraError('NETWORK_ERROR', {
+              message: 'Upload did not match Content-Range length.',
+              detail: 'node: truncated Content-Range chunk',
+            });
+          }
+          if (
+            declaredContentLength !== undefined &&
+            receivedThisRequest !== declaredContentLength
+          ) {
+            entry.complete = false;
+            throw seraError('NETWORK_ERROR', {
+              message: 'Upload did not match Content-Length.',
+              detail: 'node: truncated Content-Length upload',
+            });
+          }
+          if (contentRange?.total !== undefined) {
+            if (written.size > contentRange.total) {
+              entry.complete = false;
+              throw seraError('VALIDATION_ERROR', {
+                message: 'Upload exceeded Content-Range total.',
+                detail: 'node: uploaded bytes exceeded Content-Range total',
+              });
+            }
+            if (written.size < contentRange.total) {
+              return await reply.send({ accepted: true, complete: false, sizeBytes: written.size });
+            }
           }
 
           const accepted = extractionNodes.acceptFile(taskId, {
@@ -630,7 +832,7 @@ export function registerExtractionNodeRoutes(
           }
           return await reply.send({ accepted, sizeBytes: written.size });
         } finally {
-          if (entry.generation === myGeneration) {
+          if (entry.activeAbort === uploadAbort) {
             entry.activeAbort = undefined;
             entry.donePromise = undefined;
           }
@@ -641,7 +843,7 @@ export function registerExtractionNodeRoutes(
 
     app.post<{ Params: { taskId: string } }>(
       '/internal/extraction/:taskId/complete',
-      internalRateLimit,
+      nodeRateLimit,
       async (request, reply) => {
         const auth = authenticateNode(request, reply);
         if (!auth) return reply;
@@ -651,12 +853,12 @@ export function registerExtractionNodeRoutes(
       },
     );
 
-    app.get('/internal/extraction/nodes', internalRateLimit, (request, reply) => {
+    app.get('/internal/extraction/nodes', workerRateLimit, (request, reply) => {
       if (!authenticateWorker(request, reply)) return reply;
       return reply.send({ nodes: extractionNodes.status() });
     });
 
-    app.post('/internal/extraction/dispatch', internalRateLimit, (request, reply) => {
+    app.post('/internal/extraction/dispatch', workerRateLimit, (request, reply) => {
       if (!authenticateWorker(request, reply)) return reply;
       if (dispatched.size >= 5_000) {
         throw seraError('QUEUE_FULL', { detail: 'node: dispatch queue full' });
@@ -664,7 +866,7 @@ export function registerExtractionNodeRoutes(
 
       const parsed = dispatchSchema.safeParse(request.body);
       if (!parsed.success) {
-        throw seraError('INVALID_URL', {
+        throw seraError('VALIDATION_ERROR', {
           message: 'Malformed dispatch.',
           detail: 'node: bad dispatch body',
         });
@@ -674,6 +876,7 @@ export function registerExtractionNodeRoutes(
       const entry: Dispatched = {
         state: 'pending',
         controller: new AbortController(),
+        nodeTaskIds: new Set(),
         listeners: new Set(),
       };
       dispatched.set(taskId, entry);
@@ -684,12 +887,7 @@ export function registerExtractionNodeRoutes(
 
       const task = parsed.data;
       const options = {
-        onProgress: (progress: {
-          percent: number;
-          step: string;
-          bytesDownloaded?: number;
-          bytesTotal?: number;
-        }) => {
+        onProgress: (progress: RemoteProgress) => {
           entry.progress = {
             percent: progress.percent,
             step: progress.step,
@@ -697,12 +895,19 @@ export function registerExtractionNodeRoutes(
               ? { bytesDownloaded: progress.bytesDownloaded }
               : {}),
             ...(progress.bytesTotal !== undefined ? { bytesTotal: progress.bytesTotal } : {}),
+            ...(progress.speedBytesPerSecond !== undefined
+              ? { speedBytesPerSecond: progress.speedBytesPerSecond }
+              : {}),
+            ...(progress.etaSeconds !== undefined ? { etaSeconds: progress.etaSeconds } : {}),
           };
           notify();
         },
         onClaimed: (nodeId: string) => {
           entry.claimedBy = nodeId;
           notify();
+        },
+        onTaskId: (nodeTaskId: string) => {
+          entry.nodeTaskIds.add(nodeTaskId);
         },
         signal: entry.controller.signal,
       };
@@ -740,7 +945,7 @@ export function registerExtractionNodeRoutes(
 
     app.get<{ Params: { taskId: string } }>(
       '/internal/extraction/dispatch/:taskId',
-      internalRateLimit,
+      workerRateLimit,
       async (request, reply) => {
         if (!authenticateWorker(request, reply)) return reply;
 
@@ -812,13 +1017,17 @@ export function registerExtractionNodeRoutes(
 
     app.delete<{ Params: { taskId: string } }>(
       '/internal/extraction/dispatch/:taskId',
-      internalRateLimit,
+      workerRateLimit,
       (request, reply) => {
         if (!authenticateWorker(request, reply)) return reply;
         const entry = dispatched.get(request.params.taskId);
-        entry?.controller.abort();
         if (entry) {
+          entry.controller.abort();
           for (const listener of entry.listeners) listener();
+          if (entry.state !== 'pending') {
+            dispatched.delete(request.params.taskId);
+            cleanupDispatched(entry);
+          }
         }
         return reply.send({ cancelled: entry !== undefined });
       },

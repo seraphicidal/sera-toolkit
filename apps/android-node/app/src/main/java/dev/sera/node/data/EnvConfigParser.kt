@@ -100,45 +100,31 @@ object EnvConfigParser {
             }
         }
 
-        val instagramSessionId = if (values.containsKey("SERA_INSTAGRAM_SESSION_ID")) {
-            val v = values["SERA_INSTAGRAM_SESSION_ID"].orEmpty().trim()
-            if (v.isNotEmpty()) imported += "Instagram Session ID"
-            v
-        } else {
-            null
-        }
+        val instagramSessionId = values["SERA_INSTAGRAM_SESSION_ID"]
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?.also { imported += "Instagram Session ID" }
 
-        val youtubePlayerClients = if (values.containsKey("SERA_YOUTUBE_PLAYER_CLIENTS")) {
-            val v = values["SERA_YOUTUBE_PLAYER_CLIENTS"].orEmpty().trim()
-            if (v.isNotEmpty()) imported += "YouTube Player Clients"
-            v
-        } else {
-            null
-        }
+        val youtubePlayerClients = values["SERA_YOUTUBE_PLAYER_CLIENTS"]
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?.also { imported += "YouTube Player Clients" }
 
-        val youtubePotProviderUrl = if (values.containsKey("SERA_YOUTUBE_POT_PROVIDER_URL")) {
-            val v = values["SERA_YOUTUBE_POT_PROVIDER_URL"].orEmpty().trim().trimEnd('/')
-            if (v.isNotEmpty()) imported += "YouTube PO Token URL"
-            v
-        } else {
-            null
-        }
+        val youtubePotProviderUrl = values["SERA_YOUTUBE_POT_PROVIDER_URL"]
+            ?.trim()
+            ?.trimEnd('/')
+            ?.takeIf { it.isNotEmpty() }
+            ?.also { imported += "YouTube PO Token URL" }
 
-        val redditClientId = if (values.containsKey("SERA_REDDIT_CLIENT_ID")) {
-            val v = values["SERA_REDDIT_CLIENT_ID"].orEmpty().trim()
-            if (v.isNotEmpty()) imported += "Reddit Client ID"
-            v
-        } else {
-            null
-        }
+        val redditClientId = values["SERA_REDDIT_CLIENT_ID"]
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?.also { imported += "Reddit Client ID" }
 
-        val redditClientSecret = if (values.containsKey("SERA_REDDIT_CLIENT_SECRET")) {
-            val v = values["SERA_REDDIT_CLIENT_SECRET"].orEmpty().trim()
-            if (v.isNotEmpty()) imported += "Reddit Client Secret"
-            v
-        } else {
-            null
-        }
+        val redditClientSecret = values["SERA_REDDIT_CLIENT_SECRET"]
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?.also { imported += "Reddit Client Secret" }
 
         val preferredCapacity = values["SERA_NODE_CAPACITY"]?.trim()?.toIntOrNull()?.coerceIn(1, 8)
             ?.also { imported += "Capacity" }

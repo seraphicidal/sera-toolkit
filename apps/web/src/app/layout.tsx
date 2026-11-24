@@ -33,8 +33,11 @@ export const viewport: Viewport = {
   ],
 };
 
+const NONCE_PATTERN = /^[A-Za-z0-9+/=]{16,64}$/;
+
 export default async function RootLayout({ children }: { readonly children: React.ReactNode }) {
-  const nonce = (await headers()).get('x-nonce') ?? undefined;
+  const rawNonce = (await headers()).get('x-nonce');
+  const nonce = rawNonce && NONCE_PATTERN.test(rawNonce) ? rawNonce : undefined;
 
   return (
     <html lang="en" suppressHydrationWarning>
@@ -65,7 +68,7 @@ export default async function RootLayout({ children }: { readonly children: Reac
           <footer className="flex flex-col gap-3 border-t border-[var(--color-line)] py-5 text-xs text-[var(--color-ink-faint)]">
             <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
               <p>You are responsible for having the rights to the media you download.</p>
-              <span className="tabular text-[var(--color-ink-faint)]/70">v{SERA_VERSION}</span>
+              <span className="tabular text-[var(--color-ink-faint)]">v{SERA_VERSION}</span>
             </div>
             <nav
               aria-label="Legal and general navigation"

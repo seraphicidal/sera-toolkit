@@ -1,13 +1,27 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+  type KeyboardEvent,
+} from 'react';
 import { ClipboardIcon, CloseIcon, LinkIcon, SpinnerIcon } from './icons';
 import { cx, pluralize } from '@/lib/format';
 import { firstHttpUrl, parseBatchUrls } from '@/lib/share';
 
 export { parseBatchUrls };
 
-export function UrlForm({
+export const MAX_BATCH_URLS = 50;
+
+const MIN_TEXTAREA_HEIGHT = 56;
+const MAX_TEXTAREA_HEIGHT = 168;
+
+export const UrlForm = memo(function UrlForm({
   value,
   onChange,
   onSubmit,
@@ -23,34 +37,76 @@ export function UrlForm({
   readonly disabled?: boolean;
 }) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const pasteHintTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [canPaste, setCanPaste] = useState(false);
+  const [pasteHint, setPasteHint] = useState('');
+  const [shortcutLabel, setShortcutLabel] = useState<string | undefined>(undefined);
 
-  useEffect(() => {
-    setCanPaste(typeof navigator !== 'undefined' && 'clipboard' in navigator);
-
-    if (window.matchMedia('(min-width: 640px)').matches) inputRef.current?.focus();
+  const syncHeight = useCallback((el: HTMLTextAreaElement | null) => {
+    if (!el) return;
+    if (!el.value.includes('\n') && el.value.length < 36) {
+      el.style.height = `${MIN_TEXTAREA_HEIGHT}px`;
+      return;
+    }
+    el.style.height = 'auto';
+    const nextHeight = Math.min(
+      Math.max(el.scrollHeight, MIN_TEXTAREA_HEIGHT),
+      MAX_TEXTAREA_HEIGHT,
+    );
+    el.style.height = `${nextHeight}px`;
   }, []);
 
   useEffect(() => {
-    const el = inputRef.current;
-    if (!el) return;
-    el.style.height = 'auto';
-    const nextHeight = Math.min(Math.max(el.scrollHeight, 56), 168);
-    el.style.height = `${nextHeight}px`;
-  }, [value]);
+    setCanPaste(
+      typeof navigator !== 'undefined' && typeof navigator.clipboard?.readText === 'function',
+    );
 
-  const parsedBatch = useMemo(() => parseBatchUrls(value), [value]);
+    const finePointer = window.matchMedia('(pointer: fine)').matches;
+    if (finePointer) {
+      const mac = /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent);
+      setShortcutLabel(mac ? '⌘+Enter' : 'Ctrl+Enter');
+    }
+
+    if (window.matchMedia('(min-width: 640px)').matches) inputRef.current?.focus();
+
+    const el = inputRef.current;
+    let observer: ResizeObserver | undefined;
+    if (el && typeof ResizeObserver !== 'undefined') {
+      observer = new ResizeObserver(() => syncHeight(el));
+      observer.observe(el);
+    }
+
+    return () => {
+      observer?.disconnect();
+      if (pasteHintTimer.current) clearTimeout(pasteHintTimer.current);
+    };
+  }, [syncHeight]);
+
+  useEffect(() => {
+    syncHeight(inputRef.current);
+  }, [value, syncHeight]);
+
+  const parsedBatch = useMemo(() => (value.includes('\n') ? parseBatchUrls(value) : []), [value]);
   const isMultiLine = value.includes('\n') || parsedBatch.length > 1;
+  const effectiveBatchCount = Math.min(parsedBatch.length, MAX_BATCH_URLS);
+
+  const showPasteFallbackHint = useCallback(() => {
+    const fallback = shortcutLabel === '⌘+Enter' ? 'Press ⌘+V to paste.' : 'Press Ctrl+V to paste.';
+    setPasteHint(shortcutLabel ? fallback : 'Tap and hold the field to paste.');
+    if (pasteHintTimer.current) clearTimeout(pasteHintTimer.current);
+    pasteHintTimer.current = setTimeout(() => setPasteHint(''), 3_500);
+  }, [shortcutLabel]);
 
   const submitValue = (rawText: string): void => {
     const trimmed = rawText.trim();
     if (!trimmed || busy || disabled) return;
     const batch = parseBatchUrls(trimmed);
     if (batch.length > 1) {
+      const capped = batch.slice(0, MAX_BATCH_URLS);
       if (onSubmitBatch) {
-        onSubmitBatch(batch);
+        onSubmitBatch(capped);
       } else {
-        onSubmit(batch[0]!);
+        onSubmit(capped[0]!);
       }
       return;
     }
@@ -80,18 +136,23 @@ export function UrlForm({
   };
 
   const paste = async (): Promise<void> => {
+    setPasteHint('');
     try {
       const trimmed = (await navigator.clipboard.readText()).trim();
-      if (!trimmed) return;
+      if (!trimmed) {
+        inputRef.current?.focus();
+        return;
+      }
       const batch = parseBatchUrls(trimmed);
       if (batch.length > 1) {
-        const joined = batch.join('\n');
+        const capped = batch.slice(0, MAX_BATCH_URLS);
+        const joined = capped.join('\n');
         onChange(joined);
         inputRef.current?.focus();
         if (onSubmitBatch) {
-          onSubmitBatch(batch);
+          onSubmitBatch(capped);
         } else {
-          onSubmit(batch[0]!);
+          onSubmit(capped[0]!);
         }
         return;
       }
@@ -101,6 +162,7 @@ export function UrlForm({
       onSubmit(cleaned);
     } catch {
       inputRef.current?.focus();
+      showPasteFallbackHint();
     }
   };
 
@@ -113,7 +175,7 @@ export function UrlForm({
       <div
         className={cx(
           'group relative flex items-start gap-2 rounded-[var(--radius-input)] border bg-[var(--color-surface)] pr-2 pl-3.5 transition-colors duration-200',
-          'border-[var(--color-line)] focus-within:border-[var(--color-accent)]',
+          'border-[var(--color-line)] focus-within:border-[var(--color-accent)] focus-within:shadow-[var(--shadow-focus)]',
           disabled && 'opacity-60',
         )}
       >
@@ -136,12 +198,15 @@ export function UrlForm({
           disabled={disabled}
           placeholder="Paste a link or multiple links (one per line)…"
           value={value}
-          onChange={(event) => onChange(event.target.value)}
+          onChange={(event) => {
+            if (pasteHint) setPasteHint('');
+            onChange(event.target.value);
+          }}
           onKeyDown={handleKeyDown}
           className="max-h-42 min-h-14 min-w-0 flex-1 resize-none border-none bg-transparent py-4 text-base leading-normal text-[var(--color-ink)] ring-0 outline-none placeholder:text-[var(--color-ink-faint)] focus:border-none focus:ring-0 focus:outline-none"
         />
 
-        <div className="mt-3 flex shrink-0 items-center gap-1">
+        <div className="mt-2.5 flex shrink-0 items-center gap-1">
           {value && !busy && !disabled && (
             <button
               type="button"
@@ -150,7 +215,7 @@ export function UrlForm({
                 inputRef.current?.focus();
               }}
               aria-label="Clear the link"
-              className="grid size-8 shrink-0 cursor-pointer place-items-center rounded-lg text-[var(--color-ink-faint)] transition-colors hover:bg-[var(--color-sunken)] hover:text-[var(--color-ink)]"
+              className="grid size-9 shrink-0 cursor-pointer place-items-center rounded-lg text-[var(--color-ink-faint)] transition-colors hover:bg-[var(--color-sunken)] hover:text-[var(--color-ink)]"
             >
               <CloseIcon size={16} />
             </button>
@@ -161,7 +226,7 @@ export function UrlForm({
               type="button"
               onClick={() => void paste()}
               disabled={busy || disabled}
-              className="flex shrink-0 cursor-pointer items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[0.8125rem] font-medium text-[var(--color-ink-muted)] transition-colors hover:bg-[var(--color-sunken)] hover:text-[var(--color-ink)]"
+              className="flex min-h-9 shrink-0 cursor-pointer items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[0.8125rem] font-medium text-[var(--color-ink-muted)] transition-colors hover:bg-[var(--color-sunken)] hover:text-[var(--color-ink)]"
             >
               <ClipboardIcon size={15} />
               Paste
@@ -170,11 +235,23 @@ export function UrlForm({
         </div>
       </div>
 
+      {pasteHint && (
+        <p
+          role="status"
+          aria-live="polite"
+          className="mt-1.5 text-xs text-[var(--color-ink-muted)]"
+        >
+          {pasteHint}
+        </p>
+      )}
+
       {isMultiLine && (
         <p className="mt-1.5 text-xs text-[var(--color-ink-faint)]">
-          {parsedBatch.length > 1
-            ? `${pluralize(parsedBatch.length, 'link')} detected · Press Ctrl+Enter or click Analyze to queue batch`
-            : 'Multi-line mode · Press Ctrl+Enter or click Analyze'}
+          {parsedBatch.length > MAX_BATCH_URLS
+            ? `First ${MAX_BATCH_URLS} of ${pluralize(parsedBatch.length, 'link')} will be queued${shortcutLabel ? ` · Press ${shortcutLabel} or click Analyze` : ''}`
+            : parsedBatch.length > 1
+              ? `${pluralize(parsedBatch.length, 'link')} detected${shortcutLabel ? ` · Press ${shortcutLabel} or click Analyze to queue batch` : ''}`
+              : `Multi-line mode${shortcutLabel ? ` · Press ${shortcutLabel} or click Analyze` : ''}`}
         </p>
       )}
 
@@ -193,12 +270,12 @@ export function UrlForm({
             <SpinnerIcon size={17} />
             Analyzing
           </>
-        ) : parsedBatch.length > 1 ? (
-          `Analyze ${pluralize(parsedBatch.length, 'link')}`
+        ) : effectiveBatchCount > 1 ? (
+          `Analyze ${pluralize(effectiveBatchCount, 'link')}`
         ) : (
           'Analyze'
         )}
       </button>
     </form>
   );
-}
+});

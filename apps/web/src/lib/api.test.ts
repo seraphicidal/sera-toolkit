@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { getJob, type ApiError } from './api';
+import { createJob, getJob, getServiceInfo, type ApiError } from './api';
 
 describe('web api client', () => {
   afterEach(() => {
@@ -40,5 +40,60 @@ describe('web api client', () => {
       code: 'INTERNAL',
       retryable: true,
     } satisfies Partial<ApiError>);
+  });
+
+  it('re-throws AbortError instead of converting it to NETWORK_ERROR', async () => {
+    const controller = new AbortController();
+    const abortErr = Object.assign(new Error('Aborted'), { name: 'AbortError' });
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(abortErr));
+    controller.abort();
+
+    await expect(getJob('id1', controller.signal)).rejects.toMatchObject({
+      name: 'AbortError',
+    });
+  });
+
+  it('passes AbortSignal to createJob and fetches /api/info in getServiceInfo', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            id: 'job1',
+            state: 'queued',
+            step: 'Queued',
+            progress: { percent: 0 },
+            provider: 'generic',
+            createdAt: '',
+            updatedAt: '',
+          }),
+          { status: 202, headers: { 'content-type': 'application/json' } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            name: 'SERA.toolkit',
+            version: '1.8.0',
+            providers: [],
+            limits: {
+              maxFilesizeBytes: 1024,
+              maxDurationSeconds: 3600,
+              maxItemsPerJob: 50,
+              retentionSeconds: 1800,
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const controller = new AbortController();
+    await createJob({ infoId: 'info1', optionIds: ['opt1'] }, controller.signal);
+    expect((fetchMock.mock.calls[0]?.[1] as RequestInit).signal).toBe(controller.signal);
+
+    const info = await getServiceInfo(controller.signal);
+    expect(fetchMock.mock.calls[1]?.[0]).toBe('/api/info');
+    expect(info.limits.maxItemsPerJob).toBe(50);
   });
 });

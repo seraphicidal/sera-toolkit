@@ -13,6 +13,7 @@ export default defineConfig(
     '**/*.tsbuildinfo',
     '.tools/**',
     '.data/**',
+    'apps/android-node/**',
     'apps/web/next-env.d.ts',
   ]),
 

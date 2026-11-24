@@ -51,4 +51,12 @@ describe('normalizeClientAddress', () => {
     expect(normalizeClientAddress('[2001:db8::1]')).toBe('2001:db8:0:0::/64');
     expect(normalizeClientAddress('2001:db8::1%eth0')).toBe('2001:db8:0:0::/64');
   });
+
+  it('parses IPv6 shorthand with embedded dotted-quad IPv4 accurately', () => {
+    expect(normalizeClientAddress('0::ffff:192.0.2.1')).toBe('192.0.2.1');
+    expect(normalizeClientAddress('0:0::ffff:1.2.3.4')).toBe('1.2.3.4');
+    expect(normalizeClientAddress('0:0:0:0:0:ffff:198.51.100.7')).toBe('198.51.100.7');
+    expect(normalizeClientAddress('[0::ffff:127.0.0.1%eth0]')).toBe('127.0.0.1');
+    expect(normalizeClientAddress('2001:db8::192.0.2.1')).toBe('2001:db8:0:0::/64');
+  });
 });

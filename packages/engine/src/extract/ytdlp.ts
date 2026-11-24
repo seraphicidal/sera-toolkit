@@ -144,7 +144,7 @@ export async function dumpInfo(
     args,
     timeoutMs: options.timeoutMs,
     captureStdout: true,
-    maxStdoutBytes: 48 * 1024 * 1024,
+    maxStdoutBytes: 16 * 1024 * 1024,
     ...(options.signal ? { signal: options.signal } : {}),
   });
 
@@ -219,6 +219,8 @@ export async function download(request: DownloadRequest): Promise<void> {
     request.outputTemplate,
     '--format',
     confineToHttp(request.format),
+    '--downloader-args',
+    'ffmpeg_i:-protocol_whitelist http,https,tls,tcp,httpproxy',
     '--no-overwrites',
     '--no-post-overwrites',
   );
@@ -243,6 +245,11 @@ export async function download(request: DownloadRequest): Promise<void> {
   const bytesByFormat = new Map<string, number>();
   const totalsByFormat = new Map<string, number>();
   let lastPercent = 0;
+  let sizeExceeded = false;
+  const sizeAbort = new AbortController();
+  const combinedSignal = request.signal
+    ? AbortSignal.any([request.signal, sizeAbort.signal])
+    : sizeAbort.signal;
 
   const emit = (line: string): void => {
     if (line.startsWith(POSTPROCESS_PREFIX)) {
@@ -265,6 +272,11 @@ export async function download(request: DownloadRequest): Promise<void> {
     const streamKey = formatId && formatId !== 'NA' ? formatId : 'default';
     bytesByFormat.set(streamKey, done);
     const bytesDownloaded = sum(bytesByFormat);
+    if (request.maxFilesizeBytes !== undefined && bytesDownloaded > request.maxFilesizeBytes) {
+      sizeExceeded = true;
+      sizeAbort.abort();
+      return;
+    }
 
     const totalForStream = parseNumeric(total) ?? parseNumeric(totalEstimate);
     if (totalForStream !== undefined) {
@@ -297,14 +309,29 @@ export async function download(request: DownloadRequest): Promise<void> {
     request.onProgress?.(progress);
   };
 
-  const result = await run(request.binary, {
-    args,
-    cwd: request.workdir,
-    timeoutMs: request.timeoutMs,
-    onStdoutLine: emit,
-    ...(request.signal ? { signal: request.signal } : {}),
-  });
+  let result;
+  try {
+    result = await run(request.binary, {
+      args,
+      cwd: request.workdir,
+      timeoutMs: request.timeoutMs,
+      onStdoutLine: emit,
+      signal: combinedSignal,
+    });
+  } catch (error) {
+    if (sizeExceeded) {
+      throw seraError('TOO_LARGE', {
+        detail: `yt-dlp download exceeded ${String(request.maxFilesizeBytes)} bytes`,
+      });
+    }
+    throw error;
+  }
 
+  if (sizeExceeded) {
+    throw seraError('TOO_LARGE', {
+      detail: `yt-dlp download exceeded ${String(request.maxFilesizeBytes)} bytes`,
+    });
+  }
   if (result.code !== 0) throw classifyYtdlpFailure(result.stderrTail, result.code);
 }
 

@@ -341,7 +341,7 @@ class TwitterExtractor(
             type = if (items.size > 1) "collection" else "single",
             title = if (text != null) truncateText(text, 200) else "Post by ${author ?: "an X account"}",
             description = text?.let { truncateText(it, 500) },
-            author = author,
+            author = author?.take(200),
             thumbnailUrl = items.firstOrNull()?.thumbnailUrl,
             items = items,
             metadata = mapOf(
@@ -412,7 +412,7 @@ class TwitterExtractor(
             type = if (items.size > 1) "collection" else "single",
             title = if (text != null) truncateText(text, 200) else "Post by ${author ?: "an X account"}",
             description = text?.let { truncateText(it, 500) },
-            author = author,
+            author = author?.take(200),
             thumbnailUrl = items.firstOrNull()?.thumbnailUrl,
             items = items,
             metadata = mapOf(
@@ -604,19 +604,24 @@ private fun toSyndicatedItem(
     allowPrivateAddresses: Boolean,
 ): ResolvedItem? {
     val source = validateTwitterMediaUrl(media.media_url_https, allowPrivateAddresses) ?: return null
-    val width = media.original_info?.width
-    val height = media.original_info?.height
+    val width = media.original_info?.width?.takeIf { it > 0 }
+    val height = media.original_info?.height?.takeIf { it > 0 }
     val alt = nonEmpty(media.ext_alt_text)
-    val sourceId = SOURCE_ID_FROM_URL_REGEX.find(source)?.groupValues?.get(1) ?: index.toString()
+    val sourceId = stableSourceId(SOURCE_ID_FROM_URL_REGEX.find(source)?.groupValues?.get(1) ?: index.toString())
     val variants = media.video_info?.variants.orEmpty()
         .filter { it.content_type == "video/mp4" }
         .mapNotNull { variant ->
             val u = validateTwitterMediaUrl(variant.url, allowPrivateAddresses) ?: return@mapNotNull null
             val (w, h) = sizeFromVariantUrl(u)
-            NormalizedTweetVariant(url = u, bitrate = variant.bitrate, width = w, height = h)
+            NormalizedTweetVariant(
+                url = u,
+                bitrate = variant.bitrate,
+                width = w?.takeIf { it > 0 },
+                height = h?.takeIf { it > 0 },
+            )
         }
         .sortedByDescending { it.bitrate ?: 0.0 }
-    val durationSeconds = media.video_info?.duration_millis?.let { it / 1000.0 }
+    val durationSeconds = media.video_info?.duration_millis?.let { it / 1000.0 }?.takeIf { it.isFinite() && it >= 0.0 }
     return buildTwitterMediaItem(
         normalized = NormalizedTweetMedia(
             source = source,
@@ -641,16 +646,21 @@ private fun toFxItem(
     allowPrivateAddresses: Boolean,
 ): ResolvedItem? {
     val source = validateTwitterMediaUrl(media.url, allowPrivateAddresses) ?: return null
-    val width = media.width
-    val height = media.height
+    val width = media.width?.takeIf { it > 0 }
+    val height = media.height?.takeIf { it > 0 }
     val alt = nonEmpty(media.altText) ?: nonEmpty(media.description)
-    val sourceId = media.id ?: SOURCE_ID_FROM_URL_REGEX.find(source)?.groupValues?.get(1) ?: index.toString()
+    val sourceId = stableSourceId(media.id ?: SOURCE_ID_FROM_URL_REGEX.find(source)?.groupValues?.get(1) ?: index.toString())
     val rawVariants = media.variants.orEmpty()
         .filter { it.content_type == "video/mp4" }
         .mapNotNull { variant ->
             val u = validateTwitterMediaUrl(variant.url, allowPrivateAddresses) ?: return@mapNotNull null
             val (w, h) = sizeFromVariantUrl(u)
-            NormalizedTweetVariant(url = u, bitrate = variant.bitrate, width = w, height = h)
+            NormalizedTweetVariant(
+                url = u,
+                bitrate = variant.bitrate,
+                width = w?.takeIf { it > 0 },
+                height = h?.takeIf { it > 0 },
+            )
         }
         .sortedByDescending { it.bitrate ?: 0.0 }
     val variants = if (rawVariants.isNotEmpty()) {
@@ -670,7 +680,7 @@ private fun toFxItem(
             alt = alt,
             sourceId = sourceId,
             thumbnailUrl = thumbnailUrl,
-            durationSeconds = media.duration,
+            durationSeconds = media.duration?.takeIf { it.isFinite() && it >= 0.0 },
             variants = variants,
         ),
         index = index,

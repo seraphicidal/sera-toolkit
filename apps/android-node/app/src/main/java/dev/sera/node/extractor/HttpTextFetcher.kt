@@ -1,7 +1,19 @@
 package dev.sera.node.extractor
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import okhttp3.Call
+import okhttp3.Callback
+import okhttp3.Dns
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
@@ -14,16 +26,50 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 import java.io.InterruptedIOException
+import java.net.InetAddress
 import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resumeWithException
 import kotlin.math.max
+import kotlin.math.min
 
 private const val DEFAULT_MAX_REDIRECTS = 5
 private val ALLOWED_PORTS = setOf(80, 443)
 
+class BlockedAddressIoException(message: String) : IOException(message)
+
+private class DirectByteArrayOutputStream(initialCapacity: Int) : ByteArrayOutputStream(initialCapacity) {
+    fun toUtf8String(): String = String(buf, 0, count, Charsets.UTF_8)
+}
+
 class OkHttpFetcher(
     private val baseClient: OkHttpClient,
+    private val dnsResolver: Dns = Dns.SYSTEM,
 ) : HttpFetcher {
+
+    private fun buildClient(allowPrivateAddresses: Boolean, timeoutMs: Long): OkHttpClient {
+        val guardedDns = object : Dns {
+            override fun lookup(hostname: String): List<InetAddress> {
+                val cleanHost = hostname.lowercase().trim().trimEnd('.')
+                if (!allowPrivateAddresses && isBlockedLocalHostname(cleanHost)) {
+                    throw BlockedAddressIoException("blocked local host $cleanHost")
+                }
+                val resolved = dnsResolver.lookup(hostname)
+                if (!allowPrivateAddresses) {
+                    if (resolved.isEmpty() || resolved.any { !isPublicInetAddress(it) }) {
+                        throw BlockedAddressIoException("non-public dns resolution for $cleanHost")
+                    }
+                }
+                return resolved
+            }
+        }
+        return baseClient.newBuilder()
+            .dns(guardedDns)
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .callTimeout(timeoutMs.coerceAtLeast(1_000L), TimeUnit.MILLISECONDS)
+            .build()
+    }
 
     override suspend fun fetchText(
         url: HttpUrl,
@@ -45,39 +91,27 @@ class OkHttpFetcher(
             allowUrl = { true },
             isCancelled = isCancelled,
         )
-        opened.response.use { response ->
-            if (response.code >= 400) {
-                throw seraError(
-                    if (response.code == 404) SeraErrorCode.MEDIA_UNAVAILABLE else SeraErrorCode.NETWORK_ERROR,
-                    detail = "GET ${response.code}",
+        val cancelHandle = currentCoroutineContext()[Job]?.invokeOnCompletion { cause ->
+            if (cause != null) opened.call.cancel()
+        }
+        try {
+            opened.response.use { response ->
+                if (response.code >= 400) {
+                    throw seraError(
+                        if (response.code == 404) SeraErrorCode.MEDIA_UNAVAILABLE else SeraErrorCode.NETWORK_ERROR,
+                        detail = "GET ${response.code}",
+                    )
+                }
+                val bodyText = readBoundedText(response, maxBytes, isCancelled)
+                HttpTextResponse(
+                    body = bodyText,
+                    url = opened.finalUrl.toString(),
+                    status = response.code,
+                    headers = extractHeaders(response),
                 )
             }
-            val body = response.body ?: return@use HttpTextResponse("", opened.finalUrl.toString())
-            val declared = body.contentLength()
-            if (declared > maxBytes) {
-                throw seraError(SeraErrorCode.TOO_LARGE, detail = "content-length $declared > $maxBytes")
-            }
-            val out = ByteArrayOutputStream()
-            val buf = ByteArray(16 * 1024)
-            var total = 0L
-            body.byteStream().use { stream ->
-                while (true) {
-                    if (isCancelled()) throw seraError(SeraErrorCode.CANCELLED)
-                    val read = stream.read(buf)
-                    if (read < 0) break
-                    total += read
-                    if (total > maxBytes) {
-                        throw seraError(SeraErrorCode.TOO_LARGE, detail = "body exceeded $maxBytes bytes")
-                    }
-                    out.write(buf, 0, read)
-                }
-            }
-            HttpTextResponse(
-                body = String(out.toByteArray(), Charsets.UTF_8),
-                url = opened.finalUrl.toString(),
-                status = response.code,
-                headers = extractHeaders(response),
-            )
+        } finally {
+            cancelHandle?.dispose()
         }
     }
 
@@ -122,24 +156,27 @@ class OkHttpFetcher(
         isCancelled: () -> Boolean,
     ): HttpTextResponse = withContext(Dispatchers.IO) {
         validateDestination(url, allowPrivateAddresses)
-        val client = baseClient.newBuilder()
-            .followRedirects(false)
-            .followSslRedirects(false)
-            .callTimeout(timeoutMs.coerceAtLeast(1_000L), TimeUnit.MILLISECONDS)
-            .build()
+        val client = buildClient(allowPrivateAddresses, timeoutMs)
         val reqBuilder = Request.Builder().url(url).get()
         reqBuilder.header("User-Agent", userAgent)
         for ((k, v) in headers) reqBuilder.header(k, v)
         val call = client.newCall(reqBuilder.build())
         val response = executeCall(call, isCancelled)
-        response.use { resp ->
-            val bodyText = readBoundedText(resp, maxBytes, isCancelled)
-            HttpTextResponse(
-                body = bodyText,
-                url = url.toString(),
-                status = resp.code,
-                headers = extractHeaders(resp),
-            )
+        val cancelHandle = currentCoroutineContext()[Job]?.invokeOnCompletion { cause ->
+            if (cause != null) call.cancel()
+        }
+        try {
+            response.use { resp ->
+                val bodyText = readBoundedText(resp, maxBytes, isCancelled)
+                HttpTextResponse(
+                    body = bodyText,
+                    url = url.toString(),
+                    status = resp.code,
+                    headers = extractHeaders(resp),
+                )
+            }
+        } finally {
+            cancelHandle?.dispose()
         }
     }
 
@@ -154,25 +191,28 @@ class OkHttpFetcher(
         isCancelled: () -> Boolean,
     ): HttpTextResponse = withContext(Dispatchers.IO) {
         validateDestination(url, allowPrivateAddresses)
-        val client = baseClient.newBuilder()
-            .followRedirects(false)
-            .followSslRedirects(false)
-            .callTimeout(timeoutMs.coerceAtLeast(1_000L), TimeUnit.MILLISECONDS)
-            .build()
+        val client = buildClient(allowPrivateAddresses, timeoutMs)
         val body = formBody.toRequestBody("application/x-www-form-urlencoded".toMediaType())
         val reqBuilder = Request.Builder().url(url).post(body)
         reqBuilder.header("User-Agent", userAgent)
         for ((k, v) in headers) reqBuilder.header(k, v)
         val call = client.newCall(reqBuilder.build())
         val response = executeCall(call, isCancelled)
-        response.use { resp ->
-            val bodyText = readBoundedText(resp, maxBytes, isCancelled)
-            HttpTextResponse(
-                body = bodyText,
-                url = url.toString(),
-                status = resp.code,
-                headers = extractHeaders(resp),
-            )
+        val cancelHandle = currentCoroutineContext()[Job]?.invokeOnCompletion { cause ->
+            if (cause != null) call.cancel()
+        }
+        try {
+            response.use { resp ->
+                val bodyText = readBoundedText(resp, maxBytes, isCancelled)
+                HttpTextResponse(
+                    body = bodyText,
+                    url = url.toString(),
+                    status = resp.code,
+                    headers = extractHeaders(resp),
+                )
+            }
+        } finally {
+            cancelHandle?.dispose()
         }
     }
 
@@ -200,6 +240,10 @@ class OkHttpFetcher(
             isCancelled = isCancelled,
         )
 
+        val cancelHandle = currentCoroutineContext()[Job]?.invokeOnCompletion { cause ->
+            if (cause != null) opened.call.cancel()
+        }
+
         try {
             opened.response.use { response ->
                 if (response.code >= 400) {
@@ -224,11 +268,15 @@ class OkHttpFetcher(
                 body.byteStream().use { input ->
                     FileOutputStream(destination).use { output ->
                         while (true) {
-                            if (isCancelled()) throw seraError(SeraErrorCode.CANCELLED)
+                            if (isCancelled() || !currentCoroutineContext().isActive) {
+                                opened.call.cancel()
+                                throw seraError(SeraErrorCode.CANCELLED)
+                            }
                             val read = input.read(buffer)
                             if (read < 0) break
                             received += read
                             if (received > maxBytes) {
+                                opened.call.cancel()
                                 throw seraError(SeraErrorCode.TOO_LARGE, detail = "body exceeded $maxBytes bytes")
                             }
                             output.write(buffer, 0, read)
@@ -274,21 +322,30 @@ class OkHttpFetcher(
                     url = opened.finalUrl.toString(),
                 )
             }
+        } catch (cancelled: CancellationException) {
+            destination.delete()
+            throw cancelled
         } catch (error: Throwable) {
             destination.delete()
             if (error is SeraException) throw error
+            if (error is BlockedAddressIoException) {
+                throw seraError(SeraErrorCode.BLOCKED_ADDRESS, detail = error.message, cause = error)
+            }
             if (isCancelled()) throw seraError(SeraErrorCode.CANCELLED, cause = error)
             if (error is InterruptedIOException) throw seraError(SeraErrorCode.TIMEOUT, cause = error)
             throw seraError(SeraErrorCode.NETWORK_ERROR, detail = error.message ?: "stream to disk failed", cause = error)
+        } finally {
+            cancelHandle?.dispose()
         }
     }
 
     private data class OpenedHttp(
         val response: Response,
         val finalUrl: HttpUrl,
+        val call: Call,
     )
 
-    private fun openWithRedirects(
+    private suspend fun openWithRedirects(
         initialUrl: HttpUrl,
         headers: Map<String, String>,
         keepCookies: Boolean,
@@ -299,18 +356,14 @@ class OkHttpFetcher(
         isCancelled: () -> Boolean,
         method: String = "GET",
     ): OpenedHttp {
-        val client = baseClient.newBuilder()
-            .followRedirects(false)
-            .followSslRedirects(false)
-            .callTimeout(timeoutMs.coerceAtLeast(1_000L), TimeUnit.MILLISECONDS)
-            .build()
+        val client = buildClient(allowPrivateAddresses, timeoutMs)
 
         val initialOrigin = originOf(initialUrl)
         val jar = parseCookieJar(headers.entries.firstOrNull { it.key.equals("cookie", ignoreCase = true) }?.value)
         var current = initialUrl
 
         for (hop in 0..DEFAULT_MAX_REDIRECTS) {
-            if (isCancelled()) throw seraError(SeraErrorCode.CANCELLED)
+            if (isCancelled() || !currentCoroutineContext().isActive) throw seraError(SeraErrorCode.CANCELLED)
             validateDestination(current, allowPrivateAddresses)
             if (hop > 0 && current.port !in ALLOWED_PORTS && current.port != initialUrl.port) {
                 throw seraError(SeraErrorCode.BLOCKED_ADDRESS, detail = "redirect to port ${current.port}")
@@ -368,7 +421,7 @@ class OkHttpFetcher(
                 continue
             }
 
-            return OpenedHttp(response = response, finalUrl = current)
+            return OpenedHttp(response = response, finalUrl = current, call = call)
         }
 
         throw seraError(SeraErrorCode.NETWORK_ERROR, detail = "redirect loop")
@@ -382,23 +435,64 @@ class OkHttpFetcher(
             throw seraError(SeraErrorCode.BLOCKED_ADDRESS, detail = "credentials in url")
         }
         val bareHost = current.host.lowercase().trimEnd('.')
-        if (!allowPrivateAddresses && isIpLiteral(bareHost) && !isPublicAddress(bareHost)) {
-            throw seraError(SeraErrorCode.BLOCKED_ADDRESS, detail = "non-public address $bareHost")
-        }
-        if (!allowPrivateAddresses && current.port !in ALLOWED_PORTS) {
-            throw seraError(SeraErrorCode.BLOCKED_ADDRESS, detail = "port ${current.port}")
+        if (!allowPrivateAddresses) {
+            if (isBlockedLocalHostname(bareHost)) {
+                throw seraError(SeraErrorCode.BLOCKED_ADDRESS, detail = "blocked local host $bareHost")
+            }
+            if (isIpLiteral(bareHost) && !isPublicAddress(bareHost)) {
+                throw seraError(SeraErrorCode.BLOCKED_ADDRESS, detail = "non-public address $bareHost")
+            }
+            if (current.port !in ALLOWED_PORTS) {
+                throw seraError(SeraErrorCode.BLOCKED_ADDRESS, detail = "port ${current.port}")
+            }
         }
     }
 
-    private fun executeCall(call: okhttp3.Call, isCancelled: () -> Boolean): Response =
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private suspend fun executeCall(call: Call, isCancelled: () -> Boolean): Response =
         try {
-            if (isCancelled()) {
+            if (isCancelled() || !currentCoroutineContext().isActive) {
                 call.cancel()
                 throw seraError(SeraErrorCode.CANCELLED)
             }
-            call.execute()
+            coroutineScope {
+                val cancelWatcher = launch {
+                    while (isActive) {
+                        if (isCancelled()) {
+                            call.cancel()
+                            break
+                        }
+                        delay(100L)
+                    }
+                }
+                try {
+                    suspendCancellableCoroutine<Response> { cont ->
+                        cont.invokeOnCancellation { call.cancel() }
+                        call.enqueue(object : Callback {
+                            override fun onFailure(call: Call, e: IOException) {
+                                if (!cont.isCancelled) {
+                                    cont.resumeWithException(e)
+                                }
+                            }
+
+                            override fun onResponse(call: Call, response: Response) {
+                                cont.resume(response) { _, res, _ ->
+                                    res.close()
+                                }
+                            }
+                        })
+                    }
+                } finally {
+                    cancelWatcher.cancel()
+                }
+            }
+        } catch (cancelled: CancellationException) {
+            call.cancel()
+            throw cancelled
         } catch (error: SeraException) {
             throw error
+        } catch (error: BlockedAddressIoException) {
+            throw seraError(SeraErrorCode.BLOCKED_ADDRESS, detail = error.message, cause = error)
         } catch (error: UnknownHostException) {
             throw seraError(
                 SeraErrorCode.INVALID_URL,
@@ -415,18 +509,19 @@ class OkHttpFetcher(
             throw seraError(SeraErrorCode.NETWORK_ERROR, detail = error.message, cause = error)
         }
 
-    private fun readBoundedText(response: Response, maxBytes: Long, isCancelled: () -> Boolean): String {
+    private suspend fun readBoundedText(response: Response, maxBytes: Long, isCancelled: () -> Boolean): String {
         val body = response.body ?: return ""
         val declared = body.contentLength()
         if (declared > maxBytes) {
             throw seraError(SeraErrorCode.TOO_LARGE, detail = "content-length $declared > $maxBytes")
         }
-        val out = ByteArrayOutputStream()
+        val initialSize = if (declared > 0L) min(declared, min(maxBytes, 65_536L)).toInt() else 8192
+        val out = DirectByteArrayOutputStream(initialSize)
         val buf = ByteArray(16 * 1024)
         var total = 0L
         body.byteStream().use { stream ->
             while (true) {
-                if (isCancelled()) throw seraError(SeraErrorCode.CANCELLED)
+                if (isCancelled() || !currentCoroutineContext().isActive) throw seraError(SeraErrorCode.CANCELLED)
                 val read = stream.read(buf)
                 if (read < 0) break
                 total += read
@@ -436,7 +531,7 @@ class OkHttpFetcher(
                 out.write(buf, 0, read)
             }
         }
-        return String(out.toByteArray(), Charsets.UTF_8)
+        return out.toUtf8String()
     }
 
     private fun extractHeaders(response: Response): Map<String, String> {

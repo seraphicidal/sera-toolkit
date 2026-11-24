@@ -32,6 +32,7 @@ export function BookmarkletLink() {
   }, [manual]);
 
   const copy = async (): Promise<void> => {
+    if (!href) return;
     const done = (): void => {
       setManual(false);
       setNudge(false);
@@ -43,27 +44,28 @@ export function BookmarkletLink() {
       await navigator.clipboard.writeText(href);
       done();
     } catch {
+      const ta = document.createElement('textarea');
+      ta.value = href;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
       try {
-        const ta = document.createElement('textarea');
-        ta.value = href;
-        ta.style.position = 'fixed';
-        ta.style.opacity = '0';
-        document.body.appendChild(ta);
         ta.focus();
         ta.select();
         const ok = document.execCommand('copy');
-        document.body.removeChild(ta);
         if (ok) done();
         else setManual(true);
       } catch {
         setManual(true);
+      } finally {
+        ta.remove();
       }
     }
   };
 
   return (
-    <span className="inline-flex flex-col gap-2">
-      <span className="flex flex-wrap items-center gap-2">
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <a
           ref={ref}
           href="#"
@@ -72,14 +74,15 @@ export function BookmarkletLink() {
             event.preventDefault();
             setNudge(true);
           }}
-          className="inline-flex cursor-grab items-center gap-1.5 rounded-lg border border-[var(--color-line-strong)] bg-[var(--color-surface)] px-3 py-1.5 text-[0.8125rem] font-medium text-[var(--color-ink)] transition-colors select-none hover:bg-[var(--color-sunken)] active:cursor-grabbing"
+          className="inline-flex min-h-9 cursor-grab items-center gap-1.5 rounded-lg border border-[var(--color-line-strong)] bg-[var(--color-surface)] px-3 py-1.5 text-[0.8125rem] font-medium text-[var(--color-ink)] transition-colors select-none hover:bg-[var(--color-sunken)] active:cursor-grabbing"
         >
           <span aria-hidden="true">⌁</span> SERA: Import post
         </a>
         <button
           type="button"
+          disabled={!href}
           onClick={() => void copy()}
-          className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-[var(--color-line-strong)] bg-[var(--color-surface)] px-3 py-1.5 text-[0.8125rem] font-medium text-[var(--color-ink-muted)] transition-colors hover:bg-[var(--color-sunken)] hover:text-[var(--color-ink)]"
+          className="inline-flex min-h-9 cursor-pointer items-center gap-1.5 rounded-lg border border-[var(--color-line-strong)] bg-[var(--color-surface)] px-3 py-1.5 text-[0.8125rem] font-medium text-[var(--color-ink-muted)] transition-colors hover:bg-[var(--color-sunken)] hover:text-[var(--color-ink)] disabled:cursor-not-allowed disabled:opacity-50"
         >
           {copied ? 'Copied ✓' : 'Copy code'}
         </button>
@@ -90,7 +93,7 @@ export function BookmarkletLink() {
               ? 'Drag to your bookmarks bar, or copy the code.'
               : ''}
         </span>
-      </span>
+      </div>
 
       {manual && (
         <label className="flex flex-col gap-1 text-[0.75rem] text-[var(--color-ink-faint)]">
@@ -116,6 +119,6 @@ export function BookmarkletLink() {
           </pre>
         </details>
       )}
-    </span>
+    </div>
   );
 }

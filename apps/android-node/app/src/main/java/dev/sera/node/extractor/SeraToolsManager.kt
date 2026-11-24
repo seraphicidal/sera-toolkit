@@ -8,10 +8,17 @@ import dev.sera.node.model.ExtractionToolsManager
 import dev.sera.node.model.ToolUpdateResult
 import dev.sera.node.model.ToolsVersionInfo
 import dev.sera.node.model.YtdlpUpdateInfo
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
 import java.io.BufferedReader
 import java.io.File
@@ -20,6 +27,12 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 private const val VERSION_CACHE_TTL_MS = 10 * 60_000L
+private const val NEGATIVE_VERSION_CACHE_TTL_MS = 60_000L
+
+private data class CachedToolVersion(
+    val version: String?,
+    val expiresAtMs: Long,
+)
 
 class SeraToolsManager(
     context: Context,
@@ -29,7 +42,9 @@ class SeraToolsManager(
     private val appContext = context.applicationContext
     private val initMutex = Mutex()
     private val updateMutex = Mutex()
-    private val versionMutex = Mutex()
+    private val ytdlpVersionMutex = Mutex()
+    private val ffmpegVersionMutex = Mutex()
+    private val ffprobeVersionMutex = Mutex()
     private val archiveUpdater = YtdlpArchiveUpdater(httpClient)
 
     @Volatile
@@ -39,13 +54,13 @@ class SeraToolsManager(
     private var initError: String? = null
 
     @Volatile
-    private var cachedYtdlpVersion: Pair<String, Long>? = null
+    private var cachedYtdlpVersion: CachedToolVersion? = null
 
     @Volatile
-    private var cachedFfmpegVersion: Pair<String, Long>? = null
+    private var cachedFfmpegVersion: CachedToolVersion? = null
 
     @Volatile
-    private var cachedFfprobeVersion: Pair<String, Long>? = null
+    private var cachedFfprobeVersion: CachedToolVersion? = null
 
     val nativeLibDir: File
         get() = File(appContext.applicationInfo.nativeLibraryDir)
@@ -108,7 +123,7 @@ class SeraToolsManager(
                     YoutubeDL.getInstance().init(appContext)
                     FFmpeg.getInstance().init(appContext)
                     if (ytdlpBinaryFile.isFile) {
-                        ytdlpBinaryFile.setExecutable(true, false)
+                        ytdlpBinaryFile.setExecutable(true, true)
                     }
                     ejsCacheDir.mkdirs()
                     initError = null
@@ -130,7 +145,7 @@ class SeraToolsManager(
     private fun repairCorruptedRuntimeDirectories() {
         val pythonPkgDir = File(youtubedlBaseDir, "packages/python")
         if (pythonPkgDir.exists()) {
-            val hasPythonLib = File(pythonLibDir, "libpython3.12.so.1.0").exists()
+            val hasPythonLib = hasBundledPythonLibrary(pythonLibDir)
             if (!hasPythonLib || !sslCertFile.isFile) {
                 runCatching { pythonPkgDir.deleteRecursively() }
             }
@@ -173,23 +188,28 @@ class SeraToolsManager(
         if (!ready) {
             runCatching { ensureReady() }
         }
-        val ytdlpVer = readYtdlpVersion()
-        val ffmpegVer = readFfmpegVersion()
-        val ffprobeVer = readFfprobeVersion()
-        val qjsPath = libQjsFile.takeIf { it.isFile }?.absolutePath
-        val ejsReady = (ejsCacheDir.isDirectory && !(ejsCacheDir.list().isNullOrEmpty())) ||
-            ytdlpBinaryFile.isFile
+        return coroutineScope {
+            val ytdlpDeferred = async { readYtdlpVersion() }
+            val ffmpegDeferred = async { readFfmpegVersion() }
+            val ffprobeDeferred = async { readFfprobeVersion() }
+            val ytdlpVer = ytdlpDeferred.await()
+            val ffmpegVer = ffmpegDeferred.await()
+            val ffprobeVer = ffprobeDeferred.await()
+            val qjsPath = libQjsFile.takeIf { it.isFile }?.absolutePath
+            val ejsReady = (ejsCacheDir.isDirectory && !(ejsCacheDir.list().isNullOrEmpty())) ||
+                ytdlpBinaryFile.isFile
 
-        return ToolsVersionInfo(
-            ready = ready,
-            ytdlpVersion = ytdlpVer,
-            ffmpegVersion = ffmpegVer,
-            ffprobeVersion = ffprobeVer,
-            jsRuntimeName = if (qjsPath != null) "quickjs" else null,
-            jsRuntimePath = qjsPath,
-            ejsScriptsReady = ejsReady,
-            error = initError,
-        )
+            ToolsVersionInfo(
+                ready = ready,
+                ytdlpVersion = ytdlpVer,
+                ffmpegVersion = ffmpegVer,
+                ffprobeVersion = ffprobeVer,
+                jsRuntimeName = if (qjsPath != null) "quickjs" else null,
+                jsRuntimePath = qjsPath,
+                ejsScriptsReady = ejsReady,
+                error = initError,
+            )
+        }
     }
 
     override suspend fun updateYtdlpFromManifest(
@@ -199,33 +219,15 @@ class SeraToolsManager(
     ): ToolUpdateResult = updateMutex.withLock {
         ensureReady()
         val currentVersion = readYtdlpVersion()
-        val rawSha = manifest.sha256?.trim()?.ifEmpty { null }
-        val result = if (rawSha != null) {
-            archiveUpdater.updateFromManifest(
-                manifest = manifest,
-                targetBinaryFile = ytdlpBinaryFile,
-                versionMarkerFile = ytdlpVersionMarkerFile,
-                currentInstalledVersion = currentVersion,
-                authToken = authToken,
-                apiBaseUrl = apiBaseUrl,
-                force = false,
-            )
-        } else {
-            val proxyResult = archiveUpdater.updateFromManifest(
-                manifest = manifest,
-                targetBinaryFile = ytdlpBinaryFile,
-                versionMarkerFile = ytdlpVersionMarkerFile,
-                currentInstalledVersion = currentVersion,
-                authToken = authToken,
-                apiBaseUrl = apiBaseUrl,
-                force = false,
-            )
-            if (proxyResult.updated || proxyResult.sha256Verified) {
-                proxyResult
-            } else {
-                updateViaBuiltinUpdater(currentVersion)
-            }
-        }
+        val result = archiveUpdater.updateFromManifest(
+            manifest = manifest,
+            targetBinaryFile = ytdlpBinaryFile,
+            versionMarkerFile = ytdlpVersionMarkerFile,
+            currentInstalledVersion = currentVersion,
+            authToken = authToken,
+            apiBaseUrl = apiBaseUrl,
+            force = false,
+        )
         if (result.updated) {
             invalidateYtdlpCache()
             resetEjsCache()
@@ -242,8 +244,7 @@ class SeraToolsManager(
         ensureReady()
         val currentVersion = readYtdlpVersion()
         val result = if (manifest != null) {
-            val rawSha = manifest.sha256?.trim()?.ifEmpty { null }
-            val manifestResult = archiveUpdater.updateFromManifest(
+            archiveUpdater.updateFromManifest(
                 manifest = manifest,
                 targetBinaryFile = ytdlpBinaryFile,
                 versionMarkerFile = ytdlpVersionMarkerFile,
@@ -252,52 +253,20 @@ class SeraToolsManager(
                 apiBaseUrl = apiBaseUrl,
                 force = true,
             )
-            if (rawSha == null && !manifestResult.updated && !manifestResult.sha256Verified) {
-                updateViaBuiltinUpdater(currentVersion)
-            } else {
-                manifestResult
-            }
         } else {
-            updateViaBuiltinUpdater(currentVersion)
+            ToolUpdateResult(
+                updated = false,
+                previousVersion = currentVersion,
+                currentVersion = currentVersion,
+                sha256Verified = false,
+                message = "Refused unverified yt-dlp refresh: no signed manifest available",
+            )
         }
         resetEjsCache()
         invalidateYtdlpCache()
         val refreshed = readYtdlpVersion()
         result.copy(currentVersion = refreshed ?: result.currentVersion)
     }
-
-    private suspend fun updateViaBuiltinUpdater(previousVersion: String?): ToolUpdateResult =
-        withContext(Dispatchers.IO) {
-            try {
-                val status = YoutubeDL.getInstance().updateYoutubeDL(
-                    appContext,
-                    YoutubeDL.UpdateChannel._STABLE,
-                )
-                ytdlpVersionMarkerFile.delete()
-                invalidateYtdlpCache()
-                val latest = readYtdlpVersion()
-                val updated = status == YoutubeDL.UpdateStatus.DONE
-                ToolUpdateResult(
-                    updated = updated,
-                    previousVersion = previousVersion,
-                    currentVersion = latest,
-                    sha256Verified = false,
-                    message = if (updated) {
-                        "Updated yt-dlp to ${latest ?: "latest"} via built-in updater"
-                    } else {
-                        "yt-dlp ${latest ?: previousVersion ?: "unknown"} already up to date"
-                    },
-                )
-            } catch (error: Throwable) {
-                ToolUpdateResult(
-                    updated = false,
-                    previousVersion = previousVersion,
-                    currentVersion = previousVersion,
-                    sha256Verified = false,
-                    message = error.message ?: "Built-in yt-dlp update failed",
-                )
-            }
-        }
 
     private fun resetEjsCache() {
         runCatching {
@@ -312,93 +281,149 @@ class SeraToolsManager(
 
     private suspend fun readYtdlpVersion(): String? {
         val now = System.currentTimeMillis()
-        cachedYtdlpVersion?.let { (ver, expiresAt) ->
-            if (now < expiresAt) return ver
+        cachedYtdlpVersion?.let { cached ->
+            if (now < cached.expiresAtMs) return cached.version
         }
         if (!ready) return null
-        return versionMutex.withLock {
+        return ytdlpVersionMutex.withLock {
             val checkNow = System.currentTimeMillis()
-            cachedYtdlpVersion?.let { (ver, expiresAt) ->
-                if (checkNow < expiresAt) return@withLock ver
+            cachedYtdlpVersion?.let { cached ->
+                if (checkNow < cached.expiresAtMs) return@withLock cached.version
             }
-            withContext(Dispatchers.IO) {
-                val probed = runCatching {
-                    val req = YoutubeDLRequest(emptyList()).addOption("--version")
-                    val res = YoutubeDL.getInstance().execute(req, "ver-${UUID.randomUUID()}", false, null)
-                    res.out.trim().lineSequence().firstOrNull()?.trim()?.takeIf { it.isNotEmpty() }
-                }.getOrNull()
-                val resolved = probed
-                    ?: ytdlpVersionMarkerFile.takeIf { it.isFile }?.readText()?.trim()?.ifEmpty { null }
-                    ?: runCatching { YoutubeDL.getInstance().version(appContext) }.getOrNull()?.trim()?.ifEmpty { null }
-                if (resolved != null) {
-                    cachedYtdlpVersion = resolved to (System.currentTimeMillis() + VERSION_CACHE_TTL_MS)
+            val resolved = withContext(Dispatchers.IO) {
+                val processId = "ver-${UUID.randomUUID()}"
+                val ytdlp = YoutubeDL.getInstance()
+                val cancelHandle = currentCoroutineContext()[Job]?.invokeOnCompletion { cause ->
+                    if (cause != null) {
+                        runCatching { ytdlp.destroyProcessById(processId) }
+                    }
                 }
-                resolved
+                val probed = try {
+                    withTimeoutOrNull(15_000L) {
+                        runCatching {
+                            val req = YoutubeDLRequest(emptyList()).addOption("--version")
+                            val res = ytdlp.execute(req, processId, false, null)
+                            res.out.trim().lineSequence().firstOrNull()?.trim()?.takeIf { it.isNotEmpty() }
+                        }.getOrNull()
+                    }
+                } finally {
+                    cancelHandle?.dispose()
+                    runCatching { ytdlp.destroyProcessById(processId) }
+                }
+                (
+                    probed
+                        ?: ytdlpVersionMarkerFile.takeIf { it.isFile }?.readText()?.trim()?.ifEmpty { null }
+                        ?: runCatching { ytdlp.version(appContext) }.getOrNull()?.trim()?.ifEmpty { null }
+                    )?.take(64)
             }
+            val ttl = if (resolved != null) VERSION_CACHE_TTL_MS else NEGATIVE_VERSION_CACHE_TTL_MS
+            cachedYtdlpVersion = CachedToolVersion(resolved, System.currentTimeMillis() + ttl)
+            resolved
         }
     }
 
     private suspend fun readFfmpegVersion(): String? {
         val now = System.currentTimeMillis()
-        cachedFfmpegVersion?.let { (ver, expiresAt) ->
-            if (now < expiresAt) return ver
+        cachedFfmpegVersion?.let { cached ->
+            if (now < cached.expiresAtMs) return cached.version
         }
         val bin = libFfmpegFile.takeIf { it.isFile } ?: return null
-        return versionMutex.withLock {
+        return ffmpegVersionMutex.withLock {
             val checkNow = System.currentTimeMillis()
-            cachedFfmpegVersion?.let { (ver, expiresAt) ->
-                if (checkNow < expiresAt) return@withLock ver
+            cachedFfmpegVersion?.let { cached ->
+                if (checkNow < cached.expiresAtMs) return@withLock cached.version
             }
-            withContext(Dispatchers.IO) {
-                val output = runQuickVersionCommand(bin, listOf("-hide_banner", "-version"))
-                val firstLine = output?.lineSequence()?.firstOrNull().orEmpty()
-                val match = Regex("""ffmpeg version (\S+)""").find(firstLine)?.groupValues?.get(1)
-                val resolved = match ?: firstLine.trim().takeIf { it.isNotEmpty() }
-                if (resolved != null) {
-                    cachedFfmpegVersion = resolved to (System.currentTimeMillis() + VERSION_CACHE_TTL_MS)
-                }
-                resolved
-            }
+            val output = runQuickVersionCommand(bin, listOf("-hide_banner", "-version"))
+            val firstLine = output?.lineSequence()?.firstOrNull().orEmpty()
+            val match = Regex("""ffmpeg version (\S+)""").find(firstLine)?.groupValues?.get(1)
+            val resolved = (match ?: firstLine.trim().takeIf { it.isNotEmpty() })?.take(64)
+            val ttl = if (resolved != null) VERSION_CACHE_TTL_MS else NEGATIVE_VERSION_CACHE_TTL_MS
+            cachedFfmpegVersion = CachedToolVersion(resolved, System.currentTimeMillis() + ttl)
+            resolved
         }
     }
 
     private suspend fun readFfprobeVersion(): String? {
         val now = System.currentTimeMillis()
-        cachedFfprobeVersion?.let { (ver, expiresAt) ->
-            if (now < expiresAt) return ver
+        cachedFfprobeVersion?.let { cached ->
+            if (now < cached.expiresAtMs) return cached.version
         }
         val bin = libFfprobeFile.takeIf { it.isFile } ?: return null
-        return versionMutex.withLock {
+        return ffprobeVersionMutex.withLock {
             val checkNow = System.currentTimeMillis()
-            cachedFfprobeVersion?.let { (ver, expiresAt) ->
-                if (checkNow < expiresAt) return@withLock ver
+            cachedFfprobeVersion?.let { cached ->
+                if (checkNow < cached.expiresAtMs) return@withLock cached.version
             }
-            withContext(Dispatchers.IO) {
-                val output = runQuickVersionCommand(bin, listOf("-hide_banner", "-version"))
-                val firstLine = output?.lineSequence()?.firstOrNull().orEmpty()
-                val match = Regex("""ffprobe version (\S+)""").find(firstLine)?.groupValues?.get(1)
-                val resolved = match ?: firstLine.trim().takeIf { it.isNotEmpty() }
-                if (resolved != null) {
-                    cachedFfprobeVersion = resolved to (System.currentTimeMillis() + VERSION_CACHE_TTL_MS)
+            val output = runQuickVersionCommand(bin, listOf("-hide_banner", "-version"))
+            val firstLine = output?.lineSequence()?.firstOrNull().orEmpty()
+            val match = Regex("""ffprobe version (\S+)""").find(firstLine)?.groupValues?.get(1)
+            val resolved = (match ?: firstLine.trim().takeIf { it.isNotEmpty() })?.take(64)
+            val ttl = if (resolved != null) VERSION_CACHE_TTL_MS else NEGATIVE_VERSION_CACHE_TTL_MS
+            cachedFfprobeVersion = CachedToolVersion(resolved, System.currentTimeMillis() + ttl)
+            resolved
+        }
+    }
+
+    private suspend fun runQuickVersionCommand(binary: File, args: List<String>): String? {
+        return withContext(Dispatchers.IO) {
+            var proc: Process? = null
+            val cancelHandle = currentCoroutineContext()[Job]?.invokeOnCompletion { cause ->
+                if (cause != null) {
+                    runCatching { proc?.destroyForcibly() }
                 }
-                resolved
+            }
+            try {
+                val pb = ProcessBuilder(listOf(binary.absolutePath) + args)
+                pb.environment().putAll(buildNativeProcessEnv())
+                pb.redirectErrorStream(true)
+                val started = pb.start()
+                proc = started
+                coroutineScope {
+                    val readerDeferred = async(Dispatchers.IO) {
+                        runCatching {
+                            BufferedReader(InputStreamReader(started.inputStream, Charsets.UTF_8)).use { it.readText() }
+                        }.getOrNull()
+                    }
+                    val finished = withTimeoutOrNull(10_000L) {
+                        while (!started.waitFor(100, TimeUnit.MILLISECONDS)) {
+                            if (!isActive) {
+                                started.destroyForcibly()
+                                throw CancellationException("Version command cancelled")
+                            }
+                        }
+                        true
+                    } ?: false
+                    if (!finished) {
+                        started.destroyForcibly()
+                        readerDeferred.cancel()
+                        return@coroutineScope null
+                    }
+                    val text = withTimeoutOrNull(2_000L) { readerDeferred.await() }
+                    if (started.exitValue() == 0) text else null
+                }
+            } catch (cancelled: CancellationException) {
+                runCatching { proc?.destroyForcibly() }
+                throw cancelled
+            } catch (_: Throwable) {
+                runCatching { proc?.destroyForcibly() }
+                null
+            } finally {
+                cancelHandle?.dispose()
+                if (proc?.isAlive == true) {
+                    runCatching { proc?.destroyForcibly() }
+                }
             }
         }
     }
 
-    private fun runQuickVersionCommand(binary: File, args: List<String>): String? {
-        return runCatching {
-            val pb = ProcessBuilder(listOf(binary.absolutePath) + args)
-            pb.environment().putAll(buildNativeProcessEnv())
-            pb.redirectErrorStream(true)
-            val proc = pb.start()
-            val text = BufferedReader(InputStreamReader(proc.inputStream)).use { it.readText() }
-            val finished = proc.waitFor(10, TimeUnit.SECONDS)
-            if (!finished) {
-                proc.destroyForcibly()
-                return null
-            }
-            if (proc.exitValue() == 0) text else null
-        }.getOrNull()
+    companion object {
+        fun hasBundledPythonLibrary(libDir: File): Boolean {
+            if (!libDir.isDirectory) return false
+            return libDir.listFiles()?.any { file ->
+                file.isFile &&
+                    file.name.startsWith("libpython3.") &&
+                    file.name.contains(".so")
+            } == true
+        }
     }
 }

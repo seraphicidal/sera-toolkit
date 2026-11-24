@@ -3,8 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ImportRequest, JobError, MediaInfo } from '@sera/contracts/types';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { ApiError, importMedia } from '@/lib/api';
-import { openImportChannel, readImportFragment } from '@/lib/import-handshake';
+import { readImportFragment } from '@/lib/import-handshake';
 import { BookmarkletLink } from './bookmarklet-link';
 import { Downloader } from './downloader';
 import { ErrorPanel, type ErrorAction } from './error-panel';
@@ -22,13 +23,19 @@ function sourceLabel(url: string): string {
 }
 
 export function ImportClient() {
+  const router = useRouter();
   const [phase, setPhase] = useState<Phase>('waiting');
   const [info, setInfo] = useState<MediaInfo>();
   const [error, setError] = useState<JobError>();
   const [savedRequest, setSavedRequest] = useState<ImportRequest>();
   const abortRef = useRef<AbortController | undefined>(undefined);
-  const fragment = useRef<{ read: boolean; value: ReturnType<typeof readImportFragment> }>({
+  const fragment = useRef<{
+    read: boolean;
+    hadImportHash: boolean;
+    value: ReturnType<typeof readImportFragment>;
+  }>({
     read: false,
+    hadImportHash: false,
     value: undefined,
   });
 
@@ -64,9 +71,13 @@ export function ImportClient() {
   }, []);
 
   useEffect(() => {
-    const hadImportHash = /[#&](?:v|p)=/.test(window.location.hash);
     if (!fragment.current.read) {
-      fragment.current = { read: true, value: readImportFragment(window) };
+      const hadImportHash = /[#&](?:v|p)=/.test(window.location.hash);
+      fragment.current = {
+        read: true,
+        hadImportHash,
+        value: readImportFragment(window),
+      };
     }
 
     const fragmentResult = fragment.current.value;
@@ -94,7 +105,7 @@ export function ImportClient() {
       return () => abortRef.current?.abort();
     }
 
-    if (hadImportHash) {
+    if (fragment.current.hadImportHash) {
       setError({
         code: 'INVALID_URL',
         message: 'That import link was malformed or incomplete.',
@@ -105,25 +116,8 @@ export function ImportClient() {
       return () => abortRef.current?.abort();
     }
 
-    const openerWindow = window.opener as Window | null;
-    if (!openerWindow || openerWindow.closed) {
-      setPhase('idle');
-      return () => abortRef.current?.abort();
-    }
-
-    const channel = openImportChannel(window);
-    channel.received
-      .then((request) => {
-        runImport(request);
-      })
-      .catch(() => {
-        setPhase('idle');
-      });
-
-    return () => {
-      channel.close();
-      abortRef.current?.abort();
-    };
+    setPhase('idle');
+    return () => abortRef.current?.abort();
   }, [runImport]);
 
   if (phase === 'ready' && info) {
@@ -146,7 +140,7 @@ export function ImportClient() {
       {
         label: 'Back to SERA',
         primary: !canRetry,
-        onClick: () => (window.location.href = '/'),
+        onClick: () => router.push('/'),
       },
     ];
     return (

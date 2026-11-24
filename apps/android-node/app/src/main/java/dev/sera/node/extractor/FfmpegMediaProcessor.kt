@@ -2,6 +2,8 @@ package dev.sera.node.extractor
 
 import dev.sera.node.model.ConversionSpec
 import dev.sera.node.model.RemoteTrimRange
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.Base64
 import kotlin.math.min
@@ -381,7 +383,7 @@ class FfmpegMediaProcessor(
 
         val oggCover = extension == "opus" && coverPath != null
         if (extension == "opus" && coverPath != null) {
-            val jpeg = coverPath.readBytes()
+            val jpeg = withContext(Dispatchers.IO) { coverPath.readBytes() }
             val cover = executor.probeMedia(coverPath, timeoutMs = 30_000L, isCancelled = isCancelled)
             val width = cover.video?.width ?: 0
             val height = cover.video?.height ?: 0
@@ -389,7 +391,9 @@ class FfmpegMediaProcessor(
         }
 
         val metadataPath = File(scratchDir, "tags.ffmeta")
-        metadataPath.writeText("${lines.joinToString("\n")}\n", Charsets.UTF_8)
+        withContext(Dispatchers.IO) {
+            metadataPath.writeText("${lines.joinToString("\n")}\n", Charsets.UTF_8)
+        }
 
         val picture = coverPath != null && !oggCover
         val args = mutableListOf(

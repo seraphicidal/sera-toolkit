@@ -103,6 +103,7 @@ beforeAll(async () => {
       LOG_LEVEL: 'silent',
       SERA_SECRET: 'node-job-secret',
       SERA_DATA_DIR: apiDir,
+      SERA_ALLOW_PRIVATE_ADDRESSES: 'true',
       SERA_EXTRACTION_NODE_TOKEN: TOKEN,
       SERA_EXTRACTION_CLAIM_HOLD_SECONDS: '1',
       ...tools,

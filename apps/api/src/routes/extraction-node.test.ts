@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs';
+import { request as httpRequest } from 'node:http';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
@@ -111,7 +113,9 @@ describe('extraction node endpoints', () => {
 
   it('says nothing useful to an unauthenticated caller', async () => {
     const response = await app.inject({ method: 'POST', url: '/internal/extraction/claim' });
-    expect(response.json()).toEqual({ error: { code: 'NOT_FOUND', message: 'Not found.' } });
+    expect(response.json()).toEqual({
+      error: { code: 'NOT_FOUND', message: 'Not found.', retryable: false },
+    });
   });
 
   it('answers a claim with 204 when there is nothing to do', async () => {
@@ -1270,5 +1274,396 @@ describe('mobile resilience, metadata, manifest hash, and routing', () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('WS2 security hardening and upload lifecycle fixes', () => {
+  it('enforces strict provider, SSRF, denylist, and allowlist validation on /resolved', async () => {
+    const secDir = await mkdtemp(join(tmpdir(), 'sera-resolved-sec-'));
+    const secEngine = await SeraEngine.create({
+      config: loadConfig({
+        NODE_ENV: 'test',
+        LOG_LEVEL: 'silent',
+        SERA_SECRET: 'resolved-sec-secret',
+        SERA_DATA_DIR: secDir,
+        SERA_BLOCKED_HOSTS: 'evil-blocked.example',
+        SERA_EXTRACTION_NODE_TOKEN: TOKEN,
+        SERA_EXTRACTION_CLAIM_HOLD_SECONDS: '1',
+      }),
+    });
+    secEngine.denylist.blockHost('denied-cdn.example', 'Takedown');
+    const secApp = await buildServer(secEngine);
+    await secApp.ready();
+
+    try {
+      secEngine.extractionNodes.register('sec-node', ['youtube'], 1);
+      const pending = secEngine.extractionNodes
+        .dispatch({
+          kind: 'resolve',
+          url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+          providerId: 'youtube',
+        })
+        .catch(() => undefined);
+
+      const claimed = await secApp.inject({
+        method: 'POST',
+        url: '/internal/extraction/claim',
+        headers: auth,
+        payload: { nodeId: 'sec-node', providers: ['youtube'], capacity: 1 },
+      });
+      expect(claimed.statusCode).toBe(200);
+      const task = claimed.json<{ id: string }>();
+
+      const submit = (media: Record<string, unknown>) =>
+        secApp.inject({
+          method: 'POST',
+          url: `/internal/extraction/${task.id}/resolved`,
+          headers: auth,
+          payload: { media },
+        });
+
+      const wrongProvider = await submit({ ...remoteMedia, provider: 'instagram' });
+      expect(wrongProvider.statusCode).toBe(400);
+      expect(wrongProvider.json().error.code).toBe('VALIDATION_ERROR');
+
+      const privateDirectUrl = await submit({
+        ...remoteMedia,
+        items: [
+          {
+            ...remoteMedia.items[0],
+            plans: [
+              {
+                ...remoteMedia.items[0]!.plans[0],
+                fetch: { via: 'direct', url: 'http://169.254.169.254/latest/meta-data/' },
+              },
+            ],
+          },
+        ],
+      });
+      expect(privateDirectUrl.statusCode).toBe(400);
+      expect(privateDirectUrl.json().error.code).toBe('BLOCKED_ADDRESS');
+
+      const localhostThumb = await submit({
+        ...remoteMedia,
+        thumbnailUrl: 'http://localhost:4000/internal/secret.jpg',
+      });
+      expect(localhostThumb.statusCode).toBe(400);
+      expect(localhostThumb.json().error.code).toBe('BLOCKED_ADDRESS');
+
+      const blockedTarget = await submit({
+        ...remoteMedia,
+        items: [
+          {
+            ...remoteMedia.items[0],
+            plans: [
+              {
+                ...remoteMedia.items[0]!.plans[0],
+                fetch: {
+                  via: 'ytdlp',
+                  selector: 'best',
+                  target: 'https://evil-blocked.example/video.mp4',
+                },
+              },
+            ],
+          },
+        ],
+      });
+      expect(blockedTarget.statusCode).toBe(400);
+      expect(blockedTarget.json().error.code).toBe('BLOCKED_ADDRESS');
+
+      const deniedDirect = await submit({
+        ...remoteMedia,
+        items: [
+          {
+            ...remoteMedia.items[0],
+            plans: [
+              {
+                ...remoteMedia.items[0]!.plans[0],
+                fetch: { via: 'direct', url: 'https://denied-cdn.example/video.mp4' },
+              },
+            ],
+          },
+        ],
+      });
+      expect(deniedDirect.statusCode).toBe(422);
+      expect(deniedDirect.json().error.code).toBe('UNSUPPORTED_SOURCE');
+
+      const badExtractorArg = await submit({
+        ...remoteMedia,
+        items: [
+          {
+            ...remoteMedia.items[0],
+            plans: [
+              {
+                ...remoteMedia.items[0]!.plans[0],
+                fetch: {
+                  via: 'ytdlp',
+                  selector: 'best',
+                  extractorArgs: ['youtubepot-bgutilhttp:base_url=http://127.0.0.1:4416'],
+                },
+              },
+            ],
+          },
+        ],
+      });
+      expect(badExtractorArg.statusCode).toBe(400);
+      expect(badExtractorArg.json().error.code).toBe('VALIDATION_ERROR');
+
+      const badSelector = await submit({
+        ...remoteMedia,
+        items: [
+          {
+            ...remoteMedia.items[0],
+            plans: [
+              {
+                ...remoteMedia.items[0]!.plans[0],
+                fetch: { via: 'ytdlp', selector: '--exec touch /tmp/pwn' },
+              },
+            ],
+          },
+        ],
+      });
+      expect(badSelector.statusCode).toBe(400);
+      expect(badSelector.json().error.code).toBe('VALIDATION_ERROR');
+
+      const badContainer = await submit({
+        ...remoteMedia,
+        items: [
+          {
+            ...remoteMedia.items[0],
+            plans: [
+              {
+                ...remoteMedia.items[0]!.plans[0],
+                container: 'sh',
+              },
+            ],
+          },
+        ],
+      });
+      expect(badContainer.statusCode).toBe(400);
+      expect(badContainer.json().error.code).toBe('VALIDATION_ERROR');
+
+      secEngine.extractionNodes.fail(task.id, seraError('CANCELLED'));
+      await pending;
+    } finally {
+      await secApp.close();
+      await secEngine.close();
+      await rm(secDir, { recursive: true, force: true }).catch(() => undefined);
+    }
+  });
+
+  it('returns 409 superseded on concurrent replacement upload instead of 502', async () => {
+    const claimFresh = (nodeId: string) =>
+      app.inject({
+        method: 'POST',
+        url: '/internal/extraction/claim',
+        headers: auth,
+        payload: { nodeId, providers: ['youtube'], capacity: 4, features: ['trim', 'subtitles'] },
+      });
+
+    engine.extractionNodes.register('ws2-superseded-node', ['youtube'], 4);
+    const dispatched = engine.extractionNodes
+      .dispatchJob({
+        kind: 'job',
+        url: 'https://www.youtube.com/watch?v=superseded',
+        providerId: 'youtube',
+        planKeys: ['video/mp4/1080p'],
+      })
+      .catch(() => []);
+    const claimed = await claimFresh('ws2-superseded-node');
+    expect(claimed.statusCode).toBe(200);
+    const task = claimed.json<{ id: string }>();
+
+    const firstResult = new Promise<{ status: number; body: string }>((resolve, reject) => {
+      const req = httpRequest(
+        {
+          hostname: '127.0.0.1',
+          port,
+          method: 'POST',
+          path: `/internal/extraction/${task.id}/file?name=race.mp4&mime=video%2Fmp4`,
+          headers: {
+            ...auth,
+            'content-type': 'application/octet-stream',
+            'transfer-encoding': 'chunked',
+          },
+        },
+        (res) => {
+          let body = '';
+          res.on('data', (chunk: Buffer) => {
+            body += chunk.toString('utf8');
+          });
+          res.on('end', () => resolve({ status: res.statusCode ?? 0, body }));
+        },
+      );
+      req.on('error', reject);
+      req.write(Buffer.alloc(1024, 0x41));
+      setTimeout(() => {
+        if (!req.destroyed) req.end();
+      }, 2000);
+    });
+
+    await new Promise((r) => setTimeout(r, 60));
+
+    const replacement = Buffer.alloc(2048, 0x42);
+    const second = await app.inject({
+      method: 'POST',
+      url: `/internal/extraction/${task.id}/file?name=race.mp4&mime=video%2Fmp4`,
+      headers: { ...auth, 'content-type': 'application/octet-stream' },
+      payload: replacement,
+    });
+    expect(second.statusCode).toBe(200);
+    expect(second.json()).toEqual({ accepted: true, sizeBytes: replacement.length });
+
+    const first = await firstResult;
+    expect(first.status).toBe(409);
+    expect(JSON.parse(first.body)).toEqual({ accepted: false, superseded: true });
+
+    await app.inject({
+      method: 'POST',
+      url: `/internal/extraction/${task.id}/complete`,
+      headers: auth,
+      payload: {},
+    });
+    const files = await dispatched;
+    expect(files).toHaveLength(1);
+    expect(await readFile(files[0]!.path)).toEqual(replacement);
+  });
+
+  it('aborts active uploads before removing remote directory on /failed', async () => {
+    engine.extractionNodes.register('ws2-failabort-node', ['youtube'], 4);
+    const dispatched = engine.extractionNodes
+      .dispatchJob({
+        kind: 'job',
+        url: 'https://www.youtube.com/watch?v=failabort',
+        providerId: 'youtube',
+        planKeys: ['video/mp4/1080p'],
+      })
+      .catch(() => []);
+    const claimed = await app.inject({
+      method: 'POST',
+      url: '/internal/extraction/claim',
+      headers: auth,
+      payload: {
+        nodeId: 'ws2-failabort-node',
+        providers: ['youtube'],
+        capacity: 4,
+        features: ['trim', 'subtitles'],
+      },
+    });
+    expect(claimed.statusCode).toBe(200);
+    const task = claimed.json<{ id: string }>();
+
+    const activeUpload = new Promise<{ status: number; body: string }>((resolve, reject) => {
+      const req = httpRequest(
+        {
+          hostname: '127.0.0.1',
+          port,
+          method: 'POST',
+          path: `/internal/extraction/${task.id}/file?name=abort-me.mp4&mime=video%2Fmp4`,
+          headers: {
+            ...auth,
+            'content-type': 'application/octet-stream',
+            'transfer-encoding': 'chunked',
+          },
+        },
+        (res) => {
+          let body = '';
+          res.on('data', (chunk: Buffer) => {
+            body += chunk.toString('utf8');
+          });
+          res.on('end', () => resolve({ status: res.statusCode ?? 0, body }));
+        },
+      );
+      req.on('error', reject);
+      req.write(Buffer.alloc(2048, 0x43));
+      setTimeout(() => {
+        if (!req.destroyed) req.end();
+      }, 2000);
+    });
+
+    await new Promise((r) => setTimeout(r, 60));
+
+    const failed = await app.inject({
+      method: 'POST',
+      url: `/internal/extraction/${task.id}/failed`,
+      headers: auth,
+      payload: { code: 'NETWORK_ERROR', detail: 'simulated node crash' },
+    });
+    expect(failed.statusCode).toBe(200);
+    expect(failed.json()).toEqual({ accepted: true });
+
+    const uploadOutcome = await activeUpload;
+    expect(uploadOutcome.status).toBe(409);
+    expect(JSON.parse(uploadOutcome.body)).toEqual({ accepted: false, cancelled: true });
+    expect(existsSync(join(dataDir, `remote-${task.id}`))).toBe(false);
+    await dispatched;
+  });
+
+  it('rejects Content-Length/Content-Range mismatches and cleans up remote task dirs on dispatch cancel', async () => {
+    engine.extractionNodes.register('ws2-cleanup-node', ['youtube'], 4);
+    const dispatchRes = await app.inject({
+      method: 'POST',
+      url: '/internal/extraction/dispatch',
+      headers: auth,
+      payload: {
+        kind: 'job',
+        url: 'https://www.youtube.com/watch?v=cleanup3way',
+        providerId: 'youtube',
+        planKeys: ['video/mp4/1080p'],
+      },
+    });
+    expect(dispatchRes.statusCode).toBe(200);
+    const { taskId: dispatchId } = dispatchRes.json<{ taskId: string }>();
+
+    const claimed = await app.inject({
+      method: 'POST',
+      url: '/internal/extraction/claim',
+      headers: auth,
+      payload: {
+        nodeId: 'ws2-cleanup-node',
+        providers: ['youtube'],
+        capacity: 4,
+        features: ['trim', 'subtitles'],
+      },
+    });
+    expect(claimed.statusCode).toBe(200);
+    const nodeTask = claimed.json<{ id: string }>();
+    expect(nodeTask.id).not.toBe(dispatchId);
+
+    const mismatch = await app.inject({
+      method: 'POST',
+      url: `/internal/extraction/${nodeTask.id}/file?name=bad-range.mp4`,
+      headers: {
+        ...auth,
+        'content-type': 'application/octet-stream',
+        'content-range': 'bytes 0-99/200',
+      },
+      payload: Buffer.alloc(50, 0x44),
+    });
+    expect(mismatch.statusCode).toBe(400);
+    expect(mismatch.json().error.code).toBe('VALIDATION_ERROR');
+
+    const partial = await app.inject({
+      method: 'POST',
+      url: `/internal/extraction/${nodeTask.id}/file?name=orphaned.mp4`,
+      headers: {
+        ...auth,
+        'content-type': 'application/octet-stream',
+        'content-range': 'bytes 0-99/200',
+      },
+      payload: Buffer.alloc(100, 0x45),
+    });
+    expect(partial.statusCode).toBe(200);
+    expect(existsSync(join(dataDir, `remote-${nodeTask.id}`))).toBe(true);
+
+    const cancelled = await app.inject({
+      method: 'DELETE',
+      url: `/internal/extraction/dispatch/${dispatchId}`,
+      headers: auth,
+    });
+    expect(cancelled.statusCode).toBe(200);
+
+    await new Promise((r) => setTimeout(r, 80));
+    expect(existsSync(join(dataDir, `remote-${nodeTask.id}`))).toBe(false);
   });
 });

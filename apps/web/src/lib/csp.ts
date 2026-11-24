@@ -16,10 +16,14 @@ export function buildCspHeader(options: CspOptions = {}): string {
     ? `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${isDev ? " 'unsafe-eval'" : ''}`
     : `script-src 'self' 'sha256-${themeScriptHash}'${isDev ? " 'unsafe-eval'" : ''}`;
 
+  const styleDirectives = isDev
+    ? ["style-src 'self' 'unsafe-inline'"]
+    : ["style-src 'self'", "style-src-elem 'self'", "style-src-attr 'unsafe-inline'"];
+
   return [
     "default-src 'self'",
     scriptSrc,
-    "style-src 'self' 'unsafe-inline'",
+    ...styleDirectives,
     "img-src 'self' data: blob:",
     "font-src 'self'",
     "connect-src 'self'",

@@ -38,8 +38,8 @@ export class ThumbnailCache {
   private currentBytes = 0;
 
   constructor(
-    private readonly maxEntries = 200,
-    private readonly maxBytes = 64 * 1024 * 1024,
+    private readonly maxEntries = 128,
+    private readonly maxBytes = 32 * 1024 * 1024,
     private readonly ttlMs = 10 * 60_000,
   ) {}
 

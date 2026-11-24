@@ -111,6 +111,40 @@ describe('reaper', () => {
     expect(typeof stop).toBe('function');
     stop();
   });
+
+  it('protects active downloads across processes via download lease files', async () => {
+    const id = jobId(25);
+    const workspace = await manager.create(id);
+    await writeFile(workspace.outputPath('stream.mp4'), Buffer.alloc(1024));
+
+    const otherProcessManager = new WorkspaceManager(root, RETENTION_SECONDS, silentLogger());
+    const release = manager.acquireDownload(id);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await age(id, RETENTION_SECONDS + 30);
+
+    expect(await otherProcessManager.reap()).toBe(0);
+    expect(await readdir(root)).toContain(id);
+
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await age(id, RETENTION_SECONDS + 30);
+
+    expect(await otherProcessManager.reap()).toBe(1);
+    expect(await readdir(root)).toEqual([]);
+  });
+
+  it('excludes non-workspace directories from usage scans', async () => {
+    const reportsDir = join(root, 'reports');
+    await mkdir(reportsDir, { recursive: true });
+    await writeFile(join(reportsDir, 'large.json'), Buffer.alloc(9000));
+    const ws = await manager.create(jobId(26));
+    await writeFile(ws.outputPath('clip.mp4'), Buffer.alloc(1000));
+
+    const usage = await manager.usage(true);
+    expect(usage.workspaces).toBe(1);
+    expect(usage.bytes).toBeLessThan(9000);
+    expect(usage.bytes).toBeGreaterThanOrEqual(1000);
+  });
 });
 
 describe('destroy', () => {

@@ -24,9 +24,10 @@ async function main(): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
     engine.logger.info({ signal }, 'shutting down');
-    setTimeout(() => process.exit(0), 5_000).unref();
+    setTimeout(() => process.exit(0), 10_000).unref();
     void (async () => {
-      await Promise.allSettled([app.close(), engine.close()]);
+      await app.close().catch(() => undefined);
+      await engine.close().catch(() => undefined);
       process.exit(0);
     })();
   };

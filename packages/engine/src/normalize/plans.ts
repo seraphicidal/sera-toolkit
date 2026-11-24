@@ -14,6 +14,7 @@ import {
   fitsInMp4,
   IMAGE_EXTENSIONS,
   nativeContainer,
+  normalizeContainer,
   protocolScore,
   rankVideo,
   splitFormats,
@@ -317,7 +318,10 @@ export function buildAudioPlans(
 
 export function buildImagePlans(info: YtdlpInfo, directUrl: string | undefined): DownloadPlan[] {
   const ext = (str(info.ext) ?? 'jpg').toLowerCase();
-  const container = (IMAGE_EXTENSIONS.has(ext) ? ext : 'jpg') as ContainerFormat;
+  const container: ContainerFormat = normalizeContainer(
+    IMAGE_EXTENSIONS.has(ext) ? ext : 'jpg',
+    'jpg',
+  );
   const width = num(info.width);
   const height = num(info.height);
   const size = num(info.filesize) ?? num(info.filesize_approx);

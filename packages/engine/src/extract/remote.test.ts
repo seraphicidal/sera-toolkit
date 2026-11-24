@@ -485,3 +485,48 @@ describe('remoteBackend', () => {
     expect(backends.get('datacenter')?.providers).toEqual(['vimeo']);
   });
 });
+
+describe('registry task inspection, cleanup hooks, and fail-fast', () => {
+  it('exposes getTask, fires onTaskId and onTaskCleanup, and rejects mismatched completeResolve', async () => {
+    const nodes = new ExtractionNodeRegistry(silentLogger(), 5000, 5000, 150);
+    const seenIds: string[] = [];
+    const cleanedIds: string[] = [];
+    const unsubscribe = nodes.onTaskCleanup((id) => cleanedIds.push(id));
+
+    const pending = nodes.dispatch(
+      { kind: 'resolve', url: media.url, providerId: 'youtube' },
+      { onTaskId: (id) => seenIds.push(id) },
+    );
+    const first = await nodes.claim('node-a', ['youtube'], 1, 500);
+    expect(first).toBeDefined();
+    expect(seenIds).toEqual([first!.id]);
+    expect(nodes.getTask(first!.id)?.providerId).toBe('youtube');
+    expect(nodes.completeResolve(first!.id, { ...media, provider: 'twitter' })).toBe(false);
+
+    const second = await nodes.claim('node-b', ['youtube'], 1, 1000);
+    expect(second).toBeDefined();
+    expect(cleanedIds).toContain(first!.id);
+    expect(seenIds).toEqual([first!.id, second!.id]);
+
+    nodes.fail(second!.id, seraError('NETWORK_ERROR'));
+    await expect(pending).rejects.toMatchObject({ code: 'NETWORK_ERROR' });
+    expect(cleanedIds).toContain(second!.id);
+    unsubscribe();
+  });
+
+  it('fails dispatchJob fast when all registered nodes have gone stale', async () => {
+    const nodes = new ExtractionNodeRegistry(silentLogger(), 50, 5000);
+    nodes.register('offline-node', ['youtube'], 1);
+    await wait(80);
+    const started = Date.now();
+    await expect(
+      nodes.dispatchJob({
+        kind: 'job',
+        url: media.url,
+        providerId: 'youtube',
+        planKeys: ['video/mp4/1080p'],
+      }),
+    ).rejects.toMatchObject({ code: 'PROVIDER_UNAVAILABLE' });
+    expect(Date.now() - started).toBeLessThan(100);
+  });
+});

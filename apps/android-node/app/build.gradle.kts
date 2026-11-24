@@ -1,3 +1,4 @@
+import org.gradle.api.GradleException
 import java.util.Properties
 
 plugins {
@@ -31,6 +32,16 @@ fun buildConfigOption(propKeys: List<String>, envKeys: List<String>): String? {
     return null
 }
 
+val releaseStorePath = signingValue("storeFile", "SERA_KEYSTORE_PATH")
+val releaseStorePassword = signingValue("storePassword", "SERA_KEYSTORE_PASSWORD")
+val releaseKeyAlias = signingValue("keyAlias", "SERA_KEY_ALIAS")
+val releaseKeyPassword = signingValue("keyPassword", "SERA_KEY_PASSWORD")
+val hasReleaseSigning = releaseStorePath != null &&
+    releaseStorePassword != null &&
+    releaseKeyAlias != null &&
+    releaseKeyPassword != null &&
+    file(releaseStorePath).isFile
+
 android {
     namespace = "dev.sera.node"
     compileSdk = 35
@@ -51,16 +62,6 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
-    val releaseStorePath = signingValue("storeFile", "SERA_KEYSTORE_PATH")
-    val releaseStorePassword = signingValue("storePassword", "SERA_KEYSTORE_PASSWORD")
-    val releaseKeyAlias = signingValue("keyAlias", "SERA_KEY_ALIAS")
-    val releaseKeyPassword = signingValue("keyPassword", "SERA_KEY_PASSWORD")
-    val hasReleaseSigning = releaseStorePath != null &&
-        releaseStorePassword != null &&
-        releaseKeyAlias != null &&
-        releaseKeyPassword != null &&
-        file(releaseStorePath).isFile
-
     signingConfigs {
         if (hasReleaseSigning) {
             create("release") {
@@ -76,10 +77,8 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
-            signingConfig = if (hasReleaseSigning) {
-                signingConfigs.getByName("release")
-            } else {
-                signingConfigs.getByName("debug")
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
             }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -135,6 +134,18 @@ android {
 
     testOptions {
         unitTests.isReturnDefaultValues = true
+    }
+}
+
+tasks.matching {
+    it.name.endsWith("Release") &&
+        (it.name.startsWith("assemble") || it.name.startsWith("bundle") || it.name.startsWith("package"))
+}.configureEach {
+    val signingReady = hasReleaseSigning
+    doFirst {
+        if (!signingReady) {
+            throw GradleException("Release signing credentials are required via keystore.properties or SERA_KEYSTORE_* environment variables.")
+        }
     }
 }
 

@@ -92,11 +92,41 @@ describe('cloud storage providers', () => {
 
   it('extracts MediaFire direct download links and resolves metadata', async () => {
     const provider = new MediaFireProvider();
-    const html = `<html><body><a id="downloadButton" href="https://download1500.mediafire.com/xyz/key123/installer.dmg">Download</a></body></html>`;
+    const html = `<html><body><a id="downloadButton" href="https://download1500.mediafire.com/xyz/key123/bundle.zip">Download</a></body></html>`;
     expect(extractMediaFireDirectUrl(html)).toBe(
-      'https://download1500.mediafire.com/xyz/key123/installer.dmg',
+      'https://download1500.mediafire.com/xyz/key123/bundle.zip',
     );
 
+    const context: ProviderContext = {
+      config,
+      logger: silentLogger(),
+      probe: () => Promise.reject(new Error('not used')),
+      fetchText: (target) => Promise.resolve({ body: html, url: target.toString() }),
+      head: (target) =>
+        Promise.resolve({
+          status: 200,
+          contentType: 'application/zip',
+          contentLength: 10_485_760,
+          url: target.toString(),
+        }),
+    };
+
+    const media = await provider.resolve(
+      new URL('https://www.mediafire.com/file/key123/bundle.zip/file'),
+      context,
+    );
+    expect(media.provider).toBe('mediafire');
+    expect(media.items[0]?.kind).toBe('file');
+    expect(media.items[0]?.container).toBe('zip');
+    expect(media.items[0]?.plans[0]?.fetch).toEqual({
+      via: 'direct',
+      url: 'https://download1500.mediafire.com/xyz/key123/bundle.zip',
+    });
+  });
+
+  it('rejects executable downloads from cloud storage providers', async () => {
+    const provider = new MediaFireProvider();
+    const html = `<html><body><a id="downloadButton" href="https://download1500.mediafire.com/xyz/key123/installer.dmg">Download</a></body></html>`;
     const context: ProviderContext = {
       config,
       logger: silentLogger(),
@@ -111,16 +141,12 @@ describe('cloud storage providers', () => {
         }),
     };
 
-    const media = await provider.resolve(
-      new URL('https://www.mediafire.com/file/key123/installer.dmg/file'),
-      context,
-    );
-    expect(media.provider).toBe('mediafire');
-    expect(media.items[0]?.container).toBe('dmg');
-    expect(media.items[0]?.plans[0]?.fetch).toEqual({
-      via: 'direct',
-      url: 'https://download1500.mediafire.com/xyz/key123/installer.dmg',
-    });
+    await expect(
+      provider.resolve(
+        new URL('https://www.mediafire.com/file/key123/installer.dmg/file'),
+        context,
+      ),
+    ).rejects.toMatchObject({ code: 'UNSUPPORTED_SOURCE' });
   });
 
   it('claims MEGA public file links', () => {

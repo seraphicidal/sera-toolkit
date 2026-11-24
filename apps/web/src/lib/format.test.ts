@@ -5,13 +5,16 @@ import {
   formatCodecBadge,
   formatDuration,
   formatEta,
+  formatLimitDuration,
   formatSpeed,
   isRunning,
   isSafeDownloadPath,
+  KIND_LABELS,
   optionBadges,
   PIPELINE_STEPS,
   pluralize,
   resolvePipelineStepIndex,
+  stepRadio,
 } from './format';
 
 describe('formatBytes', () => {
@@ -122,14 +125,40 @@ describe('formatCodecBadge and optionBadges', () => {
 });
 
 describe('resolvePipelineStepIndex', () => {
-  it('maps job state and step text to the 5-step pipeline', () => {
+  it('maps job state and step text to the 5-step pipeline without jumping early to Done', () => {
     expect(PIPELINE_STEPS).toEqual(['Resolving', 'Downloading', 'Transcoding', 'Tagging', 'Done']);
     expect(resolvePipelineStepIndex('queued', 'Queued')).toBe(0);
     expect(resolvePipelineStepIndex('resolving', 'Resolving media')).toBe(0);
     expect(resolvePipelineStepIndex('downloading', 'Downloading video')).toBe(1);
+    expect(resolvePipelineStepIndex('downloading', 'Download complete, uploading...')).toBe(1);
     expect(resolvePipelineStepIndex('converting', 'Transcoding with FFmpeg')).toBe(2);
     expect(resolvePipelineStepIndex('packaging', 'Tagging metadata')).toBe(3);
     expect(resolvePipelineStepIndex('ready', 'Done')).toBe(4);
+  });
+});
+
+describe('formatLimitDuration, KIND_LABELS and stepRadio', () => {
+  it('formats singular/plural durations cleanly across minutes and hours', () => {
+    expect(formatLimitDuration(60)).toBe('1 minute');
+    expect(formatLimitDuration(900)).toBe('15 minutes');
+    expect(formatLimitDuration(3600)).toBe('1 hour');
+    expect(formatLimitDuration(7200)).toBe('2 hours');
+    expect(KIND_LABELS.file).toBe('File');
+  });
+
+  it('supports Arrow, Home, and End navigation in stepRadio', () => {
+    const selected: string[] = [];
+    const makeEvent = (key: string) =>
+      ({
+        key,
+        preventDefault: () => undefined,
+        currentTarget: { parentElement: null },
+      }) as unknown as Parameters<typeof stepRadio>[0];
+
+    stepRadio(makeEvent('Home'), ['a', 'b', 'c'], 2, (v) => selected.push(v));
+    stepRadio(makeEvent('End'), ['a', 'b', 'c'], 0, (v) => selected.push(v));
+    stepRadio(makeEvent('ArrowRight'), ['a', 'b', 'c'], 2, (v) => selected.push(v));
+    expect(selected).toEqual(['a', 'c', 'a']);
   });
 });
 

@@ -38,7 +38,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await app?.close();
-  await rm(dataDir, { recursive: true, force: true });
+  await engine?.close();
+  await rm(dataDir, { recursive: true, force: true }).catch(() => undefined);
 });
 
 describe('EU Compliance: GDPR & Ephemeral Data Processing', () => {

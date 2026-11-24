@@ -1,6 +1,9 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { ClearHistoryButton } from '@/components/clear-history-button';
+import { cleanEmail, cleanEnvValue } from '@/lib/contact';
+import { formatLimitDuration } from '@/lib/format';
+import { loadServiceInfo } from '@/lib/service-info';
 
 export const dynamic = 'force-dynamic';
 
@@ -10,23 +13,22 @@ export const metadata: Metadata = {
     'Data processing practices under Regulation (EU) 2016/679 (GDPR) and the ePrivacy Directive.',
 };
 
-function clean(value?: string): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed && trimmed.length > 0 ? trimmed : undefined;
-}
-
-export default function PrivacyPage() {
+export default async function PrivacyPage() {
+  const service = await loadServiceInfo();
+  const retentionSeconds = service?.limits.retentionSeconds ?? 1800;
+  const retentionLabel = formatLimitDuration(retentionSeconds);
   const operatorName =
-    clean(process.env.OPERATOR_NAME) ??
-    clean(process.env.NEXT_PUBLIC_OPERATOR_NAME) ??
+    cleanEnvValue(process.env.OPERATOR_NAME) ??
+    cleanEnvValue(process.env.NEXT_PUBLIC_OPERATOR_NAME) ??
     'SERA.toolkit Operator';
   const operatorAddress =
-    clean(process.env.OPERATOR_ADDRESS) ?? clean(process.env.NEXT_PUBLIC_OPERATOR_ADDRESS);
+    cleanEnvValue(process.env.OPERATOR_ADDRESS) ??
+    cleanEnvValue(process.env.NEXT_PUBLIC_OPERATOR_ADDRESS);
   const operatorEmail =
-    clean(process.env.OPERATOR_EMAIL) ?? clean(process.env.NEXT_PUBLIC_OPERATOR_EMAIL);
+    cleanEmail(process.env.OPERATOR_EMAIL) ?? cleanEmail(process.env.NEXT_PUBLIC_OPERATOR_EMAIL);
   const dpoEmail =
-    clean(process.env.CONTACT_EMAIL_LEGAL) ??
-    clean(process.env.NEXT_PUBLIC_CONTACT_EMAIL_LEGAL) ??
+    cleanEmail(process.env.CONTACT_EMAIL_LEGAL) ??
+    cleanEmail(process.env.NEXT_PUBLIC_CONTACT_EMAIL_LEGAL) ??
     operatorEmail;
 
   return (
@@ -131,17 +133,21 @@ export default function PrivacyPage() {
         </p>
         <ul className="list-disc space-y-1.5 pl-5 text-[0.875rem]">
           <li>
-            <strong className="text-[var(--color-ink)]">30-Minute Workspace Retention:</strong> All
+            <strong className="text-[var(--color-ink)]">Transient Workspace Retention:</strong> All
             downloaded streams, transcoded tracks, and packaged archives are permanently unlinked
-            from disk within 30 minutes of creation (
+            from disk within {retentionLabel} of creation on this instance (default 30 minutes,{' '}
             <code className="rounded bg-[var(--color-sunken)] px-1 py-0.5 text-xs">
               SERA_RETENTION_SECONDS = 1800
+            </code>
+            ; currently{' '}
+            <code className="rounded bg-[var(--color-sunken)] px-1 py-0.5 text-xs">
+              {retentionSeconds}s
             </code>
             ).
           </li>
           <li>
             <strong className="text-[var(--color-ink)]">Automated Garbage Collection:</strong> A
-            background sweeper inspects and reaps expired workspaces every 120 seconds. Once purged,
+            background sweeper periodically inspects and reaps expired workspaces. Once purged,
             files are permanently unrecoverable.
           </li>
           <li>
@@ -194,10 +200,18 @@ export default function PrivacyPage() {
           <table className="w-full text-left text-[0.875rem]">
             <thead className="border-b border-[var(--color-line)] bg-[var(--color-sunken)] text-xs text-[var(--color-ink-faint)] uppercase">
               <tr>
-                <th className="px-4 py-2.5 font-medium">Key</th>
-                <th className="px-4 py-2.5 font-medium">Functional Purpose</th>
-                <th className="px-4 py-2.5 font-medium">Duration</th>
-                <th className="px-4 py-2.5 font-medium">Legal Exemption</th>
+                <th scope="col" className="px-4 py-2.5 font-medium">
+                  Key
+                </th>
+                <th scope="col" className="px-4 py-2.5 font-medium">
+                  Functional Purpose
+                </th>
+                <th scope="col" className="px-4 py-2.5 font-medium">
+                  Duration
+                </th>
+                <th scope="col" className="px-4 py-2.5 font-medium">
+                  Legal Exemption
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[var(--color-line)] text-[var(--color-ink)]">

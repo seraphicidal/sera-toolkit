@@ -162,8 +162,8 @@ private fun makeVideoPlan(
         width = video.width,
         height = video.height,
         fps = video.fps?.toDouble(),
-        videoCodec = video.vcodec,
-        audioCodec = audio?.acodec ?: video.acodec,
+        videoCodec = video.vcodec?.take(32),
+        audioCodec = (audio?.acodec ?: video.acodec)?.take(32),
         filesizeBytes = total,
         filesizeIsApproximate = if (total != null && approximate) true else null,
         requiresConversion = false,
@@ -347,7 +347,7 @@ fun buildAudioPlans(
                 label = target.label,
                 detail = detail,
                 audioBitrateKbps = bitrate?.toDouble(),
-                audioCodec = source.acodec,
+                audioCodec = source.acodec?.take(32),
                 filesizeBytes = estimatedBytes,
                 filesizeIsApproximate = if (estimatedBytes != null) true else null,
                 requiresConversion = !canCopy,
@@ -518,8 +518,8 @@ fun subtitleTracks(entry: YtdlpInfo): List<SubtitleTrack> {
     val tracks = manual.map { (lang, renditions) ->
         val name = renditions.orEmpty().firstNotNullOfOrNull { it.name.asStr() }
         SubtitleTrack(
-            lang = lang,
-            label = name ?: languageName(lang),
+            lang = lang.take(40),
+            label = (name ?: languageName(lang)).take(100),
             auto = false,
         )
     }.toMutableList()
@@ -533,8 +533,8 @@ fun subtitleTracks(entry: YtdlpInfo): List<SubtitleTrack> {
         if (tracks.none { baseLanguage(it.lang) == base }) {
             tracks.add(
                 SubtitleTrack(
-                    lang = original,
-                    label = "${languageName(base)} (auto-generated)",
+                    lang = original.take(40),
+                    label = "${languageName(base)} (auto-generated)".take(100),
                     auto = true,
                 ),
             )

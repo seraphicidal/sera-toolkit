@@ -1,13 +1,25 @@
 'use client';
 
-import { useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import Link from 'next/link';
 import type { LegalReportCategory, LegalReportResponse } from '@sera/contracts/types';
 import { AlertIcon, CheckIcon, SpinnerIcon } from '@/components/icons';
+import { cleanEmail } from '@/lib/contact';
 
 export interface LegalReportFormProps {
   authoritiesEmail?: string | undefined;
   legalEmail?: string | undefined;
+}
+
+const REQUEST_TIMEOUT_MS = 15_000;
+
+function formatReceivedAt(iso: string): string {
+  const parsed = Date.parse(iso);
+  if (Number.isNaN(parsed)) return iso;
+  return new Date(parsed).toLocaleString(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  });
 }
 
 export function LegalReportForm({ authoritiesEmail, legalEmail }: LegalReportFormProps) {
@@ -22,31 +34,69 @@ export function LegalReportForm({ authoritiesEmail, legalEmail }: LegalReportFor
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
   const [receipt, setReceipt] = useState<LegalReportResponse | undefined>(undefined);
+  const abortRef = useRef<AbortController | undefined>(undefined);
+
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, []);
+
+  const safeAuthoritiesEmail = cleanEmail(authoritiesEmail);
+  const safeLegalEmail = cleanEmail(legalEmail);
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setError(undefined);
 
+    const trimmedUrl = targetUrl.trim();
+    const trimmedExplanation = explanation.trim();
+    const trimmedName = notifierName.trim();
+    const trimmedOrg = notifierOrganization.trim();
+    const trimmedEmail = notifierEmail.trim();
+
+    if (!/^https?:\/\//i.test(trimmedUrl)) {
+      setError('Target URL must begin with http:// or https://.');
+      return;
+    }
+    if (trimmedExplanation.length < 10) {
+      setError('Basis of claim must be at least 10 characters.');
+      return;
+    }
+    if (trimmedName.length < 2) {
+      setError('Full name must be at least 2 characters.');
+      return;
+    }
+    if (!cleanEmail(trimmedEmail)) {
+      setError('Enter a valid contact email address.');
+      return;
+    }
     if (!goodFaithConfirmed) {
       setError('You must confirm the good-faith and accuracy certification to submit.');
       return;
     }
 
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
     setBusy(true);
     try {
       const response = await fetch('/api/legal/report', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
+        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]),
         body: JSON.stringify({
-          targetUrl,
+          targetUrl: trimmedUrl,
           category,
-          explanation,
-          notifierName,
-          ...(notifierOrganization ? { notifierOrganization } : {}),
-          notifierEmail,
+          explanation: trimmedExplanation,
+          notifierName: trimmedName,
+          ...(trimmedOrg ? { notifierOrganization: trimmedOrg } : {}),
+          notifierEmail: trimmedEmail,
           goodFaithConfirmed: true,
         }),
       });
+
+      if (controller.signal.aborted) return;
 
       if (!response.ok) {
         let message = 'Failed to submit notice.';
@@ -62,9 +112,10 @@ export function LegalReportForm({ authoritiesEmail, legalEmail }: LegalReportFor
       const data = (await response.json()) as LegalReportResponse;
       setReceipt(data);
     } catch {
+      if (controller.signal.aborted) return;
       setError('A network error occurred while submitting the report. Please try again.');
     } finally {
-      setBusy(false);
+      if (!controller.signal.aborted) setBusy(false);
     }
   };
 
@@ -103,7 +154,7 @@ export function LegalReportForm({ authoritiesEmail, legalEmail }: LegalReportFor
             <dd className="font-mono font-medium text-[var(--color-ink)]">{receipt.reportId}</dd>
 
             <dt className="text-[var(--color-ink-muted)]">Received At:</dt>
-            <dd className="text-[var(--color-ink)]">{receipt.receivedAt}</dd>
+            <dd className="text-[var(--color-ink)]">{formatReceivedAt(receipt.receivedAt)}</dd>
 
             <dt className="text-[var(--color-ink-muted)]">Initial Status:</dt>
             <dd className="font-medium text-[var(--color-ink)] capitalize">
@@ -157,13 +208,15 @@ export function LegalReportForm({ authoritiesEmail, legalEmail }: LegalReportFor
               id="target-url"
               type="url"
               required
+              maxLength={2048}
               value={targetUrl}
               onChange={(e) => setTargetUrl(e.target.value)}
               placeholder="https://example.com/media-or-post"
               className="rounded-xl border border-[var(--color-line)] bg-[var(--color-surface)] px-3.5 py-2.5 text-[0.875rem] text-[var(--color-ink)] transition-colors focus:border-[var(--color-accent)] focus:outline-none focus-visible:shadow-[var(--shadow-focus)]"
             />
             <p className="text-xs text-[var(--color-ink-faint)]">
-              Specify the exact URL hosted on or accessible via the external platform.
+              Specify the exact http:// or https:// URL hosted on or accessible via the external
+              platform.
             </p>
           </div>
 
@@ -199,12 +252,17 @@ export function LegalReportForm({ authoritiesEmail, legalEmail }: LegalReportFor
             <textarea
               id="explanation"
               required
+              minLength={10}
+              maxLength={10000}
               rows={4}
               value={explanation}
               onChange={(e) => setExplanation(e.target.value)}
               placeholder="Explain the legal grounds, identify the copyrighted work, or explain the nature of the illegal content."
               className="rounded-xl border border-[var(--color-line)] bg-[var(--color-surface)] px-3.5 py-2.5 text-[0.875rem] text-[var(--color-ink)] transition-colors focus:border-[var(--color-accent)] focus:outline-none focus-visible:shadow-[var(--shadow-focus)]"
             />
+            <p className="text-xs text-[var(--color-ink-faint)]">
+              Minimum 10 characters ({explanation.trim().length} / 10,000).
+            </p>
           </div>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -219,6 +277,8 @@ export function LegalReportForm({ authoritiesEmail, legalEmail }: LegalReportFor
                 id="notifier-name"
                 type="text"
                 required
+                minLength={2}
+                maxLength={256}
                 value={notifierName}
                 onChange={(e) => setNotifierName(e.target.value)}
                 placeholder="First Last"
@@ -236,6 +296,7 @@ export function LegalReportForm({ authoritiesEmail, legalEmail }: LegalReportFor
               <input
                 id="notifier-org"
                 type="text"
+                maxLength={256}
                 value={notifierOrganization}
                 onChange={(e) => setNotifierOrganization(e.target.value)}
                 placeholder="Company, Law Firm, or Studio"
@@ -255,6 +316,7 @@ export function LegalReportForm({ authoritiesEmail, legalEmail }: LegalReportFor
               id="notifier-email"
               type="email"
               required
+              maxLength={320}
               value={notifierEmail}
               onChange={(e) => setNotifierEmail(e.target.value)}
               placeholder="legal@rightsholder.example"
@@ -302,25 +364,28 @@ export function LegalReportForm({ authoritiesEmail, legalEmail }: LegalReportFor
           Designated Points of Contact (DSA Arts. 11 & 12):
         </p>
         <p>
-          {authoritiesEmail || legalEmail ? (
+          {safeAuthoritiesEmail || safeLegalEmail ? (
             <>
-              {authoritiesEmail && (
+              {safeAuthoritiesEmail && (
                 <>
                   Authorities point of contact:{' '}
                   <a
-                    href={`mailto:${authoritiesEmail}`}
+                    href={`mailto:${safeAuthoritiesEmail}`}
                     className="text-[var(--color-accent)] underline"
                   >
-                    {authoritiesEmail}
+                    {safeAuthoritiesEmail}
                   </a>
                   .{' '}
                 </>
               )}
-              {legalEmail && (
+              {safeLegalEmail && (
                 <>
                   Legal inquiries:{' '}
-                  <a href={`mailto:${legalEmail}`} className="text-[var(--color-accent)] underline">
-                    {legalEmail}
+                  <a
+                    href={`mailto:${safeLegalEmail}`}
+                    className="text-[var(--color-accent)] underline"
+                  >
+                    {safeLegalEmail}
                   </a>
                   .{' '}
                 </>

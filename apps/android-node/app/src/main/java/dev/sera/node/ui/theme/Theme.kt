@@ -52,11 +52,11 @@ val LightSeraPalette = SeraPalette(
     accentHover = Color(0xFF2E4BC0),
     accentInk = Color(0xFFFFFFFF),
     accentWash = Color(0xFFEDF0FC),
-    danger = Color(0xFFC8372D),
+    danger = Color(0xFFB82D24),
     dangerWash = Color(0xFFFCECEA),
-    success = Color(0xFF288A56),
+    success = Color(0xFF1B6E42),
     successWash = Color(0xFFEAF7F0),
-    warning = Color(0xFFB87814),
+    warning = Color(0xFF8E5805),
     warningWash = Color(0xFFFCF4E3),
     isDark = false,
 )
@@ -120,22 +120,27 @@ private val SeraTypography = Typography(
     labelSmall = TextStyle(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.Medium,
-        fontSize = 11.sp,
-        lineHeight = 14.sp,
+        fontSize = 11.5.sp,
+        lineHeight = 15.sp,
     ),
 )
+
+@Composable
+fun isSeraDarkTheme(preference: ThemePreference): Boolean {
+    val systemDark = isSystemInDarkTheme()
+    return when (preference) {
+        ThemePreference.LIGHT -> false
+        ThemePreference.DARK -> true
+        ThemePreference.SYSTEM -> systemDark
+    }
+}
 
 @Composable
 fun SeraNodeTheme(
     preference: ThemePreference = ThemePreference.SYSTEM,
     content: @Composable () -> Unit,
 ) {
-    val systemDark = isSystemInDarkTheme()
-    val useDark = when (preference) {
-        ThemePreference.LIGHT -> false
-        ThemePreference.DARK -> true
-        ThemePreference.SYSTEM -> systemDark
-    }
+    val useDark = isSeraDarkTheme(preference)
     val palette = if (useDark) DarkSeraPalette else LightSeraPalette
 
     val colorScheme = if (useDark) {
@@ -143,34 +148,78 @@ fun SeraNodeTheme(
             primary = palette.accent,
             onPrimary = palette.accentInk,
             primaryContainer = palette.accentWash,
-            onPrimaryContainer = palette.accent,
+            onPrimaryContainer = palette.accentHover,
+            inversePrimary = LightSeraPalette.accent,
+            secondary = Color(0xFF9EA6BD),
+            onSecondary = Color(0xFF141824),
+            secondaryContainer = Color(0xFF252A3B),
+            onSecondaryContainer = Color(0xFFDCE2F7),
+            tertiary = palette.success,
+            onTertiary = Color(0xFF0A2416),
+            tertiaryContainer = palette.successWash,
+            onTertiaryContainer = palette.success,
             background = palette.canvas,
             onBackground = palette.ink,
             surface = palette.surface,
             onSurface = palette.ink,
             surfaceVariant = palette.sunken,
             onSurfaceVariant = palette.inkMuted,
+            surfaceTint = palette.accent,
+            inverseSurface = Color(0xFFE8E8ED),
+            inverseOnSurface = Color(0xFF18181D),
+            error = palette.danger,
+            onError = Color(0xFF330C09),
+            errorContainer = palette.dangerWash,
+            onErrorContainer = Color(0xFFFFDAD6),
             outline = palette.line,
             outlineVariant = palette.lineStrong,
-            error = palette.danger,
-            errorContainer = palette.dangerWash,
+            scrim = Color(0xFF000000),
+            surfaceBright = Color(0xFF2B2B33),
+            surfaceDim = Color(0xFF0D0D10),
+            surfaceContainerLowest = Color(0xFF0A0A0D),
+            surfaceContainerLow = Color(0xFF141418),
+            surfaceContainer = Color(0xFF1A1A20),
+            surfaceContainerHigh = Color(0xFF222229),
+            surfaceContainerHighest = Color(0xFF2A2A33),
         )
     } else {
         lightColorScheme(
             primary = palette.accent,
             onPrimary = palette.accentInk,
             primaryContainer = palette.accentWash,
-            onPrimaryContainer = palette.accent,
+            onPrimaryContainer = palette.accentHover,
+            inversePrimary = DarkSeraPalette.accent,
+            secondary = Color(0xFF4A5573),
+            onSecondary = Color(0xFFFFFFFF),
+            secondaryContainer = Color(0xFFE6EBF8),
+            onSecondaryContainer = Color(0xFF1F2B4D),
+            tertiary = palette.success,
+            onTertiary = Color(0xFFFFFFFF),
+            tertiaryContainer = palette.successWash,
+            onTertiaryContainer = palette.success,
             background = palette.canvas,
             onBackground = palette.ink,
             surface = palette.surface,
             onSurface = palette.ink,
             surfaceVariant = palette.sunken,
             onSurfaceVariant = palette.inkMuted,
+            surfaceTint = palette.accent,
+            inverseSurface = Color(0xFF23232A),
+            inverseOnSurface = Color(0xFFF2F2F5),
+            error = palette.danger,
+            onError = Color(0xFFFFFFFF),
+            errorContainer = palette.dangerWash,
+            onErrorContainer = palette.danger,
             outline = palette.line,
             outlineVariant = palette.lineStrong,
-            error = palette.danger,
-            errorContainer = palette.dangerWash,
+            scrim = Color(0xFF000000),
+            surfaceBright = Color(0xFFFFFFFF),
+            surfaceDim = Color(0xFFEAEAE5),
+            surfaceContainerLowest = Color(0xFFFFFFFF),
+            surfaceContainerLow = Color(0xFFF7F7F4),
+            surfaceContainer = Color(0xFFF2F2EE),
+            surfaceContainerHigh = Color(0xFFECECE7),
+            surfaceContainerHighest = Color(0xFFE5E5E0),
         )
     }
 

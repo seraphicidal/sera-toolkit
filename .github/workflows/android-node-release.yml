@@ -37,13 +37,15 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   release:
     name: Test, build, and release Android node APK
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: write
 
     defaults:
       run:
@@ -121,8 +123,8 @@ jobs:
               versionName = baseName;
             }
 
-            if (!versionName || versionName.length > 64) {
-              console.error("::error::versionName must be 1..64 characters.");
+            if (!versionName || versionName.length > 64 || !/^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$/.test(versionName)) {
+              console.error("::error::versionName must be 1..64 characters matching [0-9A-Za-z][0-9A-Za-z._+-]*.");
               process.exit(1);
             }
 
@@ -137,6 +139,10 @@ jobs:
 
             const safeSegment = versionName.replace(/[^A-Za-z0-9._-]/g, "-");
             const releaseTag = refType === "tag" ? refName : safeSegment;
+            if (!/^[0-9A-Za-z][0-9A-Za-z._+-]{0,127}$/.test(releaseTag)) {
+              console.error("::error::releaseTag contains unsupported characters.");
+              process.exit(1);
+            }
             const isPrerelease =
               inputPrerelease || /-(?:alpha|beta|rc)(?:[.-]?\d*)?$/i.test(versionName);
 
@@ -229,10 +235,13 @@ jobs:
           ./gradlew :app:testDebugUnitTest --stacktrace
 
       - name: Build release APK
+        env:
+          VERSION_CODE: ${{ steps.meta.outputs.version_code }}
+          VERSION_NAME: ${{ steps.meta.outputs.version_name }}
         run: >-
           ./gradlew :app:assembleRelease
-          -PSERA_VERSION_CODE="${{ steps.meta.outputs.version_code }}"
-          -PSERA_VERSION_NAME="${{ steps.meta.outputs.version_name }}"
+          -PSERA_VERSION_CODE="$VERSION_CODE"
+          -PSERA_VERSION_NAME="$VERSION_NAME"
           --stacktrace
 
       - name: Package APK and generate manifest

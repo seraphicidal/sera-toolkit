@@ -16,7 +16,11 @@ class NodeNotificationManager(private val context: Context) {
     private val manager =
         appContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
+    @Volatile
+    private var channelsReady = false
+
     fun ensureChannels() {
+        if (channelsReady) return
         val statusChannel = NotificationChannel(
             CHANNEL_NODE_STATUS,
             "Extraction Node Status",
@@ -36,6 +40,7 @@ class NodeNotificationManager(private val context: Context) {
 
         manager.createNotificationChannel(statusChannel)
         manager.createNotificationChannel(updatesChannel)
+        channelsReady = true
     }
 
     fun buildStatusNotification(
@@ -97,7 +102,7 @@ class NodeNotificationManager(private val context: Context) {
         val toggleActionIntent = Intent(appContext, NodeForegroundService::class.java).apply {
             action = if (isPaused) NodeForegroundService.ACTION_RESUME else NodeForegroundService.ACTION_PAUSE
         }
-        val togglePending = PendingIntent.getService(
+        val togglePending = PendingIntent.getForegroundService(
             appContext,
             101,
             toggleActionIntent,
@@ -107,7 +112,7 @@ class NodeNotificationManager(private val context: Context) {
         val stopIntent = Intent(appContext, NodeForegroundService::class.java).apply {
             action = NodeForegroundService.ACTION_STOP
         }
-        val stopPending = PendingIntent.getService(
+        val stopPending = PendingIntent.getForegroundService(
             appContext,
             102,
             stopIntent,
@@ -117,7 +122,7 @@ class NodeNotificationManager(private val context: Context) {
         val updateIntent = Intent(appContext, NodeForegroundService::class.java).apply {
             action = NodeForegroundService.ACTION_CHECK_UPDATES
         }
-        val updatePending = PendingIntent.getService(
+        val updatePending = PendingIntent.getForegroundService(
             appContext,
             103,
             updateIntent,

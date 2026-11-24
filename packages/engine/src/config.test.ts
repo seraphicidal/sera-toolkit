@@ -31,3 +31,33 @@ describe('per-provider resolve timeouts', () => {
     expect(() => loadConfig({ ...base, SERA_RESOLVE_TIMEOUT_SECONDS: '0' })).toThrow(ConfigError);
   });
 });
+
+describe('production secret and worker token hardening', () => {
+  it('requires SERA_SECRET to be at least 32 characters in production', () => {
+    expect(() => loadConfig({ NODE_ENV: 'production', SERA_SECRET: 'short-secret-123' })).toThrow(
+      ConfigError,
+    );
+    const ok = loadConfig({
+      NODE_ENV: 'production',
+      SERA_SECRET: 'a'.repeat(32),
+    });
+    expect(ok.isProduction).toBe(true);
+  });
+
+  it('never falls back workerToken to SERA_ADMIN_TOKEN or legacy node token', () => {
+    const withLegacy = loadConfig({
+      ...base,
+      SERA_EXTRACTION_NODE_TOKEN: 'legacy-node-token',
+      SERA_ADMIN_TOKEN: 'super-admin-token',
+    });
+    expect(withLegacy.extractionNodes.workerToken).toBe('');
+
+    const withExplicit = loadConfig({
+      ...base,
+      SERA_EXTRACTION_NODE_TOKENS: 'node1:tok1',
+      SERA_EXTRACTION_WORKER_TOKEN: 'worker-secret-token',
+      SERA_ADMIN_TOKEN: 'super-admin-token',
+    });
+    expect(withExplicit.extractionNodes.workerToken).toBe('worker-secret-token');
+  });
+});

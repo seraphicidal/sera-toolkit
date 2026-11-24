@@ -3,8 +3,11 @@ package dev.sera.node.extractor
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import java.math.BigInteger
+import java.net.InetAddress
 import java.net.URLDecoder
+import java.net.UnknownHostException
 import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 
 data class ParsedUrl(
     val url: HttpUrl,
@@ -438,6 +441,99 @@ fun isPublicAddress(address: String): Boolean {
     return false
 }
 
+fun isBlockedLocalHostname(hostname: String): Boolean {
+    val clean = hostname.lowercase().trim().trimEnd('.')
+    if (clean.isEmpty()) return true
+    if (
+        clean == "localhost" ||
+        clean == "ip6-localhost" ||
+        clean == "ip6-loopback" ||
+        clean == "metadata.google.internal" ||
+        clean == "metadata"
+    ) {
+        return true
+    }
+    return clean.endsWith(".localhost") ||
+        clean.endsWith(".local") ||
+        clean.endsWith(".internal") ||
+        clean.endsWith(".localdomain") ||
+        clean.endsWith(".home.arpa")
+}
+
+fun isPublicInetAddress(address: InetAddress): Boolean {
+    if (
+        address.isLoopbackAddress ||
+        address.isAnyLocalAddress ||
+        address.isLinkLocalAddress ||
+        address.isSiteLocalAddress ||
+        address.isMulticastAddress
+    ) {
+        return false
+    }
+    val hostAddr = address.hostAddress ?: return false
+    return isPublicAddress(hostAddr)
+}
+
+fun assertPublicHostResolution(
+    host: String,
+    allowPrivateAddresses: Boolean = false,
+    resolver: (String) -> Array<InetAddress> = { InetAddress.getAllByName(it) },
+) {
+    if (allowPrivateAddresses) return
+    val rawHost = host.lowercase().trim().trimEnd('.')
+    if (rawHost.isEmpty()) {
+        throw seraError(SeraErrorCode.INVALID_URL, detail = "empty host")
+    }
+    if (isBlockedLocalHostname(rawHost)) {
+        throw seraError(SeraErrorCode.BLOCKED_ADDRESS, detail = "blocked local host $rawHost")
+    }
+    val bare = if (rawHost.startsWith("[") && rawHost.endsWith("]")) {
+        rawHost.substring(1, rawHost.length - 1)
+    } else {
+        rawHost
+    }
+    if (isIpLiteral(rawHost)) {
+        if (!isPublicAddress(bare)) {
+            throw seraError(SeraErrorCode.BLOCKED_ADDRESS, detail = "non-public address $bare")
+        }
+        return
+    }
+    val addresses = try {
+        resolver(bare)
+    } catch (error: UnknownHostException) {
+        throw seraError(
+            SeraErrorCode.INVALID_URL,
+            message = "We couldn't find that site.",
+            hint = "Check the address and try again.",
+            detail = error.message,
+            cause = error,
+        )
+    }
+    if (addresses.isEmpty() || addresses.any { !isPublicInetAddress(it) }) {
+        throw seraError(SeraErrorCode.BLOCKED_ADDRESS, detail = "non-public dns resolution for $bare")
+    }
+}
+
+fun assertPublicUrlForExternalTool(
+    rawUrl: String,
+    allowPrivateAddresses: Boolean = false,
+    resolver: (String) -> Array<InetAddress> = { InetAddress.getAllByName(it) },
+) {
+    val parsed = parseUserUrl(rawUrl, allowPrivateAddresses = allowPrivateAddresses)
+    assertPublicHostResolution(
+        host = parsed.rawHost,
+        allowPrivateAddresses = allowPrivateAddresses,
+        resolver = resolver,
+    )
+}
+
+fun stableSourceId(raw: String, maxLen: Int = 200): String {
+    if (raw.length <= maxLen) return raw
+    val digest = MessageDigest.getInstance("SHA-256").digest(raw.toByteArray(Charsets.UTF_8))
+    val hex = digest.joinToString("") { "%02x".format(it) }
+    return "sha256:$hex".take(maxLen)
+}
+
 fun parseUserUrl(input: String, allowPrivateAddresses: Boolean = false): ParsedUrl {
     val trimmed = input.trim()
     if (trimmed.isEmpty()) {
@@ -476,14 +572,19 @@ fun parseUserUrl(input: String, allowPrivateAddresses: Boolean = false): ParsedU
 
     val normalizedBuilder = parsed.newBuilder().host(rawHost)
     val cleanHost = stripWww(rawHost)
-    if (!allowPrivateAddresses && isIpLiteral(rawHost)) {
-        val bare = if (rawHost.startsWith("[") && rawHost.endsWith("]")) {
-            rawHost.substring(1, rawHost.length - 1)
-        } else {
-            rawHost
+    if (!allowPrivateAddresses) {
+        if (isBlockedLocalHostname(rawHost)) {
+            throw seraError(SeraErrorCode.BLOCKED_ADDRESS, detail = "blocked local host $rawHost")
         }
-        if (!isPublicAddress(bare)) {
-            throw seraError(SeraErrorCode.BLOCKED_ADDRESS)
+        if (isIpLiteral(rawHost)) {
+            val bare = if (rawHost.startsWith("[") && rawHost.endsWith("]")) {
+                rawHost.substring(1, rawHost.length - 1)
+            } else {
+                rawHost
+            }
+            if (!isPublicAddress(bare)) {
+                throw seraError(SeraErrorCode.BLOCKED_ADDRESS)
+            }
         }
     }
     if (cleanHost != "mega.nz" && cleanHost != "mega.co.nz") {
@@ -545,13 +646,16 @@ fun validateProviderUrl(
     if (!allowPrivateAddresses && parsed.port !in ALLOWED_PORTS) return null
     val rawHost = parsed.host.lowercase().trimEnd('.')
     if (rawHost.isEmpty()) return null
-    if (!allowPrivateAddresses && isIpLiteral(rawHost)) {
-        val bare = if (rawHost.startsWith("[") && rawHost.endsWith("]")) {
-            rawHost.substring(1, rawHost.length - 1)
-        } else {
-            rawHost
+    if (!allowPrivateAddresses) {
+        if (isBlockedLocalHostname(rawHost)) return null
+        if (isIpLiteral(rawHost)) {
+            val bare = if (rawHost.startsWith("[") && rawHost.endsWith("]")) {
+                rawHost.substring(1, rawHost.length - 1)
+            } else {
+                rawHost
+            }
+            if (!isPublicAddress(bare)) return null
         }
-        if (!isPublicAddress(bare)) return null
     }
     val cleanHost = stripWww(rawHost)
     if (blockedHosts.isNotEmpty() && hostMatchesAny(cleanHost, blockedHosts)) return null

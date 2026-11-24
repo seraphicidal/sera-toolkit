@@ -449,7 +449,7 @@ class ThreadsExtractor(
             type = if (items.size > 1) "collection" else "single",
             title = text?.let { truncateText(it, 200) } ?: "Post by ${author ?: "a Threads account"}",
             description = text?.let { truncateText(it, 500) },
-            author = author,
+            author = author?.take(200),
             authorUrl = author?.let { "https://www.threads.com/$it" },
             thumbnailUrl = items.firstOrNull()?.thumbnailUrl,
             items = items,
@@ -462,7 +462,7 @@ class ThreadsExtractor(
 
     private fun threadsVideoItem(entry: ThreadsMediaEntry, index: Int): ResolvedItem {
         val parsed = entry.url.toHttpUrlOrNull()
-        val sourceId = parsed?.pathSegments?.lastOrNull { it.isNotEmpty() } ?: index.toString()
+        val sourceId = stableSourceId(parsed?.pathSegments?.lastOrNull { it.isNotEmpty() } ?: index.toString())
         val plans = listOf(
             ResolvedPlan(
                 kind = "video",
@@ -498,7 +498,7 @@ class ThreadsExtractor(
 
     private fun threadsImageItem(entry: ThreadsMediaEntry, index: Int): ResolvedItem {
         val parsed = entry.url.toHttpUrlOrNull()
-        val sourceId = parsed?.pathSegments?.lastOrNull { it.isNotEmpty() } ?: index.toString()
+        val sourceId = stableSourceId(parsed?.pathSegments?.lastOrNull { it.isNotEmpty() } ?: index.toString())
         val ext = parsed?.let { urlExtension(it) } ?: "jpg"
         val container = normalizeContainer(ext, "jpg")
         return ResolvedItem(
@@ -663,14 +663,14 @@ class BlueskyExtractor(
             val suffixExt = BLUESKY_SUFFIX_EXT_REGEX.find(fullsize)?.groupValues?.get(1).orEmpty()
             val detected = normalizeContainer(suffixExt.ifEmpty { pathExt.ifEmpty { "jpg" } }, "bin")
             val container = if (detected == "bin") "jpg" else detected
-            val width = image.aspectRatio?.width
-            val height = image.aspectRatio?.height
+            val width = image.aspectRatio?.width?.takeIf { it > 0 }
+            val height = image.aspectRatio?.height?.takeIf { it > 0 }
             val dimText = if (width != null && height != null) "$width \u00d7 $height" else null
             val safeThumb = image.thumb?.takeIf {
                 it.startsWith("https://") && validateProviderUrl(it, allowPrivateAddresses = allowPrivate) != null
             } ?: fullsize
             ResolvedItem(
-                sourceId = fullsize.substringAfterLast('/').ifEmpty { index.toString() },
+                sourceId = stableSourceId(fullsize.substringAfterLast('/').ifEmpty { index.toString() }),
                 index = index,
                 kind = "image",
                 title = image.alt?.trim()?.takeIf { it.isNotEmpty() }?.let { truncateText(it, 120) } ?: "Image ${index + 1}",
@@ -703,7 +703,7 @@ class BlueskyExtractor(
             type = if (items.size > 1) "collection" else "single",
             title = title,
             description = text.takeIf { it.isNotEmpty() }?.let { truncateText(it, 500) },
-            author = author,
+            author = author?.take(200),
             thumbnailUrl = items.firstOrNull()?.thumbnailUrl,
             items = items,
             metadata = mapOf("images" to JsonPrimitive(images.size.toString())),
@@ -919,7 +919,7 @@ class MastodonExtractor(
             type = if (items.size > 1) "collection" else "single",
             title = if (text.isNotEmpty()) truncateText(text, 200) else "Post by ${author ?: "a fediverse account"}",
             description = text.takeIf { it.isNotEmpty() }?.let { truncateText(it, 500) },
-            author = author,
+            author = author?.take(200),
             thumbnailUrl = items.firstOrNull()?.thumbnailUrl,
             items = items,
             metadata = mapOf("attachments" to JsonPrimitive(attachments.size.toString())),
@@ -940,9 +940,9 @@ class MastodonExtractor(
         val attachmentUrl = attachment.url!!
         val ext = attachmentUrl.toHttpUrlOrNull()?.let { urlExtension(it) }.orEmpty()
         val container = normalizeContainer(ext, "bin")
-        val width = attachment.meta?.original?.width
-        val height = attachment.meta?.original?.height
-        val duration = attachment.meta?.original?.duration
+        val width = attachment.meta?.original?.width?.takeIf { it > 0 }
+        val height = attachment.meta?.original?.height?.takeIf { it > 0 }
+        val duration = attachment.meta?.original?.duration?.takeIf { it.isFinite() && it >= 0.0 }
         val dimText = if (width != null && height != null) "$width \u00d7 $height" else null
 
         val plans = ArrayList<ResolvedPlan>()
@@ -994,7 +994,7 @@ class MastodonExtractor(
         }
 
         return ResolvedItem(
-            sourceId = attachment.id ?: index.toString(),
+            sourceId = stableSourceId(attachment.id ?: index.toString()),
             index = index,
             kind = kind,
             title = nonEmpty(attachment.description)?.let { truncateText(it, 120) } ?: "Attachment ${index + 1}",

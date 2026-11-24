@@ -6,7 +6,7 @@ import { hostMatches, hostMatchesAny, parseUserUrl, urlExtension } from '../secu
 import { sanitizeStem } from '../util/filename.js';
 import { formatBytes } from '../util/format.js';
 import { declare } from './capabilities.js';
-import { classify, normalizeContainer } from './direct.js';
+import { classify, normalizeContainer, probeHeadOrRange } from './direct.js';
 import type {
   DownloadPlan,
   MediaProvider,
@@ -102,6 +102,26 @@ const BLOCKED_CLOUD_CONTENT_TYPES = new Set([
   'text/javascript',
   'application/xml',
   'text/xml',
+  'application/x-msdownload',
+  'application/x-msdos-program',
+  'application/x-executable',
+  'application/vnd.microsoft.portable-executable',
+  'application/vnd.android.package-archive',
+  'application/x-apple-diskimage',
+]);
+
+const BLOCKED_CLOUD_EXTENSIONS = new Set([
+  'exe',
+  'apk',
+  'dmg',
+  'msi',
+  'bat',
+  'cmd',
+  'sh',
+  'dll',
+  'so',
+  'dylib',
+  'elf',
 ]);
 
 function buildCloudMedia(options: {
@@ -135,9 +155,15 @@ function buildCloudMedia(options: {
       urlExtension(new URL(options.downloadUrl)) ??
       '';
   } catch {}
+  if (BLOCKED_CLOUD_EXTENSIONS.has(ext)) {
+    throw seraError('UNSUPPORTED_SOURCE', {
+      message: 'Executable files are not supported.',
+      detail: `${options.providerId}: blocked executable extension .${ext}`,
+    });
+  }
 
   const classified = classify(contentType, ext);
-  const kind: Exclude<MediaKind, 'unknown'> = classified === 'unknown' ? 'image' : classified;
+  const kind: Exclude<MediaKind, 'unknown'> = classified === 'unknown' ? 'file' : classified;
   const container: ContainerFormat = normalizeContainer(contentType, ext);
   const stem = options.filename.replace(/\.[^.]+$/, '');
   const title = sanitizeStem(stem, options.providerLabel);
@@ -260,7 +286,7 @@ export class GoogleDriveProvider implements MediaProvider {
     downloadTarget.searchParams.set('export', 'download');
     downloadTarget.searchParams.set('confirm', 't');
 
-    let head = await context.head(downloadTarget);
+    let head = await probeHeadOrRange(downloadTarget, context);
     if (head.status >= 400) {
       throw seraError(head.status === 404 ? 'MEDIA_UNAVAILABLE' : 'NETWORK_ERROR', {
         detail: `gdrive HEAD ${head.status}`,
@@ -279,7 +305,7 @@ export class GoogleDriveProvider implements MediaProvider {
         });
       }
       downloadTarget = confirmed;
-      head = await context.head(downloadTarget);
+      head = await probeHeadOrRange(downloadTarget, context);
       if (head.status >= 400) {
         throw seraError(head.status === 404 ? 'MEDIA_UNAVAILABLE' : 'NETWORK_ERROR', {
           detail: `gdrive confirmed HEAD ${head.status}`,
@@ -331,7 +357,7 @@ export class DropboxProvider implements MediaProvider {
 
   async resolve(url: URL, context: ProviderContext): Promise<ResolvedMedia> {
     const normalized = this.normalize(url);
-    const head = await context.head(normalized);
+    const head = await probeHeadOrRange(normalized, context);
     if (head.status >= 400) {
       throw seraError(head.status === 404 ? 'MEDIA_UNAVAILABLE' : 'NETWORK_ERROR', {
         detail: `dropbox HEAD ${head.status}`,
@@ -394,7 +420,7 @@ export class MediaFireProvider implements MediaProvider {
       context.allowUrl?.(directUrl);
     }
 
-    const head = await context.head(directUrl);
+    const head = await probeHeadOrRange(directUrl, context);
     if (head.status >= 400) {
       throw seraError(head.status === 404 ? 'MEDIA_UNAVAILABLE' : 'NETWORK_ERROR', {
         detail: `mediafire HEAD ${head.status}`,

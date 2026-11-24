@@ -18,11 +18,17 @@ val SeraJson = Json {
 const val DEFAULT_INSTAGRAM_USER_AGENT =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
+val VALID_TASK_ID_REGEX = Regex("^[A-Za-z0-9_-]{1,64}$")
+
+fun isValidTaskId(taskId: String): Boolean = VALID_TASK_ID_REGEX.matches(taskId)
+
 enum class NetworkTransport(val wireValue: String, val displayLabel: String) {
     WIFI("wifi", "Wi-Fi"),
     CELLULAR("cellular", "Cellular"),
     OTHER("other", "Network"),
     NONE("none", "Offline");
+
+    fun wireValueOrNull(): String? = if (this == NONE) null else wireValue
 }
 
 data class NetworkState(
@@ -118,6 +124,8 @@ data class ProgressRequest(
     val step: String,
     val bytesDownloaded: Long? = null,
     val bytesTotal: Long? = null,
+    val speedBytesPerSecond: Double? = null,
+    val etaSeconds: Double? = null,
 )
 
 @Serializable
@@ -342,6 +350,8 @@ data class TaskProgress(
     val step: String,
     val bytesDownloaded: Long? = null,
     val bytesTotal: Long? = null,
+    val speedBytesPerSecond: Double? = null,
+    val etaSeconds: Double? = null,
 )
 
 data class ProducedFile(

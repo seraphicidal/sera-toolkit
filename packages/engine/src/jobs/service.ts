@@ -115,15 +115,15 @@ export class JobService {
       let rawInfoJson: string | undefined;
       let resolvedAt: number | undefined;
 
-      if (!info.m) {
+      if (!info.m && backend.driver !== 'redis') {
         const cached = resolver.getCached(info.p, info.u);
         if (cached) {
           try {
             const mediaJson = JSON.stringify(cached.media);
-            if (mediaJson.length <= 1024 * 1024) {
+            if (mediaJson.length <= 512 * 1024) {
               resolvedMedia = cached.media;
               resolvedAt = cached.resolvedAt ?? Date.now();
-              if (cached.rawInfoJson && cached.rawInfoJson.length <= 1024 * 1024) {
+              if (cached.rawInfoJson && cached.rawInfoJson.length <= 512 * 1024) {
                 rawInfoJson = cached.rawInfoJson;
               }
             }
@@ -278,6 +278,11 @@ export class JobService {
     let settled = true;
     if (!isTerminalJobState(record.state)) {
       settled = await this.abortAndWait(id);
+    } else if (record.state === 'ready') {
+      await this.deps.backend.patch(id, {
+        state: 'expired',
+        step: 'Expired',
+      });
     }
     if (settled && isLocalOrIdle) {
       await this.deps.workspaces.destroy(id);
@@ -435,8 +440,11 @@ export class JobService {
       if (trailingTimer) clearTimeout(trailingTimer);
       pending = undefined;
       await inFlightFlush;
+      if (cancelController.signal.aborted) {
+        throw seraError('CANCELLED');
+      }
       const totalFiles = record.spec.selections.length;
-      await backend.patch(record.id, {
+      const completed = await backend.patch(record.id, {
         state: 'ready',
         step: 'Ready',
         progress: {
@@ -445,7 +453,11 @@ export class JobService {
         },
         result,
       });
-      this.count(record, { ok: true });
+      if (completed?.state !== 'ready') {
+        await workspaces.destroy(record.id).catch(() => undefined);
+      } else {
+        this.count(record, { ok: true });
+      }
     } catch (error) {
       if (trailingTimer) clearTimeout(trailingTimer);
       pending = undefined;

@@ -12,6 +12,7 @@ import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import androidx.core.app.ServiceCompat
+import androidx.core.content.ContextCompat
 import dev.sera.node.BuildConfig
 import dev.sera.node.ServiceLocator
 import dev.sera.node.data.ClaimOutcome
@@ -27,11 +28,14 @@ import dev.sera.node.model.ProgressRequest
 import dev.sera.node.model.RemoteTask
 import dev.sera.node.model.TaskExecutionOutcome
 import dev.sera.node.model.TaskProgress
+import dev.sera.node.model.isValidTaskId
 import dev.sera.node.updater.UpdateCoordinator
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -43,6 +47,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.Call
 import java.io.File
@@ -55,12 +60,18 @@ class NodeForegroundService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val isPaused = AtomicBoolean(false)
     private val isCharging = AtomicBoolean(false)
+    private val stoppedDueToAuthError = AtomicBoolean(false)
+    private val latestSettingsRef = AtomicReference<NodeSettings?>(null)
     private val activeClaimCall = AtomicReference<Call?>(null)
     private val activeTasks = ConcurrentHashMap<String, Job>()
     private val wakeSignal = Channel<Unit>(Channel.CONFLATED)
 
+    private val powerLock = Any()
+    private val notificationLock = Any()
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
+    private var lastNotificationAtMs = 0L
+    private var notificationRefreshJob: Job? = null
     private var mainLoopJob: Job? = null
     private var periodicUpdateJob: Job? = null
     private var batteryReceiverRegistered = false
@@ -68,25 +79,36 @@ class NodeForegroundService : Service() {
     private val batteryReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             refreshChargingState(intent)
+            if (!isCharging.get() && latestSettingsRef.get()?.onlyWhileCharging == true) {
+                activeClaimCall.get()?.cancel()
+            }
             signalLoopWake()
         }
     }
 
     override fun onCreate() {
         super.onCreate()
+        stoppedDueToAuthError.set(false)
         val notifications = ServiceLocator.notificationManager(this)
         val tracker = ServiceLocator.runtimeTracker()
         notifications.ensureChannels()
         val initialSnapshot = tracker.snapshot.value.copy(
             serviceState = NodeServiceState.STARTING,
+            isServiceRunning = true,
             startedAtMs = System.currentTimeMillis(),
+            lastError = null,
+            authFailureCount = 0,
         )
         tracker.update { initialSnapshot }
         startForegroundWithType(notifications.buildStatusNotification(initialSnapshot, 0L, isPaused = false))
 
         ServiceLocator.connectivityMonitor(this).start()
         registerBatteryObserver()
-        acquireWakeLock()
+        serviceScope.launch(Dispatchers.IO) {
+            if (activeTasks.isEmpty()) {
+                runCatching { File(cacheDir, "work").deleteRecursively() }
+            }
+        }
         observeNetworkAndSettings()
         startMainLoops()
     }
@@ -94,9 +116,11 @@ class NodeForegroundService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
+                stoppedDueToAuthError.set(false)
                 serviceScope.launch {
-                    ServiceLocator.preferences(this@NodeForegroundService)
-                        .setServiceEnabled(enabled = false, explicitStop = true)
+                    val prefs = ServiceLocator.preferences(this@NodeForegroundService)
+                    prefs.setServiceEnabled(enabled = false, explicitStop = true)
+                    prefs.setServicePaused(false)
                     stopSelf()
                 }
                 return START_NOT_STICKY
@@ -104,17 +128,24 @@ class NodeForegroundService : Service() {
 
             ACTION_PAUSE -> {
                 isPaused.set(true)
+                serviceScope.launch {
+                    ServiceLocator.preferences(this@NodeForegroundService).setServicePaused(true)
+                }
                 activeClaimCall.get()?.cancel()
-                releaseWifiLock()
+                syncPowerLocks()
                 signalLoopWake()
-                refreshNotification()
+                refreshNotification(immediate = true)
                 return START_STICKY
             }
 
             ACTION_RESUME -> {
                 isPaused.set(false)
+                serviceScope.launch {
+                    ServiceLocator.preferences(this@NodeForegroundService).setServicePaused(false)
+                }
+                syncPowerLocks()
                 signalLoopWake()
-                refreshNotification()
+                refreshNotification(immediate = true)
                 return START_STICKY
             }
 
@@ -122,18 +153,33 @@ class NodeForegroundService : Service() {
                 serviceScope.launch {
                     ServiceLocator.updateCoordinator(this@NodeForegroundService)
                         .checkAndApplyUpdates(force = true, allowAppInstall = true)
-                    refreshNotification()
+                    refreshNotification(immediate = true)
                 }
                 return START_STICKY
             }
 
-            else -> {
+            ACTION_START -> {
+                stoppedDueToAuthError.set(false)
                 isPaused.set(false)
                 serviceScope.launch {
-                    ServiceLocator.preferences(this@NodeForegroundService)
-                        .setServiceEnabled(enabled = true, explicitStop = false)
+                    val prefs = ServiceLocator.preferences(this@NodeForegroundService)
+                    prefs.setServiceEnabled(enabled = true, explicitStop = false)
+                    prefs.setServicePaused(false)
                 }
                 signalLoopWake()
+                refreshNotification(immediate = true)
+                return START_STICKY
+            }
+
+            else -> {
+                serviceScope.launch {
+                    val current = ServiceLocator.preferences(this@NodeForegroundService).current()
+                    latestSettingsRef.set(current)
+                    isPaused.set(current.servicePaused)
+                    syncPowerLocks()
+                    signalLoopWake()
+                    refreshNotification(immediate = true)
+                }
                 return START_STICKY
             }
         }
@@ -145,13 +191,15 @@ class NodeForegroundService : Service() {
         activeClaimCall.get()?.cancel()
         mainLoopJob?.cancel()
         periodicUpdateJob?.cancel()
+        synchronized(notificationLock) {
+            notificationRefreshJob?.cancel()
+            notificationRefreshJob = null
+        }
         activeTasks.values.forEach { it.cancel() }
         activeTasks.clear()
         unregisterBatteryObserver()
-        releaseWifiLock()
-        releaseWakeLock()
-        ServiceLocator.connectivityMonitor(this).stop()
-        ServiceLocator.runtimeTracker().resetStopped()
+        releaseAllPowerLocks()
+        ServiceLocator.runtimeTracker().resetStopped(preserveAuthError = stoppedDueToAuthError.get())
         serviceScope.cancel()
         super.onDestroy()
     }
@@ -183,7 +231,7 @@ class NodeForegroundService : Service() {
                         isConnected = net.isConnected,
                     )
                 }
-                syncWifiLock(net.transport == NetworkTransport.WIFI && net.isConnected && !isPaused.get())
+                syncPowerLocks()
                 refreshNotification()
                 signalLoopWake()
             }
@@ -199,12 +247,29 @@ class NodeForegroundService : Service() {
         }
 
         serviceScope.launch {
-            preferences.settings.collectLatest {
+            preferences.settings.collectLatest { updated ->
+                val previous = latestSettingsRef.getAndSet(updated)
+                if (previous != null && claimRelevantSettingsChanged(previous, updated)) {
+                    activeClaimCall.get()?.cancel()
+                }
                 refreshNotification()
                 signalLoopWake()
             }
         }
     }
+
+    private fun claimRelevantSettingsChanged(prev: NodeSettings, next: NodeSettings): Boolean =
+        prev.apiBaseUrl != next.apiBaseUrl ||
+            prev.nodeToken != next.nodeToken ||
+            prev.nodeId != next.nodeId ||
+            prev.enableYoutube != next.enableYoutube ||
+            prev.enableInstagram != next.enableInstagram ||
+            prev.enableAllProviders != next.enableAllProviders ||
+            prev.preferredCapacity != next.preferredCapacity ||
+            prev.allowWifi != next.allowWifi ||
+            prev.allowCellular != next.allowCellular ||
+            prev.onlyWhileCharging != next.onlyWhileCharging ||
+            prev.instagramSessionId != next.instagramSessionId
 
     private fun startMainLoops() {
         val logStore = ServiceLocator.logStore(this)
@@ -258,6 +323,7 @@ class NodeForegroundService : Service() {
                 )
 
                 if (blocked != null) {
+                    syncPowerLocks()
                     val activeState = if (activeTasks.isNotEmpty()) NodeServiceState.RUNNING_TASK else blocked
                     tracker.update {
                         it.copy(
@@ -294,15 +360,15 @@ class NodeForegroundService : Service() {
                 refreshNotification()
 
                 val claimReq = ClaimRequest(
-                    nodeId = settings.nodeId.ifBlank { "android-node" },
+                    nodeId = settings.nodeId.ifBlank { "android-node" }.take(64),
                     providers = activeProviders,
                     capacity = capacity,
                     networkClass = "residential",
                     features = NodeServicePolicy.buildNodeFeatures(settings.instagramSessionId),
-                    transport = netState.transport.wireValue,
-                    appVersion = BuildConfig.VERSION_NAME,
-                    ytdlpVersion = toolsInfo?.ytdlpVersion,
-                    ffmpegVersion = toolsInfo?.ffmpegVersion,
+                    transport = netState.transport.wireValueOrNull(),
+                    appVersion = BuildConfig.VERSION_NAME.take(64),
+                    ytdlpVersion = toolsInfo?.ytdlpVersion?.take(64),
+                    ffmpegVersion = toolsInfo?.ffmpegVersion?.take(64),
                 )
 
                 try {
@@ -314,7 +380,14 @@ class NodeForegroundService : Service() {
                     )
                     consecutiveErrors = 0
                     authFailures = 0
-                    tracker.update { it.copy(authFailureCount = 0, lastError = null) }
+                    val pollNow = System.currentTimeMillis()
+                    tracker.update {
+                        it.copy(
+                            authFailureCount = 0,
+                            lastError = null,
+                            lastPollSuccessAtMs = pollNow,
+                        )
+                    }
 
                     when (outcome) {
                         is ClaimOutcome.NoTask -> {
@@ -347,9 +420,10 @@ class NodeForegroundService : Service() {
                             lastError = "Authentication rejected (${authError.statusCode}). Verify Node Token.",
                         )
                     }
-                    refreshNotification()
+                    refreshNotification(immediate = true)
                     if (authFailures >= NodeServicePolicy.MAX_AUTH_FAILURES) {
                         logStore.error("NODE", "Stopping node after repeated authentication rejections")
+                        stoppedDueToAuthError.set(true)
                         preferences.setServiceEnabled(enabled = false, explicitStop = false)
                         stopSelf()
                         break
@@ -374,20 +448,34 @@ class NodeForegroundService : Service() {
 
     private fun launchTaskExecution(task: RemoteTask, settings: NodeSettings) {
         val logStore = ServiceLocator.logStore(this)
+        if (!isValidTaskId(task.id)) {
+            logStore.error("NODE", "Rejected task with invalid id: ${task.id.take(16)}")
+            return
+        }
+        val workBase = File(cacheDir, "work").canonicalFile
+        val workRoot = File(workBase, task.id).canonicalFile
+        val basePrefix = workBase.path.trimEnd(File.separatorChar) + File.separatorChar
+        if (!workRoot.path.startsWith(basePrefix)) {
+            logStore.error("NODE", "Rejected unsafe workspace path for task ${task.id.take(16)}")
+            return
+        }
+
         val tracker = ServiceLocator.runtimeTracker()
         val apiClient = ServiceLocator.apiClient(this)
         val taskRunner = ServiceLocator.taskRunner(this)
         val preferences = ServiceLocator.preferences(this)
         val connectivity = ServiceLocator.connectivityMonitor(this)
 
-        val job = serviceScope.launch {
-            val workRoot = File(cacheDir, "work/${task.id}")
+        val job = serviceScope.launch(start = CoroutineStart.LAZY) {
             val runtimeConfig = settings.toRuntimeConfig(workRoot.absolutePath)
             val currentPercent = AtomicReference(0.0)
             val currentStep = AtomicReference("Working")
             val currentBytesDown = AtomicReference<Long?>(null)
             val currentBytesTotal = AtomicReference<Long?>(null)
+            val currentSpeed = AtomicReference<Double?>(null)
+            val currentEta = AtomicReference<Double?>(null)
             val lastProgressSentAt = AtomicLong(0L)
+            val progressInFlight = AtomicBoolean(false)
             val cancelledByServer = AtomicBoolean(false)
 
             tracker.upsertTask(
@@ -400,7 +488,7 @@ class NodeForegroundService : Service() {
                 ),
             )
             tracker.update { it.copy(serviceState = NodeServiceState.RUNNING_TASK) }
-            refreshNotification()
+            refreshNotification(immediate = true)
             logStore.info("NODE", "Claimed ${task.kind} task ${task.id.take(8)} (${task.providerId})")
 
             val selfJob = coroutineContext[Job]!!
@@ -410,41 +498,54 @@ class NodeForegroundService : Service() {
                 step: String,
                 bytesDown: Long?,
                 bytesTotal: Long?,
+                speedBytesPerSecond: Double?,
+                etaSeconds: Double?,
             ): Boolean {
                 if (cancelledByServer.get()) return false
-                lastProgressSentAt.set(System.currentTimeMillis())
-                val response = runCatching {
-                    apiClient.reportProgress(
-                        baseUrl = settings.apiBaseUrl,
-                        token = settings.nodeToken,
-                        taskId = task.id,
-                        progress = ProgressRequest(
-                            percent = percent.coerceIn(0.0, 100.0),
-                            step = step.ifBlank { "Working" },
-                            bytesDownloaded = bytesDown,
-                            bytesTotal = bytesTotal,
-                        ),
-                    )
-                }.getOrNull()
+                if (!progressInFlight.compareAndSet(false, true)) return true
+                try {
+                    lastProgressSentAt.set(System.currentTimeMillis())
+                    val response = runCatching {
+                        apiClient.reportProgress(
+                            baseUrl = settings.apiBaseUrl,
+                            token = settings.nodeToken,
+                            taskId = task.id,
+                            progress = ProgressRequest(
+                                percent = percent.coerceIn(0.0, 100.0),
+                                step = step.ifBlank { "Working" }.take(120),
+                                bytesDownloaded = bytesDown,
+                                bytesTotal = bytesTotal,
+                                speedBytesPerSecond = speedBytesPerSecond?.takeIf { it.isFinite() && it >= 0.0 },
+                                etaSeconds = etaSeconds?.takeIf { it.isFinite() && it >= 0.0 },
+                            ),
+                        )
+                    }.getOrNull()
 
-                if (response?.cancelled == true) {
-                    cancelledByServer.set(true)
-                    logStore.warn("NODE", "Server cancelled task ${task.id.take(8)}")
-                    selfJob.cancel(CancellationException("Server cancelled task"))
-                    return false
+                    if (response?.cancelled == true) {
+                        cancelledByServer.set(true)
+                        logStore.warn("NODE", "Server cancelled task ${task.id.take(8)}")
+                        selfJob.cancel(CancellationException("Server cancelled task"))
+                        return false
+                    }
+                    return true
+                } finally {
+                    progressInFlight.set(false)
                 }
-                return true
             }
 
             val heartbeatJob = launch {
                 while (isActive && !cancelledByServer.get()) {
                     delay(NodeServicePolicy.PROGRESS_HEARTBEAT_MS)
-                    pushProgressNow(
-                        currentPercent.get(),
-                        currentStep.get(),
-                        currentBytesDown.get(),
-                        currentBytesTotal.get(),
-                    )
+                    if (System.currentTimeMillis() - lastProgressSentAt.get() >= NodeServicePolicy.PROGRESS_HEARTBEAT_MS) {
+                        pushProgressNow(
+                            currentPercent.get(),
+                            currentStep.get(),
+                            currentBytesDown.get(),
+                            currentBytesTotal.get(),
+                            currentSpeed.get(),
+                            currentEta.get(),
+                        )
+                    }
                 }
             }
 
@@ -456,6 +557,8 @@ class NodeForegroundService : Service() {
                     currentPercent.set(update.percent)
                     currentBytesDown.set(update.bytesDownloaded)
                     currentBytesTotal.set(update.bytesTotal)
+                    currentSpeed.set(update.speedBytesPerSecond)
+                    currentEta.set(update.etaSeconds)
 
                     tracker.upsertTask(
                         ActiveTaskInfo(
@@ -466,13 +569,22 @@ class NodeForegroundService : Service() {
                             percent = update.percent,
                             bytesDownloaded = update.bytesDownloaded,
                             bytesTotal = update.bytesTotal,
+                            speedBytesPerSecond = update.speedBytesPerSecond,
+                            etaSeconds = update.etaSeconds,
                         ),
                     )
                     refreshNotification()
 
                     val now = System.currentTimeMillis()
                     if (prevStep != update.step || now - lastProgressSentAt.get() >= NodeServicePolicy.PROGRESS_THROTTLE_MS) {
-                        pushProgressNow(update.percent, update.step, update.bytesDownloaded, update.bytesTotal)
+                        pushProgressNow(
+                            update.percent,
+                            update.step,
+                            update.bytesDownloaded,
+                            update.bytesTotal,
+                            update.speedBytesPerSecond,
+                            update.etaSeconds,
+                        )
                     } else {
                         true
                     }
@@ -498,6 +610,8 @@ class NodeForegroundService : Service() {
                         try {
                             val totalBytes = outcome.files.sumOf { it.sizeBytes }
                             val uploadedCounter = AtomicLong(0L)
+                            val uploadStartedNs = System.nanoTime()
+                            val lastUploadUiAtMs = AtomicLong(0L)
                             onProgress(TaskProgress(85.0, "Uploading", 0L, totalBytes))
 
                             val semaphore = Semaphore(2)
@@ -513,17 +627,49 @@ class NodeForegroundService : Service() {
                                             logStore = logStore,
                                             isCancelled = { cancelledByServer.get() },
                                         ) { delta ->
-                                            val totalUploaded = uploadedCounter.addAndGet(delta)
+                                            val totalUploaded = uploadedCounter.addAndGet(delta).coerceAtLeast(0L)
                                             val frac = if (totalBytes > 0L) {
-                                                totalUploaded.toDouble() / totalBytes.toDouble()
+                                                (totalUploaded.toDouble() / totalBytes.toDouble()).coerceIn(0.0, 1.0)
                                             } else {
                                                 1.0
                                             }
                                             val pct = (85.0 + frac * 14.0).coerceIn(85.0, 99.0)
+                                            val elapsedSec = (System.nanoTime() - uploadStartedNs) / 1_000_000_000.0
+                                            val speed = if (elapsedSec > 0.25 && totalUploaded > 0L) {
+                                                totalUploaded.toDouble() / elapsedSec
+                                            } else {
+                                                null
+                                            }
+                                            val eta = if (speed != null && speed > 0.0 && totalBytes > totalUploaded) {
+                                                (totalBytes - totalUploaded).toDouble() / speed
+                                            } else {
+                                                null
+                                            }
                                             currentPercent.set(pct)
                                             currentStep.set("Uploading")
                                             currentBytesDown.set(totalUploaded)
                                             currentBytesTotal.set(totalBytes)
+                                            currentSpeed.set(speed)
+                                            currentEta.set(eta)
+
+                                            val nowMs = System.currentTimeMillis()
+                                            val prevUi = lastUploadUiAtMs.get()
+                                            if (nowMs - prevUi >= UPLOAD_UI_THROTTLE_MS && lastUploadUiAtMs.compareAndSet(prevUi, nowMs)) {
+                                                tracker.upsertTask(
+                                                    ActiveTaskInfo(
+                                                        taskId = task.id,
+                                                        kind = task.kind,
+                                                        providerId = task.providerId,
+                                                        step = "Uploading",
+                                                        percent = pct,
+                                                        bytesDownloaded = totalUploaded,
+                                                        bytesTotal = totalBytes,
+                                                        speedBytesPerSecond = speed,
+                                                        etaSeconds = eta,
+                                                    ),
+                                                )
+                                                refreshNotification()
+                                            }
                                         }
                                     }
                                 }
@@ -536,7 +682,9 @@ class NodeForegroundService : Service() {
                             logStore.info("NODE", "Completed job task ${task.id.take(8)} (${outcome.files.size} files)")
                         } finally {
                             outcome.cleanupDirPath?.let { path ->
-                                runCatching { File(path).deleteRecursively() }
+                                withContext(NonCancellable + Dispatchers.IO) {
+                                    runCatching { File(path).deleteRecursively() }
+                                }
                             }
                         }
                     }
@@ -550,8 +698,8 @@ class NodeForegroundService : Service() {
                                 taskId = task.id,
                                 failure = FailedRequest(
                                     code = outcome.code,
-                                    message = outcome.message,
-                                    detail = outcome.detail,
+                                    message = outcome.message?.take(500),
+                                    detail = outcome.detail?.take(2_000),
                                 ),
                             )
                         }
@@ -586,23 +734,28 @@ class NodeForegroundService : Service() {
                         taskId = task.id,
                         failure = FailedRequest(
                             code = "PROVIDER_UNAVAILABLE",
-                            message = error.message ?: "Task failed",
-                            detail = error.javaClass.simpleName,
+                            message = (error.message ?: "Task failed").take(500),
+                            detail = error.javaClass.simpleName.take(2_000),
                         ),
                     )
                 }
                 preferences.recordTaskFailed()
             } finally {
                 heartbeatJob.cancel()
-                runCatching { workRoot.deleteRecursively() }
+                withContext(NonCancellable + Dispatchers.IO) {
+                    runCatching { workRoot.deleteRecursively() }
+                }
                 tracker.removeTask(task.id)
-                activeTasks.remove(task.id)
-                refreshNotification()
+                activeTasks.remove(task.id, selfJob)
+                syncPowerLocks()
+                refreshNotification(immediate = true)
                 signalLoopWake()
             }
         }
 
         activeTasks[task.id] = job
+        syncPowerLocks()
+        job.start()
         signalLoopWake()
     }
 
@@ -617,7 +770,7 @@ class NodeForegroundService : Service() {
         onBytesDelta: (Long) -> Unit,
     ) {
         val file = File(produced.filePath)
-        val fileSize = file.length()
+        val fileSize = withContext(Dispatchers.IO) { file.length() }
         var lastError: Exception? = null
         var nextOffset = 0L
         var reportedUploaded = 0L
@@ -643,6 +796,10 @@ class NodeForegroundService : Service() {
                         }
                     } else {
                         nextOffset = 0L
+                        if (reportedUploaded != 0L) {
+                            onBytesDelta(-reportedUploaded)
+                            reportedUploaded = 0L
+                        }
                     }
                 }
             }
@@ -682,8 +839,8 @@ class NodeForegroundService : Service() {
                 )
                 withTimeoutOrNull(20_000L) {
                     connectivity.awaitAllowedNetwork(
-                        allowWifi = { settings.allowWifi },
-                        allowCellular = { settings.allowCellular },
+                        allowWifi = { latestSettingsRef.get()?.allowWifi ?: settings.allowWifi },
+                        allowCellular = { latestSettingsRef.get()?.allowCellular ?: settings.allowCellular },
                     )
                 }
                 delay(1_000L * attempt)
@@ -692,14 +849,34 @@ class NodeForegroundService : Service() {
         throw lastError ?: IllegalStateException("Upload failed")
     }
 
-    private fun refreshNotification() {
-        serviceScope.launch {
-            val prefs = runCatching { ServiceLocator.preferences(this@NodeForegroundService).current() }.getOrNull()
-            val tracker = ServiceLocator.runtimeTracker()
-            val total = (prefs?.completedTasksCount ?: 0L)
-            ServiceLocator.notificationManager(this@NodeForegroundService)
-                .updateStatusNotification(tracker.snapshot.value, total, isPaused.get())
+    private fun refreshNotification(immediate: Boolean = false) {
+        val now = System.currentTimeMillis()
+        synchronized(notificationLock) {
+            val elapsed = now - lastNotificationAtMs
+            if (immediate || elapsed >= NOTIFICATION_THROTTLE_MS) {
+                notificationRefreshJob?.cancel()
+                notificationRefreshJob = null
+                lastNotificationAtMs = now
+                postNotificationNow()
+            } else if (notificationRefreshJob == null || notificationRefreshJob?.isActive != true) {
+                val waitMs = (NOTIFICATION_THROTTLE_MS - elapsed).coerceAtLeast(50L)
+                notificationRefreshJob = serviceScope.launch {
+                    delay(waitMs)
+                    synchronized(notificationLock) {
+                        lastNotificationAtMs = System.currentTimeMillis()
+                        notificationRefreshJob = null
+                        postNotificationNow()
+                    }
+                }
+            }
         }
+    }
+
+    private fun postNotificationNow() {
+        val tracker = ServiceLocator.runtimeTracker()
+        val total = latestSettingsRef.get()?.completedTasksCount ?: 0L
+        ServiceLocator.notificationManager(this)
+            .updateStatusNotification(tracker.snapshot.value, total, isPaused.get())
     }
 
     private fun signalLoopWake() {
@@ -740,15 +917,42 @@ class NodeForegroundService : Service() {
         ServiceLocator.runtimeTracker().update { it.copy(isCharging = chargingNow) }
     }
 
-    private fun acquireWakeLock() {
-        val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
-        val lock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "sera-node:worker")
-        lock.setReferenceCounted(false)
-        lock.acquire()
-        wakeLock = lock
+    private fun syncPowerLocks() {
+        val hasActiveWork = activeTasks.isNotEmpty()
+        val net = ServiceLocator.connectivityMonitor(this).networkState.value
+        val needWifiLock = hasActiveWork && net.isConnected && net.transport == NetworkTransport.WIFI
+        synchronized(powerLock) {
+            if (hasActiveWork) {
+                acquireOrRenewWakeLockLocked()
+            } else {
+                releaseWakeLockLocked()
+            }
+            if (needWifiLock) {
+                acquireWifiLockLocked()
+            } else {
+                releaseWifiLockLocked()
+            }
+        }
     }
 
-    private fun releaseWakeLock() {
+    private fun releaseAllPowerLocks() {
+        synchronized(powerLock) {
+            releaseWifiLockLocked()
+            releaseWakeLockLocked()
+        }
+    }
+
+    private fun acquireOrRenewWakeLockLocked() {
+        val lock = wakeLock ?: run {
+            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+            powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "sera-node:worker").apply {
+                setReferenceCounted(false)
+            }.also { wakeLock = it }
+        }
+        runCatching { lock.acquire(WAKE_LOCK_TIMEOUT_MS) }
+    }
+
+    private fun releaseWakeLockLocked() {
         runCatching {
             if (wakeLock?.isHeld == true) {
                 wakeLock?.release()
@@ -757,29 +961,25 @@ class NodeForegroundService : Service() {
         wakeLock = null
     }
 
-    private fun syncWifiLock(needed: Boolean) {
-        if (needed) {
-            if (wifiLock == null) {
-                val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-                val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    WifiManager.WIFI_MODE_FULL_LOW_LATENCY
-                } else {
-                    @Suppress("DEPRECATION")
-                    WifiManager.WIFI_MODE_FULL_HIGH_PERF
-                }
-                wifiLock = wifiManager.createWifiLock(mode, "sera-node:wifi").apply {
-                    setReferenceCounted(false)
-                }
+    private fun acquireWifiLockLocked() {
+        val lock = wifiLock ?: run {
+            val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+            val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+            } else {
+                @Suppress("DEPRECATION")
+                WifiManager.WIFI_MODE_FULL_HIGH_PERF
             }
-            if (wifiLock?.isHeld == false) {
-                runCatching { wifiLock?.acquire() }
-            }
-        } else {
-            releaseWifiLock()
+            wifiManager.createWifiLock(mode, "sera-node:wifi").apply {
+                setReferenceCounted(false)
+            }.also { wifiLock = it }
+        }
+        if (!lock.isHeld) {
+            runCatching { lock.acquire() }
         }
     }
 
-    private fun releaseWifiLock() {
+    private fun releaseWifiLockLocked() {
         runCatching {
             if (wifiLock?.isHeld == true) {
                 wifiLock?.release()
@@ -794,33 +994,48 @@ class NodeForegroundService : Service() {
         const val ACTION_PAUSE = "dev.sera.node.action.PAUSE"
         const val ACTION_RESUME = "dev.sera.node.action.RESUME"
         const val ACTION_CHECK_UPDATES = "dev.sera.node.action.CHECK_UPDATES"
+        private const val WAKE_LOCK_TIMEOUT_MS = 30L * 60L * 1000L
+        private const val NOTIFICATION_THROTTLE_MS = 500L
+        private const val UPLOAD_UI_THROTTLE_MS = 300L
 
         fun start(context: Context) {
             val intent = Intent(context.applicationContext, NodeForegroundService::class.java).apply {
                 action = ACTION_START
             }
-            context.applicationContext.startForegroundService(intent)
+            ContextCompat.startForegroundService(context.applicationContext, intent)
         }
 
         fun stop(context: Context) {
-            val intent = Intent(context.applicationContext, NodeForegroundService::class.java).apply {
+            val appContext = context.applicationContext
+            val serviceIntent = Intent(appContext, NodeForegroundService::class.java)
+            if (!ServiceLocator.runtimeTracker().snapshot.value.isServiceRunning) {
+                runCatching { appContext.stopService(serviceIntent) }
+                return
+            }
+            val stopIntent = Intent(appContext, NodeForegroundService::class.java).apply {
                 action = ACTION_STOP
             }
-            context.applicationContext.startService(intent)
+            runCatching {
+                ContextCompat.startForegroundService(appContext, stopIntent)
+            }.onFailure {
+                runCatching { appContext.stopService(serviceIntent) }
+            }
         }
 
         fun pause(context: Context) {
+            if (!ServiceLocator.runtimeTracker().snapshot.value.isServiceRunning) return
             val intent = Intent(context.applicationContext, NodeForegroundService::class.java).apply {
                 action = ACTION_PAUSE
             }
-            context.applicationContext.startService(intent)
+            runCatching { ContextCompat.startForegroundService(context.applicationContext, intent) }
         }
 
         fun resume(context: Context) {
+            if (!ServiceLocator.runtimeTracker().snapshot.value.isServiceRunning) return
             val intent = Intent(context.applicationContext, NodeForegroundService::class.java).apply {
                 action = ACTION_RESUME
             }
-            context.applicationContext.startService(intent)
+            runCatching { ContextCompat.startForegroundService(context.applicationContext, intent) }
         }
     }
 }

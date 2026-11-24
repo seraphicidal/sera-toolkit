@@ -53,14 +53,24 @@ class ConnectivityMonitor(context: Context) {
 
     private val validatedCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
-            connectivityManager.getNetworkCapabilities(network)?.let { caps ->
-                validatedNetworks[network] = caps
+            runCatching { connectivityManager.getNetworkCapabilities(network) }.getOrNull()?.let { caps ->
+                if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                    caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+                ) {
+                    validatedNetworks[network] = caps
+                }
             }
             recomputeState()
         }
 
         override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
-            validatedNetworks[network] = networkCapabilities
+            if (networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+            ) {
+                validatedNetworks[network] = networkCapabilities
+            } else {
+                validatedNetworks.remove(network)
+            }
             recomputeState()
         }
 
@@ -77,7 +87,7 @@ class ConnectivityMonitor(context: Context) {
     private val defaultCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
             defaultNetwork = network
-            connectivityManager.getNetworkCapabilities(network)?.let { caps ->
+            runCatching { connectivityManager.getNetworkCapabilities(network) }.getOrNull()?.let { caps ->
                 if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
                     caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
                 ) {
@@ -144,15 +154,17 @@ class ConnectivityMonitor(context: Context) {
     }
 
     private fun seedCurrentNetwork() {
-        val active = connectivityManager.activeNetwork
+        val active = runCatching { connectivityManager.activeNetwork }.getOrNull()
         defaultNetwork = active
         if (active != null) {
-            val caps = connectivityManager.getNetworkCapabilities(active)
+            val caps = runCatching { connectivityManager.getNetworkCapabilities(active) }.getOrNull()
             if (caps != null &&
                 caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
                 caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
             ) {
                 validatedNetworks[active] = caps
+            } else {
+                validatedNetworks.remove(active)
             }
         }
         recomputeState()
@@ -160,9 +172,11 @@ class ConnectivityMonitor(context: Context) {
 
     private fun recomputeState() {
         synchronized(stateLock) {
-            val active = connectivityManager.activeNetwork ?: defaultNetwork
+            val active = runCatching { connectivityManager.activeNetwork }.getOrNull() ?: defaultNetwork
             val activeCaps = active?.let { network ->
-                validatedNetworks[network] ?: connectivityManager.getNetworkCapabilities(network)?.takeIf { caps ->
+                validatedNetworks[network] ?: runCatching {
+                    connectivityManager.getNetworkCapabilities(network)
+                }.getOrNull()?.takeIf { caps ->
                     caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
                         caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
                 }

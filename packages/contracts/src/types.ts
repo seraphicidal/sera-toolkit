@@ -1,6 +1,6 @@
 export const SERA_VERSION = '1.8.0';
 
-export type MediaKind = 'video' | 'audio' | 'image' | 'gif' | 'unknown';
+export type MediaKind = 'video' | 'audio' | 'image' | 'gif' | 'file' | 'unknown';
 
 export type MediaInfoType = 'single' | 'collection' | 'playlist';
 
@@ -141,6 +141,8 @@ export interface JobResult {
 
 export type ErrorCode =
   | 'INVALID_URL'
+  | 'VALIDATION_ERROR'
+  | 'FORBIDDEN'
   | 'UNSUPPORTED_SOURCE'
   | 'PRIVATE_CONTENT'
   | 'MEDIA_UNAVAILABLE'
@@ -369,6 +371,15 @@ export interface ProviderSummary {
   readonly capabilities: ProviderCapabilities;
 }
 
+export interface NodeAvailability {
+  readonly enabled: boolean;
+  readonly totalNodes: number;
+  readonly healthyNodes: number;
+  readonly residentialNodes: number;
+  readonly features: readonly string[];
+  readonly providers: readonly string[];
+}
+
 export interface ServiceInfo {
   readonly name: string;
   readonly version: string;
@@ -379,6 +390,7 @@ export interface ServiceInfo {
     readonly maxItemsPerJob: number;
     readonly retentionSeconds: number;
   };
+  readonly nodeAvailability?: NodeAvailability;
 }
 
 export interface HealthCheck {
@@ -484,6 +496,8 @@ export interface RemoteProgress {
   readonly step: string;
   readonly bytesDownloaded?: number;
   readonly bytesTotal?: number;
+  readonly speedBytesPerSecond?: number;
+  readonly etaSeconds?: number;
 }
 
 export interface ExtractionNodeFailed {
@@ -511,9 +525,12 @@ export type RemoteResolvedFetchPlan =
   | {
       readonly via: 'ytdlp';
       readonly selector: string;
-      readonly merge?: string;
-      readonly audio?: { readonly format: string; readonly quality?: string };
-      readonly remux?: string;
+      readonly merge?: 'mp4' | 'webm' | 'mkv' | 'mov';
+      readonly audio?: {
+        readonly format: 'mp3' | 'm4a' | 'aac' | 'opus' | 'ogg' | 'wav' | 'flac' | 'best';
+        readonly quality?: string;
+      };
+      readonly remux?: 'mp4' | 'webm' | 'mkv' | 'mov';
       readonly extractorArgs?: readonly string[];
       readonly target?: string;
       readonly useExtractors?: string;
@@ -534,8 +551,8 @@ export type RemoteResolvedConvertSpec =
   | { readonly kind: 'gif'; readonly maxWidth?: number; readonly fps?: number };
 
 export interface RemoteResolvedPlan {
-  readonly kind: 'video' | 'audio' | 'image' | 'gif';
-  readonly container: string;
+  readonly kind: Exclude<MediaKind, 'unknown'>;
+  readonly container: ContainerFormat;
   readonly label: string;
   readonly detail?: string;
   readonly width?: number;
@@ -576,7 +593,7 @@ export interface RemoteResolvedItem {
   readonly width?: number;
   readonly height?: number;
   readonly duration?: number;
-  readonly container?: string;
+  readonly container?: ContainerFormat;
   readonly filesizeBytes?: number;
   readonly isLive?: boolean;
   readonly plans: readonly RemoteResolvedPlan[];

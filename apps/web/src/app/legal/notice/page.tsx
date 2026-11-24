@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import { cleanEmail, cleanEnvValue } from '@/lib/contact';
 
 export const dynamic = 'force-dynamic';
 
@@ -9,30 +10,26 @@ export const metadata: Metadata = {
     'Provider identification and regulatory points of contact under EU E-Commerce Directive Art. 5, DDG § 5, and DSA Arts. 11 & 12.',
 };
 
-function clean(value?: string): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed && trimmed.length > 0 ? trimmed : undefined;
-}
-
 export default function LegalNoticePage() {
   const operatorName =
-    clean(process.env.OPERATOR_NAME) ??
-    clean(process.env.NEXT_PUBLIC_OPERATOR_NAME) ??
+    cleanEnvValue(process.env.OPERATOR_NAME) ??
+    cleanEnvValue(process.env.NEXT_PUBLIC_OPERATOR_NAME) ??
     'SERA.toolkit Operator';
   const operatorAddress =
-    clean(process.env.OPERATOR_ADDRESS) ?? clean(process.env.NEXT_PUBLIC_OPERATOR_ADDRESS);
+    cleanEnvValue(process.env.OPERATOR_ADDRESS) ??
+    cleanEnvValue(process.env.NEXT_PUBLIC_OPERATOR_ADDRESS);
   const operatorEmail =
-    clean(process.env.OPERATOR_EMAIL) ?? clean(process.env.NEXT_PUBLIC_OPERATOR_EMAIL);
+    cleanEmail(process.env.OPERATOR_EMAIL) ?? cleanEmail(process.env.NEXT_PUBLIC_OPERATOR_EMAIL);
   const registrationId =
-    clean(process.env.OPERATOR_REGISTRATION_ID) ??
-    clean(process.env.NEXT_PUBLIC_OPERATOR_REGISTRATION_ID);
+    cleanEnvValue(process.env.OPERATOR_REGISTRATION_ID) ??
+    cleanEnvValue(process.env.NEXT_PUBLIC_OPERATOR_REGISTRATION_ID);
   const authoritiesEmail =
-    clean(process.env.CONTACT_EMAIL_AUTHORITIES) ??
-    clean(process.env.NEXT_PUBLIC_CONTACT_EMAIL_AUTHORITIES) ??
+    cleanEmail(process.env.CONTACT_EMAIL_AUTHORITIES) ??
+    cleanEmail(process.env.NEXT_PUBLIC_CONTACT_EMAIL_AUTHORITIES) ??
     operatorEmail;
   const legalEmail =
-    clean(process.env.CONTACT_EMAIL_LEGAL) ??
-    clean(process.env.NEXT_PUBLIC_CONTACT_EMAIL_LEGAL) ??
+    cleanEmail(process.env.CONTACT_EMAIL_LEGAL) ??
+    cleanEmail(process.env.NEXT_PUBLIC_CONTACT_EMAIL_LEGAL) ??
     operatorEmail;
 
   return (

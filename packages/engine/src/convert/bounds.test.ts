@@ -43,22 +43,23 @@ async function source(): Promise<string> {
 }
 
 describe('a conversion cannot write more than it was allowed', () => {
-  it('stops at the ceiling instead of filling the disk', async () => {
+  it('stops at the ceiling and fails with TOO_LARGE instead of silently truncating', async () => {
     const input = await source();
     const output = join(dir, 'out.gif');
 
-    await convert({
-      ffmpegPath: config.ffmpegPath,
-      ffprobePath: config.ffprobePath,
-      timeoutMs: 60_000,
-      input,
-      output,
-      spec: { kind: 'gif', fps: 15, maxWidth: 480 },
-      maxOutputBytes: 32 * 1024,
-    });
+    await expect(
+      convert({
+        ffmpegPath: config.ffmpegPath,
+        ffprobePath: config.ffprobePath,
+        timeoutMs: 60_000,
+        input,
+        output,
+        spec: { kind: 'gif', fps: 15, maxWidth: 480 },
+        maxOutputBytes: 32 * 1024,
+      }),
+    ).rejects.toMatchObject({ code: 'TOO_LARGE' });
 
-    const written = await stat(output);
-    expect(written.size).toBeLessThan(256 * 1024);
+    await expect(stat(output)).rejects.toThrow();
   }, 90_000);
 
   it('writes the whole thing when the ceiling is not in the way', async () => {

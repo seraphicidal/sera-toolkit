@@ -28,7 +28,12 @@ services:
       - NET_BIND_SERVICE
     read_only: true
     tmpfs:
-      - /tmp
+      - /tmp:noexec,nosuid,nodev,size=64m
+    pids_limit: 128
+    deploy:
+      resources:
+        limits:
+          memory: 256m
 
   web:
     image: ${SERA_IMAGE_WEB:-ghcr.io/seraphicidal/sera-web:latest}
@@ -50,12 +55,17 @@ services:
       - edge-net
     read_only: true
     tmpfs:
-      - /tmp
-      - /app/apps/web/.next/cache
+      - /tmp:noexec,nosuid,nodev,size=64m
+      - /app/apps/web/.next/cache:noexec,nosuid,nodev,size=128m
+    pids_limit: 128
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    deploy:
+      resources:
+        limits:
+          memory: 512m
 
   api:
     image: ${SERA_IMAGE_API:-ghcr.io/seraphicidal/sera-api:latest}
@@ -63,24 +73,38 @@ services:
     environment:
       NODE_ENV: production
       SERA_SECRET: ${SERA_SECRET:?set SERA_SECRET — see .env.example}
+      SERA_CORS_ORIGINS: ${SERA_CORS_ORIGINS:-}
       SERA_QUEUE_DRIVER: redis
-      SERA_REDIS_URL: ${SERA_REDIS_URL:-redis://:${SERA_REDIS_PASSWORD:-sera_secure_redis}@redis:6379}
+      SERA_REDIS_URL: ${SERA_REDIS_URL:-redis://:${SERA_REDIS_PASSWORD:?set SERA_REDIS_PASSWORD in .env — see .env.example}@redis:6379}
       SERA_EMBEDDED_WORKER: 'false'
       SERA_DATA_DIR: /data
       SERA_RETENTION_SECONDS: ${SERA_RETENTION_SECONDS:-1800}
+      SERA_REAP_INTERVAL_SECONDS: ${SERA_REAP_INTERVAL_SECONDS:-120}
+      SERA_OPTION_TTL_SECONDS: ${SERA_OPTION_TTL_SECONDS:-3600}
       SERA_MAX_FILESIZE_BYTES: ${SERA_MAX_FILESIZE_BYTES:-2147483648}
       SERA_MAX_DURATION_SECONDS: ${SERA_MAX_DURATION_SECONDS:-10800}
       SERA_MAX_ITEMS_PER_JOB: ${SERA_MAX_ITEMS_PER_JOB:-25}
+      SERA_JOB_TIMEOUT_SECONDS: ${SERA_JOB_TIMEOUT_SECONDS:-1800}
+      SERA_RESOLVE_TIMEOUT_SECONDS: ${SERA_RESOLVE_TIMEOUT_SECONDS:-45}
+      SERA_RESOLVE_TIMEOUT_YOUTUBE_SECONDS: ${SERA_RESOLVE_TIMEOUT_YOUTUBE_SECONDS:-60}
+      SERA_RESOLVE_TIMEOUT_INSTAGRAM_SECONDS: ${SERA_RESOLVE_TIMEOUT_INSTAGRAM_SECONDS:-30}
+      SERA_RESOLVE_TIMEOUT_TWITTER_SECONDS: ${SERA_RESOLVE_TIMEOUT_TWITTER_SECONDS:-25}
+      SERA_RESOLVE_TIMEOUT_REDDIT_SECONDS: ${SERA_RESOLVE_TIMEOUT_REDDIT_SECONDS:-25}
+      SERA_MAX_QUEUE_DEPTH: ${SERA_MAX_QUEUE_DEPTH:-200}
       SERA_RATE_LIMIT_RESOLVE_PER_MINUTE: ${SERA_RATE_LIMIT_RESOLVE_PER_MINUTE:-20}
       SERA_RATE_LIMIT_JOBS_PER_MINUTE: ${SERA_RATE_LIMIT_JOBS_PER_MINUTE:-8}
       SERA_MAX_CONCURRENT_JOBS_PER_CLIENT: ${SERA_MAX_CONCURRENT_JOBS_PER_CLIENT:-2}
-      SERA_TRUST_PROXY: ${SERA_TRUST_PROXY:-127.0.0.1/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7}
+      SERA_TRUST_PROXY: ${SERA_TRUST_PROXY:-1}
       SERA_REDDIT_CLIENT_ID: ${SERA_REDDIT_CLIENT_ID:-}
       SERA_REDDIT_CLIENT_SECRET: ${SERA_REDDIT_CLIENT_SECRET:-}
+      SERA_YOUTUBE_PLAYER_CLIENTS: ${SERA_YOUTUBE_PLAYER_CLIENTS:-}
       SERA_YOUTUBE_POT_PROVIDER_URL: ${SERA_YOUTUBE_POT_PROVIDER_URL:-}
       SERA_EXTRACTION_NODE_TOKENS: ${SERA_EXTRACTION_NODE_TOKENS:-}
       SERA_EXTRACTION_NODE_TOKEN: ${SERA_EXTRACTION_NODE_TOKEN:-}
       SERA_EXTRACTION_WORKER_TOKEN: ${SERA_EXTRACTION_WORKER_TOKEN:-}
+      SERA_EXTRACTION_CLAIM_HOLD_SECONDS: ${SERA_EXTRACTION_CLAIM_HOLD_SECONDS:-25}
+      SERA_EXTRACTION_PROXY_URL: ${SERA_EXTRACTION_PROXY_URL:-}
+      SERA_EXTRACTION_PROXY_PROVIDERS: ${SERA_EXTRACTION_PROXY_PROVIDERS:-}
       SERA_CANARY_TOKEN: ${SERA_CANARY_TOKEN:-}
       SERA_ADMIN_TOKEN: ${SERA_ADMIN_TOKEN:-}
       SERA_ALERT_NTFY_TOPIC: ${SERA_ALERT_NTFY_TOPIC:-}
@@ -90,6 +114,7 @@ services:
       SERA_BLOCKED_HOSTS: ${SERA_BLOCKED_HOSTS:-}
       SERA_ENABLED_PROVIDERS: ${SERA_ENABLED_PROVIDERS:-}
       SERA_DISABLED_PROVIDERS: ${SERA_DISABLED_PROVIDERS:-}
+      SERA_ALLOW_PRIVATE_ADDRESSES: ${SERA_ALLOW_PRIVATE_ADDRESSES:-false}
       CONTACT_EMAIL_AUTHORITIES: ${CONTACT_EMAIL_AUTHORITIES:-}
       CONTACT_EMAIL_LEGAL: ${CONTACT_EMAIL_LEGAL:-}
       OPERATOR_NAME: ${OPERATOR_NAME:-}
@@ -104,7 +129,8 @@ services:
       - media:/data
     read_only: true
     tmpfs:
-      - /tmp:exec
+      - /tmp:exec,nosuid,nodev,size=256m
+    pids_limit: 256
     depends_on:
       redis:
         condition: service_healthy
@@ -141,25 +167,39 @@ services:
       NODE_ENV: production
       SERA_SECRET: ${SERA_SECRET:?set SERA_SECRET — see .env.example}
       SERA_QUEUE_DRIVER: redis
-      SERA_REDIS_URL: ${SERA_REDIS_URL:-redis://:${SERA_REDIS_PASSWORD:-sera_secure_redis}@redis:6379}
+      SERA_REDIS_URL: ${SERA_REDIS_URL:-redis://:${SERA_REDIS_PASSWORD:?set SERA_REDIS_PASSWORD in .env — see .env.example}@redis:6379}
       SERA_DATA_DIR: /data
       SERA_WORKER_CONCURRENCY: ${SERA_WORKER_CONCURRENCY:-2}
+      SERA_ITEM_CONCURRENCY: ${SERA_ITEM_CONCURRENCY:-3}
+      SERA_FFMPEG_THREADS: ${SERA_FFMPEG_THREADS:-2}
       SERA_API_URL: http://api:4000
       SERA_RETENTION_SECONDS: ${SERA_RETENTION_SECONDS:-1800}
+      SERA_REAP_INTERVAL_SECONDS: ${SERA_REAP_INTERVAL_SECONDS:-120}
       SERA_MAX_FILESIZE_BYTES: ${SERA_MAX_FILESIZE_BYTES:-2147483648}
       SERA_MAX_DURATION_SECONDS: ${SERA_MAX_DURATION_SECONDS:-10800}
       SERA_MAX_ITEMS_PER_JOB: ${SERA_MAX_ITEMS_PER_JOB:-25}
+      SERA_JOB_TIMEOUT_SECONDS: ${SERA_JOB_TIMEOUT_SECONDS:-1800}
+      SERA_RESOLVE_TIMEOUT_SECONDS: ${SERA_RESOLVE_TIMEOUT_SECONDS:-45}
+      SERA_RESOLVE_TIMEOUT_YOUTUBE_SECONDS: ${SERA_RESOLVE_TIMEOUT_YOUTUBE_SECONDS:-60}
+      SERA_RESOLVE_TIMEOUT_INSTAGRAM_SECONDS: ${SERA_RESOLVE_TIMEOUT_INSTAGRAM_SECONDS:-30}
+      SERA_RESOLVE_TIMEOUT_TWITTER_SECONDS: ${SERA_RESOLVE_TIMEOUT_TWITTER_SECONDS:-25}
+      SERA_RESOLVE_TIMEOUT_REDDIT_SECONDS: ${SERA_RESOLVE_TIMEOUT_REDDIT_SECONDS:-25}
       SERA_REDDIT_CLIENT_ID: ${SERA_REDDIT_CLIENT_ID:-}
       SERA_REDDIT_CLIENT_SECRET: ${SERA_REDDIT_CLIENT_SECRET:-}
+      SERA_YOUTUBE_PLAYER_CLIENTS: ${SERA_YOUTUBE_PLAYER_CLIENTS:-}
       SERA_YOUTUBE_POT_PROVIDER_URL: ${SERA_YOUTUBE_POT_PROVIDER_URL:-}
       SERA_EXTRACTION_NODE_TOKENS: ${SERA_EXTRACTION_NODE_TOKENS:-}
       SERA_EXTRACTION_NODE_TOKEN: ${SERA_EXTRACTION_NODE_TOKEN:-}
       SERA_EXTRACTION_WORKER_TOKEN: ${SERA_EXTRACTION_WORKER_TOKEN:-}
+      SERA_EXTRACTION_CLAIM_HOLD_SECONDS: ${SERA_EXTRACTION_CLAIM_HOLD_SECONDS:-25}
+      SERA_EXTRACTION_PROXY_URL: ${SERA_EXTRACTION_PROXY_URL:-}
+      SERA_EXTRACTION_PROXY_PROVIDERS: ${SERA_EXTRACTION_PROXY_PROVIDERS:-}
       SERA_INSTAGRAM_SESSION_ID: ${SERA_INSTAGRAM_SESSION_ID:-}
       SERA_EXTRA_ALLOWED_HOSTS: ${SERA_EXTRA_ALLOWED_HOSTS:-}
       SERA_BLOCKED_HOSTS: ${SERA_BLOCKED_HOSTS:-}
       SERA_ENABLED_PROVIDERS: ${SERA_ENABLED_PROVIDERS:-}
       SERA_DISABLED_PROVIDERS: ${SERA_DISABLED_PROVIDERS:-}
+      SERA_ALLOW_PRIVATE_ADDRESSES: ${SERA_ALLOW_PRIVATE_ADDRESSES:-false}
       CONTACT_EMAIL_AUTHORITIES: ${CONTACT_EMAIL_AUTHORITIES:-}
       CONTACT_EMAIL_LEGAL: ${CONTACT_EMAIL_LEGAL:-}
       OPERATOR_NAME: ${OPERATOR_NAME:-}
@@ -172,9 +212,12 @@ services:
       - media:/data
     read_only: true
     tmpfs:
-      - /tmp:exec
+      - /tmp:exec,nosuid,nodev,size=256m
+    pids_limit: 256
     depends_on:
       redis:
+        condition: service_healthy
+      api:
         condition: service_healthy
     networks:
       - internal-net
@@ -196,23 +239,34 @@ services:
       - '4416'
     networks:
       - internal-net
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,nodev,size=128m
+    pids_limit: 128
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    deploy:
+      resources:
+        limits:
+          memory: 512m
 
   redis:
     image: redis:7.4-alpine
     restart: unless-stopped
-    command: >
-      redis-server
-      --save '3600 1'
-      --appendonly no
-      --maxmemory 256mb
-      --maxmemory-policy noeviction
-      --requirepass ${SERA_REDIS_PASSWORD:-sera_secure_redis}
+    command:
+      - su-exec
+      - redis
+      - sh
+      - -ec
+      - |
+        umask 077
+        escaped=$$(printf '%s' "$$REDISCLI_AUTH" | sed 's/\\/\\\\/g; s/"/\\"/g')
+        printf 'requirepass "%s"\n' "$$escaped" > /tmp/redis.conf
+        exec redis-server /tmp/redis.conf --save '3600 1' --appendonly no --maxmemory 256mb --maxmemory-policy noeviction
     environment:
-      REDISCLI_AUTH: ${SERA_REDIS_PASSWORD:-sera_secure_redis}
+      REDISCLI_AUTH: ${SERA_REDIS_PASSWORD:?set SERA_REDIS_PASSWORD in .env — see .env.example}
     volumes:
       - redis_data:/data
     healthcheck:
@@ -222,6 +276,10 @@ services:
       retries: 5
     networks:
       - internal-net
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,nodev,size=16m
+    pids_limit: 128
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -229,6 +287,10 @@ services:
     cap_add:
       - SETUID
       - SETGID
+    deploy:
+      resources:
+        limits:
+          memory: 384m
 
 networks:
   edge-net:

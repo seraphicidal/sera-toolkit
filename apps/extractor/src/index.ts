@@ -42,16 +42,27 @@ async function main(): Promise<void> {
     workspaces,
   );
 
+  let shuttingDown = false;
+  let forceTimer: ReturnType<typeof setTimeout> | undefined;
   const shutdown = (signal: string): void => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     logger.info({ signal }, 'stopping extraction node');
-    stopReaper();
     node.stop();
-    setTimeout(() => process.exit(0), 4000).unref();
+    forceTimer = setTimeout(() => process.exit(0), 8_000);
+    forceTimer.unref();
   };
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
 
-  await node.run();
+  try {
+    await node.run();
+  } finally {
+    if (forceTimer) clearTimeout(forceTimer);
+    stopReaper();
+    await resolver.close().catch(() => undefined);
+    await registry.close().catch(() => undefined);
+  }
 }
 
 main().catch((error: unknown) => {

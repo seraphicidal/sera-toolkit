@@ -95,7 +95,9 @@ export {
   hostMatchesAny,
   stripWww,
   urlExtension,
+  validateProviderUrl,
   MEDIA_EXTENSIONS,
+  type ProviderUrlValidationOptions,
 } from './security/url.js';
 
 export {

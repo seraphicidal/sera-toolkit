@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.encodeToString
+import java.util.concurrent.ConcurrentHashMap
 
 enum class ThemePreference(val storageValue: String, val label: String) {
     LIGHT("light", "Light"),
@@ -56,6 +57,7 @@ data class NodeSettings(
     val lastAppUpdatePromptVersion: Int = 0,
     val serviceEnabled: Boolean = false,
     val userExplicitlyStopped: Boolean = false,
+    val servicePaused: Boolean = false,
     val completedTasksCount: Long = 0L,
     val failedTasksCount: Long = 0L,
     val themePreference: ThemePreference = ThemePreference.SYSTEM,
@@ -73,7 +75,7 @@ data class NodeSettings(
         return NodeRuntimeConfig(
             apiBaseUrl = normalizeBaseUrl(apiBaseUrl),
             nodeToken = nodeToken.trim(),
-            nodeId = nodeId.trim().ifEmpty { "android-node" },
+            nodeId = nodeId.trim().ifEmpty { "android-node" }.take(64),
             providers = activeProviders(),
             networkClass = "residential",
             instagramSessionId = instagramSessionId.trim().ifEmpty { null },
@@ -89,6 +91,13 @@ data class NodeSettings(
     companion object {
         const val DEFAULT_GITHUB_REPO = "seraphicidal/sera-toolkit"
 
+        private fun isLocalHostPrefix(lower: String): Boolean {
+            return lower.startsWith("localhost") ||
+                lower.startsWith("127.0.0.1") ||
+                lower.startsWith("10.0.2.2") ||
+                lower.startsWith("[::1]")
+        }
+
         fun normalizeBaseUrl(raw: String): String {
             var cleaned = raw.trim().trimEnd('/')
             if (cleaned.isEmpty()) return ""
@@ -96,11 +105,22 @@ data class NodeSettings(
                 !cleaned.startsWith("https://", ignoreCase = true)
             ) {
                 val lower = cleaned.lowercase()
-                val isLocal = lower.startsWith("localhost") || lower.startsWith("127.0.0.1") || lower.startsWith("[::1]")
-                cleaned = if (isLocal) "http://$cleaned" else "https://$cleaned"
+                cleaned = if (isLocalHostPrefix(lower)) "http://$cleaned" else "https://$cleaned"
             }
             if (cleaned.endsWith("/api", ignoreCase = true)) {
                 cleaned = cleaned.dropLast(4).trimEnd('/')
+            }
+            return cleaned
+        }
+
+        fun normalizePotProviderUrl(raw: String): String {
+            var cleaned = raw.trim().trimEnd('/')
+            if (cleaned.isEmpty()) return ""
+            if (!cleaned.startsWith("http://", ignoreCase = true) &&
+                !cleaned.startsWith("https://", ignoreCase = true)
+            ) {
+                val lower = cleaned.lowercase()
+                cleaned = if (isLocalHostPrefix(lower)) "http://$cleaned" else "https://$cleaned"
             }
             return cleaned
         }
@@ -136,30 +156,61 @@ class NodePreferences(private val context: Context) {
         val LAST_APP_UPDATE_PROMPT_VERSION = intPreferencesKey("last_app_update_prompt_version")
         val SERVICE_ENABLED = booleanPreferencesKey("service_enabled")
         val USER_EXPLICITLY_STOPPED = booleanPreferencesKey("user_explicitly_stopped")
+        val SERVICE_PAUSED = booleanPreferencesKey("service_paused")
         val COMPLETED_TASKS_COUNT = longPreferencesKey("completed_tasks_count")
         val FAILED_TASKS_COUNT = longPreferencesKey("failed_tasks_count")
         val THEME_PREFERENCE = stringPreferencesKey("theme_preference")
     }
 
-    val settings: Flow<NodeSettings> = context.nodeDataStore.data.map { prefs ->
-        val rawHotConfig = prefs[Keys.CACHED_PROVIDER_HOT_CONFIG]
-        val parsedHotConfig = if (!rawHotConfig.isNullOrBlank()) {
-            runCatching { SeraJson.decodeFromString<ProviderHotConfig>(rawHotConfig) }.getOrNull()
-        } else {
-            null
+    @Volatile
+    private var cachedHotConfigEntry: Pair<String, ProviderHotConfig?>? = null
+
+    private val decryptedSecretCache = ConcurrentHashMap<String, String>()
+
+    private fun decodeHotConfig(rawHotConfig: String?): ProviderHotConfig? {
+        if (rawHotConfig.isNullOrBlank()) return null
+        val cached = cachedHotConfigEntry
+        if (cached != null && cached.first == rawHotConfig) {
+            return cached.second
         }
+        val parsed = runCatching { SeraJson.decodeFromString<ProviderHotConfig>(rawHotConfig) }.getOrNull()
+        cachedHotConfigEntry = rawHotConfig to parsed
+        return parsed
+    }
+
+    private fun decryptSecret(stored: String?): String {
+        if (stored.isNullOrEmpty()) return ""
+        decryptedSecretCache[stored]?.let { return it }
+        val decrypted = SecretCipher.decrypt(stored).trim()
+        if (decryptedSecretCache.size > 32) {
+            decryptedSecretCache.clear()
+        }
+        decryptedSecretCache[stored] = decrypted
+        return decrypted
+    }
+
+    private fun encryptSecret(plaintext: String): String {
+        val trimmed = plaintext.trim()
+        if (trimmed.isEmpty()) return ""
+        return SecretCipher.encrypt(trimmed)
+    }
+
+    val settings: Flow<NodeSettings> = context.nodeDataStore.data.map { prefs ->
+        val parsedHotConfig = decodeHotConfig(prefs[Keys.CACHED_PROVIDER_HOT_CONFIG])
         NodeSettings(
             apiBaseUrl = NodeSettings.normalizeBaseUrl(prefs[Keys.API_BASE_URL].orEmpty()),
-            nodeToken = prefs[Keys.NODE_TOKEN].orEmpty().trim(),
-            nodeId = prefs[Keys.NODE_ID]?.trim()?.ifEmpty { "android-node" } ?: "android-node",
+            nodeToken = decryptSecret(prefs[Keys.NODE_TOKEN]),
+            nodeId = prefs[Keys.NODE_ID]?.trim()?.ifEmpty { "android-node" }?.take(64) ?: "android-node",
             enableYoutube = prefs[Keys.ENABLE_YOUTUBE] ?: true,
             enableInstagram = prefs[Keys.ENABLE_INSTAGRAM] ?: true,
             enableAllProviders = prefs[Keys.ENABLE_ALL_PROVIDERS] ?: true,
-            instagramSessionId = prefs[Keys.INSTAGRAM_SESSION_ID].orEmpty().trim(),
+            instagramSessionId = decryptSecret(prefs[Keys.INSTAGRAM_SESSION_ID]),
             youtubePlayerClients = prefs[Keys.YOUTUBE_PLAYER_CLIENTS].orEmpty().trim(),
-            youtubePotProviderUrl = prefs[Keys.YOUTUBE_POT_PROVIDER_URL].orEmpty().trim(),
+            youtubePotProviderUrl = NodeSettings.normalizePotProviderUrl(
+                prefs[Keys.YOUTUBE_POT_PROVIDER_URL].orEmpty(),
+            ),
             redditClientId = prefs[Keys.REDDIT_CLIENT_ID].orEmpty().trim(),
-            redditClientSecret = prefs[Keys.REDDIT_CLIENT_SECRET].orEmpty().trim(),
+            redditClientSecret = decryptSecret(prefs[Keys.REDDIT_CLIENT_SECRET]),
             allowCellular = prefs[Keys.ALLOW_CELLULAR] ?: true,
             allowWifi = prefs[Keys.ALLOW_WIFI] ?: true,
             onlyWhileCharging = prefs[Keys.ONLY_WHILE_CHARGING] ?: false,
@@ -175,6 +226,7 @@ class NodePreferences(private val context: Context) {
             lastAppUpdatePromptVersion = prefs[Keys.LAST_APP_UPDATE_PROMPT_VERSION] ?: 0,
             serviceEnabled = prefs[Keys.SERVICE_ENABLED] ?: false,
             userExplicitlyStopped = prefs[Keys.USER_EXPLICITLY_STOPPED] ?: false,
+            servicePaused = prefs[Keys.SERVICE_PAUSED] ?: false,
             completedTasksCount = prefs[Keys.COMPLETED_TASKS_COUNT] ?: 0L,
             failedTasksCount = prefs[Keys.FAILED_TASKS_COUNT] ?: 0L,
             themePreference = ThemePreference.fromStorage(prefs[Keys.THEME_PREFERENCE]),
@@ -182,6 +234,29 @@ class NodePreferences(private val context: Context) {
     }
 
     suspend fun current(): NodeSettings = settings.first()
+
+    suspend fun migratePlaintextSecretsIfNeeded() {
+        context.nodeDataStore.edit { prefs ->
+            for (key in listOf(Keys.NODE_TOKEN, Keys.INSTAGRAM_SESSION_ID, Keys.REDDIT_CLIENT_SECRET)) {
+                val raw = prefs[key]
+                if (!raw.isNullOrBlank() && !SecretCipher.isEncrypted(raw)) {
+                    prefs[key] = SecretCipher.encrypt(raw.trim())
+                }
+            }
+        }
+    }
+
+    suspend fun setThemePreference(preference: ThemePreference) {
+        context.nodeDataStore.edit { prefs ->
+            prefs[Keys.THEME_PREFERENCE] = preference.storageValue
+        }
+    }
+
+    suspend fun setServicePaused(paused: Boolean) {
+        context.nodeDataStore.edit { prefs ->
+            prefs[Keys.SERVICE_PAUSED] = paused
+        }
+    }
 
     suspend fun saveConfiguration(
         apiBaseUrl: String,
@@ -207,16 +282,16 @@ class NodePreferences(private val context: Context) {
     ) {
         context.nodeDataStore.edit { prefs ->
             prefs[Keys.API_BASE_URL] = NodeSettings.normalizeBaseUrl(apiBaseUrl)
-            prefs[Keys.NODE_TOKEN] = nodeToken.trim()
-            prefs[Keys.NODE_ID] = nodeId.trim().ifEmpty { "android-node" }
+            prefs[Keys.NODE_TOKEN] = encryptSecret(nodeToken)
+            prefs[Keys.NODE_ID] = nodeId.trim().ifEmpty { "android-node" }.take(64)
             prefs[Keys.ENABLE_YOUTUBE] = enableYoutube
             prefs[Keys.ENABLE_INSTAGRAM] = enableInstagram
             prefs[Keys.ENABLE_ALL_PROVIDERS] = enableAllProviders
-            prefs[Keys.INSTAGRAM_SESSION_ID] = instagramSessionId.trim()
+            prefs[Keys.INSTAGRAM_SESSION_ID] = encryptSecret(instagramSessionId)
             prefs[Keys.YOUTUBE_PLAYER_CLIENTS] = youtubePlayerClients.trim()
-            prefs[Keys.YOUTUBE_POT_PROVIDER_URL] = NodeSettings.normalizeBaseUrl(youtubePotProviderUrl)
+            prefs[Keys.YOUTUBE_POT_PROVIDER_URL] = NodeSettings.normalizePotProviderUrl(youtubePotProviderUrl)
             prefs[Keys.REDDIT_CLIENT_ID] = redditClientId.trim()
-            prefs[Keys.REDDIT_CLIENT_SECRET] = redditClientSecret.trim()
+            prefs[Keys.REDDIT_CLIENT_SECRET] = encryptSecret(redditClientSecret)
             prefs[Keys.ALLOW_CELLULAR] = allowCellular
             prefs[Keys.ALLOW_WIFI] = allowWifi
             prefs[Keys.ONLY_WHILE_CHARGING] = onlyWhileCharging
@@ -232,28 +307,39 @@ class NodePreferences(private val context: Context) {
     suspend fun applyImportedEnv(parsed: ParsedEnvConfig) {
         context.nodeDataStore.edit { prefs ->
             parsed.apiBaseUrl?.let { prefs[Keys.API_BASE_URL] = NodeSettings.normalizeBaseUrl(it) }
-            parsed.nodeToken?.let { prefs[Keys.NODE_TOKEN] = it.trim() }
-            parsed.nodeId?.let { prefs[Keys.NODE_ID] = it.trim().ifEmpty { "android-node" } }
+            parsed.nodeToken?.takeIf { it.isNotBlank() }?.let { prefs[Keys.NODE_TOKEN] = encryptSecret(it) }
+            parsed.nodeId?.let { prefs[Keys.NODE_ID] = it.trim().ifEmpty { "android-node" }.take(64) }
             parsed.enableYoutube?.let { prefs[Keys.ENABLE_YOUTUBE] = it }
             parsed.enableInstagram?.let { prefs[Keys.ENABLE_INSTAGRAM] = it }
             parsed.enableAllProviders?.let { prefs[Keys.ENABLE_ALL_PROVIDERS] = it }
-            parsed.instagramSessionId?.let { prefs[Keys.INSTAGRAM_SESSION_ID] = it.trim() }
-            parsed.youtubePlayerClients?.let { prefs[Keys.YOUTUBE_PLAYER_CLIENTS] = it.trim() }
-            parsed.youtubePotProviderUrl?.let {
-                prefs[Keys.YOUTUBE_POT_PROVIDER_URL] = NodeSettings.normalizeBaseUrl(it)
+            parsed.instagramSessionId?.takeIf { it.isNotBlank() }?.let {
+                prefs[Keys.INSTAGRAM_SESSION_ID] = encryptSecret(it)
             }
-            parsed.redditClientId?.let { prefs[Keys.REDDIT_CLIENT_ID] = it.trim() }
-            parsed.redditClientSecret?.let { prefs[Keys.REDDIT_CLIENT_SECRET] = it.trim() }
+            parsed.youtubePlayerClients?.takeIf { it.isNotBlank() }?.let {
+                prefs[Keys.YOUTUBE_PLAYER_CLIENTS] = it.trim()
+            }
+            parsed.youtubePotProviderUrl?.takeIf { it.isNotBlank() }?.let {
+                prefs[Keys.YOUTUBE_POT_PROVIDER_URL] = NodeSettings.normalizePotProviderUrl(it)
+            }
+            parsed.redditClientId?.takeIf { it.isNotBlank() }?.let {
+                prefs[Keys.REDDIT_CLIENT_ID] = it.trim()
+            }
+            parsed.redditClientSecret?.takeIf { it.isNotBlank() }?.let {
+                prefs[Keys.REDDIT_CLIENT_SECRET] = encryptSecret(it)
+            }
             parsed.preferredCapacity?.let { prefs[Keys.PREFERRED_CAPACITY] = it.coerceIn(1, 8) }
             parsed.allowCellular?.let { prefs[Keys.ALLOW_CELLULAR] = it }
             parsed.allowWifi?.let { prefs[Keys.ALLOW_WIFI] = it }
             parsed.onlyWhileCharging?.let { prefs[Keys.ONLY_WHILE_CHARGING] = it }
-            parsed.githubReleasesRepo?.let { prefs[Keys.GITHUB_RELEASES_REPO] = it.trim() }
+            parsed.githubReleasesRepo?.takeIf { it.isNotBlank() }?.let {
+                prefs[Keys.GITHUB_RELEASES_REPO] = it.trim()
+            }
         }
     }
 
     suspend fun saveManifestCache(hash: String, hotConfig: ProviderHotConfig) {
         val serialized = SeraJson.encodeToString(hotConfig)
+        cachedHotConfigEntry = serialized to hotConfig
         context.nodeDataStore.edit { prefs ->
             prefs[Keys.CACHED_MANIFEST_HASH] = hash
             prefs[Keys.CACHED_PROVIDER_HOT_CONFIG] = serialized
@@ -276,6 +362,9 @@ class NodePreferences(private val context: Context) {
         context.nodeDataStore.edit { prefs ->
             prefs[Keys.SERVICE_ENABLED] = enabled
             prefs[Keys.USER_EXPLICITLY_STOPPED] = explicitStop
+            if (!enabled) {
+                prefs[Keys.SERVICE_PAUSED] = false
+            }
         }
     }
 

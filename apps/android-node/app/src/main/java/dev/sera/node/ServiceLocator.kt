@@ -93,7 +93,7 @@ object ServiceLocator {
     fun toolsManager(context: Context): ExtractionToolsManager {
         val app = context.applicationContext
         return sharedToolsManager ?: synchronized(lock) {
-            sharedToolsManager ?: SeraExtractorFactory.createToolsManager(app).also {
+            sharedToolsManager ?: SeraExtractorFactory.createToolsManager(app, httpClient()).also {
                 sharedToolsManager = it
             }
         }

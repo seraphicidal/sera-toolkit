@@ -31,7 +31,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await app?.close();
-  await rm(dataDir, { recursive: true, force: true });
+  await engine?.close();
+  await rm(dataDir, { recursive: true, force: true }).catch(() => undefined);
 });
 
 describe('POST /api/legal/report', () => {
@@ -159,6 +160,9 @@ describe('POST /api/legal/report', () => {
     });
 
     expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({
+      error: { code: 'VALIDATION_ERROR', retryable: false },
+    });
   });
 });
 
@@ -348,6 +352,9 @@ describe('Admin Denylist Routes (/api/admin/denylist)', () => {
       },
     });
     expect(invalidRes.statusCode).toBe(400);
+    expect(invalidRes.json()).toMatchObject({
+      error: { code: 'VALIDATION_ERROR', retryable: false },
+    });
   });
 
   it('unblocks an entry via DELETE /api/admin/denylist/:id and returns 404 for unknown id', async () => {

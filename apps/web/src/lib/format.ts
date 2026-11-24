@@ -30,6 +30,19 @@ export function formatDuration(seconds: number | undefined): string {
   return formatTimecode(seconds);
 }
 
+export function formatLimitDuration(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return '0 minutes';
+  if (seconds < 3600) {
+    return pluralize(Math.max(1, Math.round(seconds / 60)), 'minute');
+  }
+  const hours = seconds / 3600;
+  if (Number.isInteger(hours)) {
+    return pluralize(hours, 'hour');
+  }
+  const roundedHours = Math.round(hours * 10) / 10;
+  return `${roundedHours} ${roundedHours === 1 ? 'hour' : 'hours'}`;
+}
+
 export function formatEta(seconds: number | undefined): string {
   if (seconds === undefined || !Number.isFinite(seconds) || seconds < 0) return '';
   if (seconds < 1) return '00:00';
@@ -47,6 +60,7 @@ export const KIND_LABELS: Record<Exclude<MediaKind, 'unknown'>, string> = {
   audio: 'Audio',
   image: 'Image',
   gif: 'GIF',
+  file: 'File',
 };
 
 export function pluralize(count: number, singular: string, plural = `${singular}s`): string {
@@ -162,7 +176,7 @@ export type PipelineStep = (typeof PIPELINE_STEPS)[number];
 
 export function resolvePipelineStepIndex(state: JobState, step?: string): number {
   const text = (step ?? '').toLowerCase();
-  if (state === 'ready' || /\bdone\b|\bcomplete|\bfinished\b/.test(text)) return 4;
+  if (state === 'ready') return 4;
   if (
     state === 'packaging' ||
     state === 'finalizing' ||
@@ -177,7 +191,7 @@ export function resolvePipelineStepIndex(state: JobState, step?: string): number
   ) {
     return 2;
   }
-  if (state === 'downloading' || /download|fetch|receiv|stream/.test(text)) {
+  if (state === 'downloading' || /download|fetch|receiv|stream|upload/.test(text)) {
     return 1;
   }
   return 0;
@@ -193,12 +207,19 @@ export function stepRadio<T>(
   index: number,
   onSelect: (value: T) => void,
 ): void {
-  let offset = 0;
-  if (event.key === 'ArrowRight' || event.key === 'ArrowDown') offset = 1;
-  else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') offset = -1;
-  if (!offset || !values.length) return;
+  if (!values.length) return;
+  let nextIndex: number | undefined;
+  if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+    nextIndex = (index + 1) % values.length;
+  } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+    nextIndex = (index - 1 + values.length) % values.length;
+  } else if (event.key === 'Home') {
+    nextIndex = 0;
+  } else if (event.key === 'End') {
+    nextIndex = values.length - 1;
+  }
+  if (nextIndex === undefined) return;
   event.preventDefault();
-  const nextIndex = (index + offset + values.length) % values.length;
   const nextValue = values[nextIndex];
   if (nextValue === undefined) return;
   onSelect(nextValue);

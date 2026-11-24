@@ -141,7 +141,9 @@ describe('the admin endpoint', () => {
         headers: authorization ? { authorization } : {},
       });
       expect(response.statusCode).toBe(401);
-      expect(response.json()).toEqual({ error: { code: 'NOT_FOUND', message: 'Not found.' } });
+      expect(response.json()).toEqual({
+        error: { code: 'NOT_FOUND', message: 'Not found.', retryable: false },
+      });
     }
   });
 

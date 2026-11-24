@@ -23,8 +23,8 @@
 
   --color-danger: oklch(0.52 0.19 25);
   --color-danger-wash: oklch(0.96 0.03 25);
-  --color-success: oklch(0.55 0.14 155);
-  --color-warning: oklch(0.7 0.15 75);
+  --color-success: oklch(0.47 0.14 155);
+  --color-warning: oklch(0.68 0.15 75);
 
   --radius-input: 0.875rem;
   --radius-panel: 1.125rem;
@@ -89,6 +89,13 @@
   }
   :focus:not(:focus-visible) {
     outline: none;
+  }
+
+  @media (forced-colors: active) {
+    :focus-visible {
+      outline: 2px solid Highlight;
+      outline-offset: 2px;
+    }
   }
 
   ::selection {

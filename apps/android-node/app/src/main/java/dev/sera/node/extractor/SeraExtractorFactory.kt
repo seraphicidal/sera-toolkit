@@ -7,8 +7,11 @@ import okhttp3.OkHttpClient
 import java.io.File
 
 object SeraExtractorFactory {
-    fun createToolsManager(context: Context): ExtractionToolsManager {
-        return SeraToolsManager(context.applicationContext)
+    fun createToolsManager(
+        context: Context,
+        httpClient: OkHttpClient = OkHttpClient(),
+    ): ExtractionToolsManager {
+        return SeraToolsManager(context.applicationContext, httpClient)
     }
 
     fun createTaskRunner(

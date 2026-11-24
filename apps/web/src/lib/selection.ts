@@ -7,7 +7,7 @@ export function availableKinds(
   info: MediaInfo,
   selectedIds?: ReadonlySet<string>,
 ): SelectableKind[] {
-  const order: SelectableKind[] = ['video', 'audio', 'image', 'gif'];
+  const order: SelectableKind[] = ['video', 'audio', 'image', 'gif', 'file'];
   const present = new Set<SelectableKind>();
   for (const item of info.items) {
     if (selectedIds?.size && !selectedIds.has(item.id)) continue;

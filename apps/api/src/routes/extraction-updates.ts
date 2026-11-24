@@ -1,16 +1,19 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { createReadStream, existsSync } from 'node:fs';
 import { mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import {
+  isSafeYoutubeExtraArgs,
   nodeUpdateManifestSchema,
+  youtubeExtraArgsSchema,
   type AndroidNodeAppUpdateInfo,
   type NodeUpdateManifest,
   type ProviderHotConfig,
   type YtdlpUpdateInfo,
 } from '@sera/contracts';
 import {
+  contentDispositionValue,
   hostMatchesAny,
   InFlightCoalescer,
   isPublicAddress,
@@ -21,7 +24,6 @@ import {
   type SeraEngine,
 } from '@sera/engine';
 import { z } from 'zod';
-import { matchesToken } from '../plugins/client.js';
 
 const DEFAULT_ANDROID_REPO = 'seraphicidal/sera-toolkit';
 const DEFAULT_YTDLP_VERSION = '2026.10.26';
@@ -89,9 +91,27 @@ const manifestOverrideSchema = z.object({
     .object({
       youtube: z
         .object({
-          playerClients: z.array(z.string().min(1).max(64)).max(20).optional(),
-          extraArgs: z.array(z.string().min(1).max(500)).max(50).optional(),
-          remoteComponents: z.array(z.string().min(1).max(128)).max(20).optional(),
+          playerClients: z
+            .array(
+              z
+                .string()
+                .min(1)
+                .max(64)
+                .regex(/^[A-Za-z0-9_+-]+$/),
+            )
+            .max(20)
+            .optional(),
+          extraArgs: youtubeExtraArgsSchema.optional(),
+          remoteComponents: z
+            .array(
+              z
+                .string()
+                .min(1)
+                .max(128)
+                .regex(/^[A-Za-z0-9_.:/-]+$/),
+            )
+            .max(20)
+            .optional(),
           potProviderUrl: httpUrlSchema.optional(),
         })
         .optional(),
@@ -133,57 +153,147 @@ export interface NodeAuthIdentity {
   readonly isLegacy?: boolean;
 }
 
+interface IndexedExtractionTokens {
+  readonly nodes: readonly { readonly nodeId: string; readonly digest: Buffer }[];
+  readonly legacyDigest?: Buffer;
+  readonly workerDigest?: Buffer;
+}
+
+interface ResolvedInternalAuth {
+  readonly node?: NodeAuthIdentity;
+  readonly worker: boolean;
+}
+
+const tokenIndexCache = new WeakMap<
+  SeraEngine['config']['extractionNodes'],
+  IndexedExtractionTokens
+>();
+const requestAuthCache = new WeakMap<FastifyRequest, ResolvedInternalAuth>();
+
+function sha256Buffer(value: string): Buffer {
+  return createHash('sha256').update(value).digest();
+}
+
+function getTokenIndex(
+  extractionNodes: SeraEngine['config']['extractionNodes'],
+): IndexedExtractionTokens {
+  const cached = tokenIndexCache.get(extractionNodes);
+  if (cached) return cached;
+  const nodes: { readonly nodeId: string; readonly digest: Buffer }[] = [];
+  for (const [nodeId, token] of extractionNodes.tokens) {
+    if (token) nodes.push({ nodeId, digest: sha256Buffer(token) });
+  }
+  const indexed: IndexedExtractionTokens = {
+    nodes,
+    ...(extractionNodes.legacyTokenUsed && extractionNodes.token
+      ? { legacyDigest: sha256Buffer(extractionNodes.token) }
+      : {}),
+    ...(extractionNodes.workerToken
+      ? { workerDigest: sha256Buffer(extractionNodes.workerToken) }
+      : {}),
+  };
+  tokenIndexCache.set(extractionNodes, indexed);
+  return indexed;
+}
+
+function resolveInternalAuth(request: FastifyRequest, engine: SeraEngine): ResolvedInternalAuth {
+  const cached = requestAuthCache.get(request);
+  if (cached) return cached;
+  const header = request.headers.authorization ?? '';
+  const presented = header.startsWith('Bearer ') ? header.slice(7) : '';
+  if (!presented) {
+    const empty: ResolvedInternalAuth = { worker: false };
+    requestAuthCache.set(request, empty);
+    return empty;
+  }
+  const presentedDigest = sha256Buffer(presented);
+  const index = getTokenIndex(engine.config.extractionNodes);
+  let node: NodeAuthIdentity | undefined;
+  for (const entry of index.nodes) {
+    if (timingSafeEqual(presentedDigest, entry.digest)) {
+      node = { nodeId: entry.nodeId };
+    }
+  }
+  if (!node && index.legacyDigest && timingSafeEqual(presentedDigest, index.legacyDigest)) {
+    node = { nodeId: 'legacy', isLegacy: true };
+  }
+  let worker = false;
+  if (index.workerDigest && timingSafeEqual(presentedDigest, index.workerDigest)) {
+    worker = true;
+  } else if (
+    !engine.config.isProduction &&
+    !index.workerDigest &&
+    index.legacyDigest &&
+    timingSafeEqual(presentedDigest, index.legacyDigest)
+  ) {
+    worker = true;
+  }
+  const resolved: ResolvedInternalAuth = { ...(node ? { node } : {}), worker };
+  requestAuthCache.set(request, resolved);
+  return resolved;
+}
+
 export function authenticateExtractionNode(
   request: FastifyRequest,
   reply: FastifyReply,
   engine: SeraEngine,
 ): NodeAuthIdentity | undefined {
-  const { config } = engine;
-  const header = request.headers.authorization ?? '';
-  const presented = header.startsWith('Bearer ') ? header.slice(7) : '';
-  if (!presented) {
-    void reply.status(401).send({ error: { code: 'NOT_FOUND', message: 'Not found.' } });
-    return undefined;
-  }
-  for (const [nodeId, token] of config.extractionNodes.tokens) {
-    if (matchesToken(presented, token)) return { nodeId };
-  }
-  if (
-    config.extractionNodes.legacyTokenUsed &&
-    config.extractionNodes.token &&
-    matchesToken(presented, config.extractionNodes.token)
-  ) {
-    return { nodeId: 'legacy', isLegacy: true };
-  }
-  void reply.status(401).send({ error: { code: 'NOT_FOUND', message: 'Not found.' } });
+  const auth = resolveInternalAuth(request, engine);
+  if (auth.node) return auth.node;
+  void reply
+    .status(401)
+    .send({ error: { code: 'NOT_FOUND', message: 'Not found.', retryable: false } });
   return undefined;
 }
 
-export function extractionInternalRateLimit(engine: SeraEngine) {
-  const { config } = engine;
+export function authenticateExtractionWorker(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  engine: SeraEngine,
+): boolean {
+  if (resolveInternalAuth(request, engine).worker) return true;
+  void reply
+    .status(401)
+    .send({ error: { code: 'NOT_FOUND', message: 'Not found.', retryable: false } });
+  return false;
+}
+
+export interface ExtractionRateLimitOptions {
+  readonly authenticatedMax?: number;
+  readonly unauthenticatedMax?: number;
+  readonly scope?: 'node' | 'worker' | 'any';
+}
+
+export function extractionInternalRateLimit(
+  engine: SeraEngine,
+  options: ExtractionRateLimitOptions = {},
+) {
+  const authenticatedMax = options.authenticatedMax ?? 600;
+  const unauthenticatedMax = options.unauthenticatedMax ?? 30;
+  const scope = options.scope ?? 'any';
   return {
     config: {
       rateLimit: {
-        max: 30,
         timeWindow: '1 minute',
-        allowList: (request: FastifyRequest) => {
-          const header = request.headers.authorization ?? '';
-          const presented = header.startsWith('Bearer ') ? header.slice(7) : '';
-          if (!presented) return false;
-          for (const token of config.extractionNodes.tokens.values()) {
-            if (matchesToken(presented, token)) return true;
+        keyGenerator: (request: FastifyRequest) => {
+          const auth = resolveInternalAuth(request, engine);
+          if ((scope === 'node' || scope === 'any') && auth.node) {
+            return `node:${auth.node.nodeId}`;
           }
-          if (
-            config.extractionNodes.legacyTokenUsed &&
-            config.extractionNodes.token &&
-            matchesToken(presented, config.extractionNodes.token)
-          ) {
-            return true;
+          if ((scope === 'worker' || scope === 'any') && auth.worker) {
+            return `worker:${request.clientKey}`;
           }
-          return Boolean(
-            config.extractionNodes.workerToken &&
-            matchesToken(presented, config.extractionNodes.workerToken),
-          );
+          return `unauth:${request.clientKey}`;
+        },
+        max: (request: FastifyRequest) => {
+          const auth = resolveInternalAuth(request, engine);
+          if ((scope === 'node' || scope === 'any') && auth.node) {
+            return authenticatedMax;
+          }
+          if ((scope === 'worker' || scope === 'any') && auth.worker) {
+            return authenticatedMax;
+          }
+          return unauthenticatedMax;
         },
       },
     },
@@ -197,6 +307,7 @@ export interface ExtractionUpdatesOptions {
   readonly githubDownloadBase?: string;
   readonly androidRepo?: string;
   readonly cacheTtlMs?: number;
+  readonly statCacheTtlMs?: number;
   readonly enableRemoteLookup?: boolean;
   readonly ytdlpTrack?: 'pinned' | 'latest';
   readonly githubToken?: string;
@@ -211,8 +322,7 @@ export interface ResolvedUpdateArtifact {
   readonly sha256: string;
   readonly sizeBytes: number;
   readonly manifestHash: string;
-  readonly cachePath?: string;
-  readonly buffer?: Buffer;
+  readonly cachePath: string;
 }
 
 export interface ExtractionUpdatesService {
@@ -242,6 +352,7 @@ export function createExtractionUpdatesService(
     (envAndroidRepo && envAndroidRepo.length > 0 ? envAndroidRepo : DEFAULT_ANDROID_REPO);
   const githubToken = options.githubToken ?? process.env.SERA_GITHUB_TOKEN?.trim() ?? '';
   const cacheTtlMs = options.cacheTtlMs ?? parseTtlMs(process.env.SERA_UPDATES_TTL_SECONDS);
+  const statCacheTtlMs = options.statCacheTtlMs ?? (config.nodeEnv === 'test' ? 0 : 2_000);
   const enableRemoteLookup =
     options.enableRemoteLookup ??
     parseBoolEnv(process.env.SERA_UPDATES_GITHUB_FETCH, config.nodeEnv !== 'test');
@@ -251,8 +362,9 @@ export function createExtractionUpdatesService(
     parseBoolEnv(process.env.SERA_UPDATES_YTDLP_LATEST, false)
       ? 'latest'
       : 'pinned');
-  const defaultExtraArgs =
+  const rawExtraArgs =
     options.extraYoutubeArgs ?? parseExtraArgs(process.env.SERA_YOUTUBE_EXTRA_ARGS);
+  const defaultExtraArgs = isSafeYoutubeExtraArgs(rawExtraArgs) ? rawExtraArgs : [];
   const defaultRemoteComponents =
     options.remoteComponents ??
     parseCsvEnv(process.env.SERA_YOUTUBE_REMOTE_COMPONENTS, ['ejs:github']);
@@ -274,9 +386,56 @@ export function createExtractionUpdatesService(
     androidApp?: AndroidNodeAppUpdateInfo;
   } = { fetchedAt: 0 };
   const ytdlpShaCache = new Map<string, string>();
-  let manifestSnapshot: { key: string; value: NodeUpdateManifest } | undefined;
+  let manifestSnapshot:
+    { inputSignature: string; key: string; value: NodeUpdateManifest } | undefined;
+  let lastManifestHashCheck: { checkedAt: number; hash: string } | undefined;
   let refreshPromise: Promise<void> | undefined;
   const artifactCoalescer = new InFlightCoalescer<ResolvedUpdateArtifact>();
+  const verifiedArtifacts = new Map<
+    string,
+    {
+      readonly sha256: string;
+      readonly sizeBytes: number;
+      readonly mtimeMs: number;
+      readonly ino: number;
+      readonly kind: 'ytdlp' | 'apk';
+    }
+  >();
+
+  const getVerifiedCachedSize = async (
+    path: string,
+    expectedSha256: string,
+    kind: 'ytdlp' | 'apk',
+  ): Promise<number | undefined> => {
+    const info = await stat(path).catch(() => undefined);
+    if (!info?.isFile() || info.size === 0) {
+      verifiedArtifacts.delete(path);
+      return undefined;
+    }
+    const cached = verifiedArtifacts.get(path);
+    if (
+      cached?.sha256 === expectedSha256 &&
+      cached.kind === kind &&
+      cached.sizeBytes === info.size &&
+      cached.mtimeMs === info.mtimeMs &&
+      cached.ino === info.ino
+    ) {
+      return info.size;
+    }
+    const verifiedSize = await verifyCachedFile(path, expectedSha256, kind);
+    if (verifiedSize === undefined) {
+      verifiedArtifacts.delete(path);
+      return undefined;
+    }
+    verifiedArtifacts.set(path, {
+      sha256: expectedSha256,
+      sizeBytes: verifiedSize,
+      mtimeMs: info.mtimeMs,
+      ino: info.ino,
+      kind,
+    });
+    return verifiedSize;
+  };
 
   const loadToolsManifest = async (): Promise<ToolsManifest> => {
     const sig = await fileSignature(toolsManifestPath);
@@ -408,62 +567,67 @@ export function createExtractionUpdatesService(
     targetUrl: string,
     maxBytes: number,
     headers: Record<string, string> = {},
-  ): Promise<{ buffer?: Buffer; cacheTempPath?: string; sha256: string; sizeBytes: number }> => {
-    const parsedUrl = new URL(targetUrl);
-    let streamSource: AsyncIterable<Uint8Array>;
-
-    if (options.fetch) {
-      const response = await options.fetch(targetUrl, {
-        headers,
-        signal: AbortSignal.timeout(ARTIFACT_FETCH_TIMEOUT_MS),
+  ): Promise<{ cacheTempPath: string; sha256: string; sizeBytes: number }> => {
+    if (!cacheDir) {
+      throw seraError('PROVIDER_UNAVAILABLE', {
+        detail: 'updates: artifact cache directory is not configured',
       });
-      if (!response.ok) {
-        await response.body?.cancel().catch(() => undefined);
-        throw seraError('PROVIDER_UNAVAILABLE', {
-          detail: `updates: upstream returned ${response.status}`,
-        });
-      }
-      if (!response.body) {
-        throw seraError('PROVIDER_UNAVAILABLE', { detail: 'updates: empty upstream body' });
-      }
-      streamSource = response.body as unknown as AsyncIterable<Uint8Array>;
-    } else {
-      assertSafeRemoteUrl(parsedUrl, config, githubApiBase, githubDownloadBase);
-      const response = await safeOpen(parsedUrl, {
-        dispatcher: engine.resolver.dispatcher,
-        timeoutMs: ARTIFACT_FETCH_TIMEOUT_MS,
-        allowPrivateAddresses: config.allowPrivateAddresses,
-        headers,
-        allowUrl: (candidate) =>
-          isAllowedRemoteUrl(candidate, config, githubApiBase, githubDownloadBase),
-      });
-      if (response.status >= 400) {
-        response.body.destroy();
-        throw seraError('PROVIDER_UNAVAILABLE', {
-          detail: `updates: upstream returned ${response.status}`,
-        });
-      }
-      streamSource = response.body;
     }
 
     let handle: Awaited<ReturnType<typeof open>> | undefined;
-    let tempPath: string | undefined;
-    const chunks: Buffer[] = [];
-    if (cacheDir) {
-      try {
-        await mkdir(cacheDir, { recursive: true });
-        tempPath = join(cacheDir, `dl-${randomUUID()}.tmp`);
-        handle = await open(tempPath, 'w');
-      } catch {
-        handle = undefined;
-        tempPath = undefined;
-      }
+    let tempPath: string;
+    try {
+      await mkdir(cacheDir, { recursive: true });
+      tempPath = join(cacheDir, `dl-${randomUUID()}.tmp`);
+      handle = await open(tempPath, 'w');
+    } catch (error) {
+      logger.warn({ err: error, cacheDir }, 'updates artifact cache directory is not writable');
+      throw seraError('PROVIDER_UNAVAILABLE', {
+        detail: 'updates: artifact cache directory is not writable',
+      });
     }
 
-    const hash = createHash('sha256');
-    let sizeBytes = 0;
+    const parsedUrl = new URL(targetUrl);
+    let streamSource: AsyncIterable<Uint8Array>;
 
     try {
+      if (options.fetch) {
+        const response = await options.fetch(targetUrl, {
+          headers,
+          signal: AbortSignal.timeout(ARTIFACT_FETCH_TIMEOUT_MS),
+        });
+        if (!response.ok) {
+          await response.body?.cancel().catch(() => undefined);
+          throw seraError('PROVIDER_UNAVAILABLE', {
+            detail: `updates: upstream returned ${response.status}`,
+          });
+        }
+        if (!response.body) {
+          throw seraError('PROVIDER_UNAVAILABLE', { detail: 'updates: empty upstream body' });
+        }
+        streamSource = response.body as unknown as AsyncIterable<Uint8Array>;
+      } else {
+        assertSafeRemoteUrl(parsedUrl, config, githubApiBase, githubDownloadBase);
+        const response = await safeOpen(parsedUrl, {
+          dispatcher: engine.resolver.dispatcher,
+          timeoutMs: ARTIFACT_FETCH_TIMEOUT_MS,
+          allowPrivateAddresses: config.allowPrivateAddresses,
+          headers,
+          allowUrl: (candidate) =>
+            isAllowedRemoteUrl(candidate, config, githubApiBase, githubDownloadBase),
+        });
+        if (response.status >= 400) {
+          response.body.destroy();
+          throw seraError('PROVIDER_UNAVAILABLE', {
+            detail: `updates: upstream returned ${response.status}`,
+          });
+        }
+        streamSource = response.body;
+      }
+
+      const hash = createHash('sha256');
+      let sizeBytes = 0;
+
       for await (const rawChunk of streamSource) {
         const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk);
         sizeBytes += chunk.byteLength;
@@ -471,25 +635,19 @@ export function createExtractionUpdatesService(
           throw seraError('TOO_LARGE', { detail: 'updates: artifact exceeds max size' });
         }
         hash.update(chunk);
-        if (handle) {
-          await handle.write(chunk);
-        } else {
-          chunks.push(chunk);
-        }
+        await handle.write(chunk);
       }
-      if (handle) {
-        await handle.close();
-        handle = undefined;
-      }
+      await handle.close();
+      handle = undefined;
       const digest = hash.digest('hex').toLowerCase();
       return {
-        ...(tempPath ? { cacheTempPath: tempPath } : { buffer: Buffer.concat(chunks) }),
+        cacheTempPath: tempPath,
         sha256: digest,
         sizeBytes,
       };
     } catch (error) {
       if (handle) await handle.close().catch(() => undefined);
-      if (tempPath) await rm(tempPath, { force: true }).catch(() => undefined);
+      await rm(tempPath, { force: true }).catch(() => undefined);
       throw error;
     }
   };
@@ -697,6 +855,19 @@ export function createExtractionUpdatesService(
         allowChecksumFetch,
       ));
 
+    const inputSignature = [
+      cachedToolsManifest?.signature ?? '',
+      cachedLocalOverrides.signature,
+      String(cachedRemote.fetchedAt),
+      cachedRemote.latestYtdlpVersion ?? '',
+      cachedRemote.androidApp?.sha256 ?? '',
+      ytdlpSha ?? '',
+    ].join('|');
+
+    if (manifestSnapshot?.inputSignature === inputSignature) {
+      return { ...manifestSnapshot.value, generatedAt: new Date().toISOString() };
+    }
+
     const ytdlp: YtdlpUpdateInfo = {
       version,
       assetName,
@@ -761,6 +932,7 @@ export function createExtractionUpdatesService(
       .digest('hex');
 
     if (manifestSnapshot?.key === manifestHash) {
+      manifestSnapshot = { ...manifestSnapshot, inputSignature };
       return { ...manifestSnapshot.value, generatedAt: new Date().toISOString() };
     }
 
@@ -769,7 +941,7 @@ export function createExtractionUpdatesService(
       generatedAt: new Date().toISOString(),
       ...canonicalContent,
     });
-    manifestSnapshot = { key: manifestHash, value: built };
+    manifestSnapshot = { inputSignature, key: manifestHash, value: built };
     return built;
   };
 
@@ -786,16 +958,30 @@ export function createExtractionUpdatesService(
   const getManifest = async (
     opts: { readonly forceRefresh?: boolean } = {},
   ): Promise<NodeUpdateManifest> => {
+    if (opts.forceRefresh) {
+      lastManifestHashCheck = undefined;
+    }
     if (opts.forceRefresh || isRemoteStale()) {
       const tools = await loadToolsManifest();
       await performRemoteRefresh(tools);
     }
-    return assembleManifest(enableRemoteLookup);
+    const manifest = await assembleManifest(enableRemoteLookup);
+    lastManifestHashCheck = { checkedAt: Date.now(), hash: manifest.manifestHash };
+    return manifest;
   };
 
   const currentManifestHash = async (): Promise<string> => {
     refreshInBackground();
+    const now = Date.now();
+    if (
+      statCacheTtlMs > 0 &&
+      lastManifestHashCheck &&
+      now - lastManifestHashCheck.checkedAt < statCacheTtlMs
+    ) {
+      return lastManifestHashCheck.hash;
+    }
     const manifest = await assembleManifest(false);
+    lastManifestHashCheck = { checkedAt: Date.now(), hash: manifest.manifestHash };
     return manifest.manifestHash;
   };
 
@@ -820,7 +1006,9 @@ export function createExtractionUpdatesService(
       ]);
       assetName = assetOverride ?? manifest.ytdlp.assetName;
       if (!allowedAssets.has(assetName)) {
-        throw seraError('INVALID_URL', { detail: `updates: unknown ytdlp asset ${assetName}` });
+        throw seraError('VALIDATION_ERROR', {
+          detail: `updates: unknown ytdlp asset ${assetName}`,
+        });
       }
       versionKey = manifest.ytdlp.version;
       url =
@@ -860,12 +1048,31 @@ export function createExtractionUpdatesService(
       maxBytes = MAX_APK_BYTES;
     }
 
+    if (!cacheDir) {
+      throw seraError('PROVIDER_UNAVAILABLE', {
+        detail: 'updates: artifact cache directory is not configured',
+      });
+    }
+
     const expectedLower = expectedSha256.toLowerCase();
     const cacheFileName = `${kind}-${sanitizeCacheSegment(versionKey)}-${expectedLower.slice(0, 12)}-${sanitizeCacheSegment(assetName)}`;
-    const cachePath = cacheDir ? join(cacheDir, cacheFileName) : undefined;
+    const cachePath = join(cacheDir, cacheFileName);
 
-    if (cachePath) {
-      const existing = await verifyCachedFile(cachePath, expectedLower, kind);
+    const fastExisting = await getVerifiedCachedSize(cachePath, expectedLower, kind);
+    if (fastExisting !== undefined) {
+      return {
+        kind,
+        assetName,
+        contentType,
+        sha256: expectedLower,
+        sizeBytes: fastExisting,
+        manifestHash: manifest.manifestHash,
+        cachePath,
+      };
+    }
+
+    return artifactCoalescer.run(`${kind}:${expectedLower}:${assetName}`, async () => {
+      const existing = await getVerifiedCachedSize(cachePath, expectedLower, kind);
       if (existing !== undefined) {
         return {
           kind,
@@ -877,62 +1084,39 @@ export function createExtractionUpdatesService(
           cachePath,
         };
       }
-      await rm(cachePath, { force: true }).catch(() => undefined);
-    }
 
-    return artifactCoalescer.run(`${kind}:${expectedLower}:${assetName}`, async () => {
-      if (cachePath) {
-        const existing = await verifyCachedFile(cachePath, expectedLower, kind);
-        if (existing !== undefined) {
-          return {
-            kind,
-            assetName,
-            contentType,
-            sha256: expectedLower,
-            sizeBytes: existing,
-            manifestHash: manifest.manifestHash,
-            cachePath,
-          };
-        }
-      }
+      await rm(cachePath, { force: true }).catch(() => undefined);
+      verifiedArtifacts.delete(cachePath);
 
       const downloaded = await downloadBinaryFromUpstream(url, maxBytes);
       if (downloaded.sha256 !== expectedLower) {
-        if (downloaded.cacheTempPath) {
-          await rm(downloaded.cacheTempPath, { force: true }).catch(() => undefined);
-        }
+        await rm(downloaded.cacheTempPath, { force: true }).catch(() => undefined);
         throw seraError('PROVIDER_UNAVAILABLE', {
           detail: `updates: checksum mismatch for ${assetName}`,
         });
       }
 
       if (kind === 'apk') {
-        const isZip = downloaded.cacheTempPath
-          ? await hasZipMagicFile(downloaded.cacheTempPath)
-          : hasZipMagicBuffer(downloaded.buffer);
+        const isZip = await hasZipMagicFile(downloaded.cacheTempPath);
         if (!isZip) {
-          if (downloaded.cacheTempPath) {
-            await rm(downloaded.cacheTempPath, { force: true }).catch(() => undefined);
-          }
+          await rm(downloaded.cacheTempPath, { force: true }).catch(() => undefined);
           throw seraError('PROVIDER_UNAVAILABLE', {
             detail: `updates: ${assetName} is not a valid APK archive`,
           });
         }
       }
 
-      if (downloaded.cacheTempPath && cachePath) {
-        await rename(downloaded.cacheTempPath, cachePath);
-        return {
-          kind,
-          assetName,
-          contentType,
+      await rename(downloaded.cacheTempPath, cachePath);
+      const renamedStat = await stat(cachePath).catch(() => undefined);
+      if (renamedStat?.isFile()) {
+        verifiedArtifacts.set(cachePath, {
           sha256: expectedLower,
-          sizeBytes: downloaded.sizeBytes,
-          manifestHash: manifest.manifestHash,
-          cachePath,
-        };
+          sizeBytes: renamedStat.size,
+          mtimeMs: renamedStat.mtimeMs,
+          ino: renamedStat.ino,
+          kind,
+        });
       }
-
       return {
         kind,
         assetName,
@@ -940,7 +1124,7 @@ export function createExtractionUpdatesService(
         sha256: expectedLower,
         sizeBytes: downloaded.sizeBytes,
         manifestHash: manifest.manifestHash,
-        buffer: downloaded.buffer,
+        cachePath,
       };
     });
   };
@@ -966,9 +1150,16 @@ export function registerExtractionUpdateRoutes(
   }
 
   void rootApp.register(async (app) => {
-    const rateLimit = extractionInternalRateLimit(engine);
+    const manifestRateLimit = extractionInternalRateLimit(engine, {
+      authenticatedMax: 60,
+      scope: 'node',
+    });
+    const artifactRateLimit = extractionInternalRateLimit(engine, {
+      authenticatedMax: 20,
+      scope: 'node',
+    });
 
-    app.get('/internal/extraction/updates/manifest', rateLimit, async (request, reply) => {
+    app.get('/internal/extraction/updates/manifest', manifestRateLimit, async (request, reply) => {
       const auth = authenticateExtractionNode(request, reply, engine);
       if (!auth) return reply;
 
@@ -979,24 +1170,34 @@ export function registerExtractionUpdateRoutes(
         .send(manifest);
     });
 
-    app.get('/internal/extraction/updates/ytdlp', rateLimit, async (request, reply) => {
-      const auth = authenticateExtractionNode(request, reply, engine);
-      if (!auth) return reply;
+    app.route({
+      method: ['GET', 'HEAD'],
+      url: '/internal/extraction/updates/ytdlp',
+      ...artifactRateLimit,
+      handler: async (request, reply) => {
+        const auth = authenticateExtractionNode(request, reply, engine);
+        if (!auth) return reply;
 
-      const query = ytdlpQuerySchema.safeParse(request.query);
-      if (!query.success) {
-        throw seraError('INVALID_URL', { detail: 'updates: malformed query' });
-      }
-      const artifact = await updates.resolveArtifact('ytdlp', query.data.asset);
-      return sendArtifact(request, reply, artifact);
+        const query = ytdlpQuerySchema.safeParse(request.query);
+        if (!query.success) {
+          throw seraError('VALIDATION_ERROR', { detail: 'updates: malformed query' });
+        }
+        const artifact = await updates.resolveArtifact('ytdlp', query.data.asset);
+        return sendArtifact(request, reply, artifact);
+      },
     });
 
-    app.get('/internal/extraction/updates/apk', rateLimit, async (request, reply) => {
-      const auth = authenticateExtractionNode(request, reply, engine);
-      if (!auth) return reply;
+    app.route({
+      method: ['GET', 'HEAD'],
+      url: '/internal/extraction/updates/apk',
+      ...artifactRateLimit,
+      handler: async (request, reply) => {
+        const auth = authenticateExtractionNode(request, reply, engine);
+        if (!auth) return reply;
 
-      const artifact = await updates.resolveArtifact('apk');
-      return sendArtifact(request, reply, artifact);
+        const artifact = await updates.resolveArtifact('apk');
+        return sendArtifact(request, reply, artifact);
+      },
     });
   });
 }
@@ -1009,7 +1210,7 @@ function sendArtifact(
   const etag = `"${artifact.sha256}"`;
   reply
     .header('content-type', artifact.contentType)
-    .header('content-disposition', `attachment; filename="${artifact.assetName}"`)
+    .header('content-disposition', contentDispositionValue(artifact.assetName))
     .header('cache-control', 'private, no-store')
     .header('etag', etag)
     .header('x-sera-sha256', artifact.sha256)
@@ -1024,10 +1225,7 @@ function sendArtifact(
   if (request.method === 'HEAD') {
     return reply.status(200).send();
   }
-  if (artifact.cachePath) {
-    return reply.status(200).send(createReadStream(artifact.cachePath));
-  }
-  return reply.status(200).send(artifact.buffer ?? Buffer.alloc(0));
+  return reply.status(200).send(createReadStream(artifact.cachePath));
 }
 
 function locateToolsManifestPath(): string {

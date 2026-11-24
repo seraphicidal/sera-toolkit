@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 describe('Website Legal Pages Content & Compliance', () => {
@@ -21,6 +21,19 @@ describe('Website Legal Pages Content & Compliance', () => {
   const aboutPath = fileURLToPath(new URL('../apps/web/src/app/about/page.tsx', import.meta.url));
   const layoutPath = fileURLToPath(new URL('../apps/web/src/app/layout.tsx', import.meta.url));
   const cssPath = fileURLToPath(new URL('../apps/web/src/styles/globals.css', import.meta.url));
+  const errorBoundaryPath = fileURLToPath(
+    new URL('../apps/web/src/app/error.tsx', import.meta.url),
+  );
+  const notFoundPath = fileURLToPath(new URL('../apps/web/src/app/not-found.tsx', import.meta.url));
+  const downloaderPath = fileURLToPath(
+    new URL('../apps/web/src/components/downloader.tsx', import.meta.url),
+  );
+  const importClientPath = fileURLToPath(
+    new URL('../apps/web/src/components/import-client.tsx', import.meta.url),
+  );
+  const apiRoutePath = fileURLToPath(
+    new URL('../apps/web/src/app/api/[...path]/route.ts', import.meta.url),
+  );
 
   it('verifies Provider Identification (DDG § 5 / E-Commerce Art. 5 / DSA Arts. 11 & 12)', () => {
     const content = readFileSync(noticePath, 'utf8');
@@ -34,6 +47,7 @@ describe('Website Legal Pages Content & Compliance', () => {
     expect(content).toContain('CONTACT_EMAIL_AUTHORITIES');
     expect(content).toContain('CONTACT_EMAIL_LEGAL');
     expect(content).toContain('English and German');
+    expect(content).toContain('cleanEmail');
   });
 
   it('verifies GDPR Privacy Notice requirements (Arts. 12-14 & ePrivacy)', () => {
@@ -42,6 +56,8 @@ describe('Website Legal Pages Content & Compliance', () => {
     expect(content).toContain('6(1)(f)');
     expect(content).toContain('1800');
     expect(content).toContain('30 minutes');
+    expect(content).toContain('loadServiceInfo');
+    expect(content).toContain('scope="col"');
     expect(content).toContain('thumbnail');
     expect(content).toContain('/api/thumb/:token');
     expect(content).toContain('sera-theme');
@@ -74,9 +90,11 @@ describe('Website Legal Pages Content & Compliance', () => {
     expect(content).toContain('notifierName');
     expect(content).toContain('notifierEmail');
     expect(content).toContain('goodFaithConfirmed');
+    expect(content).toContain('minLength={10}');
+    expect(content).toContain('minLength={2}');
   });
 
-  it('verifies About page includes Storage Transparency and ClearHistoryButton', () => {
+  it('verifies About page includes Storage Transparency, ClearHistoryButton, and Node Availability', () => {
     const content = readFileSync(aboutPath, 'utf8');
     expect(content).toContain('Local storage & ePrivacy');
     expect(content).toContain('sera-theme');
@@ -86,22 +104,45 @@ describe('Website Legal Pages Content & Compliance', () => {
     expect(content).toContain('Per-Node Isolation');
     expect(content).toContain('6 releases');
     expect(content).toContain('7,071 lines changed');
+    expect(content).toContain('nodeAvailability');
   });
 
-  it('verifies Global Navigation footer includes all mandatory legal routes', () => {
+  it('verifies Global Navigation footer includes all mandatory legal routes and validated nonce', () => {
     const content = readFileSync(layoutPath, 'utf8');
     expect(content).toContain('/legal/terms');
     expect(content).toContain('/legal/privacy');
     expect(content).toContain('/legal/notice');
     expect(content).toContain('/legal/report');
+    expect(content).toContain('NONCE_PATTERN');
+    expect(content).not.toContain('text-[var(--color-ink-faint)]/70');
   });
 
-  it('verifies Accessibility (EAA 2025 / WCAG 2.1 AA) styling tokens', () => {
+  it('verifies Accessibility (EAA 2025 / WCAG 2.1 AA) styling tokens and error boundaries', () => {
     const css = readFileSync(cssPath, 'utf8');
     expect(css).toContain('--shadow-focus');
     expect(css).toContain('--color-canvas');
     expect(css).toContain('--color-surface');
     expect(css).toContain('--color-ink');
     expect(css).toContain('--color-ink-muted');
+    expect(css).toContain('forced-colors: active');
+    expect(existsSync(errorBoundaryPath)).toBe(true);
+    expect(existsSync(notFoundPath)).toBe(true);
+  });
+
+  it('verifies web hardening regressions (API route allowlist, mobile trim inputMode, no dead postMessage)', () => {
+    const route = readFileSync(apiRoutePath, 'utf8');
+    expect(route).toContain('resolveSafeApiPath');
+    expect(route).not.toContain('export const PUT');
+    expect(route).not.toContain('export const PATCH');
+
+    const downloader = readFileSync(downloaderPath, 'utf8');
+    expect(downloader).toContain('inputMode="text"');
+    expect(downloader).not.toContain('inputMode="numeric"');
+    expect(downloader).toContain('getServiceInfo');
+    expect(downloader).toContain('nodeAvailability');
+
+    const importClient = readFileSync(importClientPath, 'utf8');
+    expect(importClient).not.toContain('openImportChannel');
+    expect(importClient).not.toContain('window.opener');
   });
 });

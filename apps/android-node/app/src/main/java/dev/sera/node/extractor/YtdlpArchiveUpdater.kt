@@ -2,16 +2,28 @@ package dev.sera.node.extractor
 
 import dev.sera.node.model.ToolUpdateResult
 import dev.sera.node.model.YtdlpUpdateInfo
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import okhttp3.Call
+import okhttp3.Callback
+import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resumeWithException
 
 private val SHA256_HEX_REGEX = Regex("^[a-f0-9]{64}$")
 
@@ -65,6 +77,7 @@ class YtdlpArchiveUpdater(
             )
         }
 
+        val baseOriginUrl = apiBaseUrl?.trim()?.trimEnd('/')?.toHttpUrlOrNull()
         val allTargets = resolveTargets(
             apiBaseUrl = apiBaseUrl,
             proxyPath = manifest.proxyPath,
@@ -95,19 +108,29 @@ class YtdlpArchiveUpdater(
         var lastError = "yt-dlp download failed"
 
         for (target in targets) {
+            currentCoroutineContext().ensureActive()
             staging.delete()
-            try {
-                val reqBuilder = Request.Builder().url(target.url).get()
-                if (target.sendAuthHeader && !authToken.isNullOrBlank()) {
-                    reqBuilder.header("Authorization", "Bearer ${authToken.trim()}")
+            val reqBuilder = Request.Builder().url(target.url).get()
+            if (target.sendAuthHeader) {
+                val safeToken = authToken?.trim()?.takeIf { t -> t.isNotEmpty() && t.all { it.code in 0x21..0x7E } }
+                if (safeToken != null) {
+                    reqBuilder.header("Authorization", "Bearer $safeToken")
                 }
-                downloadClient.newCall(reqBuilder.build()).execute().use { response ->
-                    if (!response.isSuccessful) {
-                        lastError = "HTTP ${response.code} downloading ${target.url}"
+            }
+            val call = downloadClient.newCall(reqBuilder.build())
+            val cancelHandle = currentCoroutineContext()[Job]?.invokeOnCompletion { cause ->
+                if (cause != null) call.cancel()
+            }
+            try {
+                val response = awaitCall(call)
+                response.use { res ->
+                    if (!res.isSuccessful) {
+                        lastError = "HTTP ${res.code} downloading ${target.url}"
                         return@use
                     }
-                    val headerSha = if (target.sendAuthHeader) {
-                        response.header("X-Sera-Sha256")?.let { normalizeSha256(it) }
+                    val sameOriginFinal = baseOriginUrl != null && isSameOrigin(baseOriginUrl, res.request.url)
+                    val headerSha = if (target.sendAuthHeader && sameOriginFinal) {
+                        res.header("X-Sera-Sha256")?.let { normalizeSha256(it) }
                             ?.takeIf { SHA256_HEX_REGEX.matches(it) }
                     } else {
                         null
@@ -117,7 +140,7 @@ class YtdlpArchiveUpdater(
                         lastError = "Missing yt-dlp SHA-256 verification header"
                         return@use
                     }
-                    val body = response.body ?: run {
+                    val body = res.body ?: run {
                         lastError = "Empty yt-dlp response body"
                         return@use
                     }
@@ -128,6 +151,7 @@ class YtdlpArchiveUpdater(
                     body.byteStream().use { input ->
                         FileOutputStream(staging).use { output ->
                             while (true) {
+                                currentCoroutineContext().ensureActive()
                                 val read = input.read(buffer)
                                 if (read <= 0) break
                                 output.write(buffer, 0, read)
@@ -157,7 +181,7 @@ class YtdlpArchiveUpdater(
                         return@use
                     }
 
-                    staging.setExecutable(true, false)
+                    staging.setExecutable(true, true)
                     backup.delete()
                     if (targetBinaryFile.exists()) {
                         if (!targetBinaryFile.renameTo(backup)) {
@@ -168,7 +192,7 @@ class YtdlpArchiveUpdater(
                         staging.copyTo(targetBinaryFile, overwrite = true)
                         staging.delete()
                     }
-                    targetBinaryFile.setExecutable(true, false)
+                    targetBinaryFile.setExecutable(true, true)
                     backup.delete()
                     versionMarkerFile.writeText("${manifest.version}\n", Charsets.UTF_8)
 
@@ -184,9 +208,15 @@ class YtdlpArchiveUpdater(
                         },
                     )
                 }
+            } catch (cancelled: CancellationException) {
+                call.cancel()
+                staging.delete()
+                throw cancelled
             } catch (error: IOException) {
                 staging.delete()
                 lastError = error.message ?: "Network error downloading yt-dlp"
+            } finally {
+                cancelHandle?.dispose()
             }
         }
 
@@ -197,6 +227,26 @@ class YtdlpArchiveUpdater(
             sha256Verified = false,
             message = lastError,
         )
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private suspend fun awaitCall(call: Call): Response {
+        return suspendCancellableCoroutine { cont ->
+            cont.invokeOnCancellation { call.cancel() }
+            call.enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    if (!cont.isCancelled) {
+                        cont.resumeWithException(e)
+                    }
+                }
+
+                override fun onResponse(call: Call, response: Response) {
+                    cont.resume(response) { _, res, _ ->
+                        res.close()
+                    }
+                }
+            })
+        }
     }
 
     data class UpdateTarget(
@@ -236,6 +286,12 @@ class YtdlpArchiveUpdater(
             return isShebang || isZip
         }
 
+        fun isSameOrigin(a: HttpUrl, b: HttpUrl): Boolean {
+            return a.scheme.equals(b.scheme, ignoreCase = true) &&
+                a.host.equals(b.host, ignoreCase = true) &&
+                a.port == b.port
+        }
+
         fun resolveTargets(
             apiBaseUrl: String?,
             proxyPath: String?,
@@ -243,22 +299,42 @@ class YtdlpArchiveUpdater(
         ): List<UpdateTarget> {
             val targets = mutableListOf<UpdateTarget>()
             val cleanBase = apiBaseUrl?.trim()?.trimEnd('/')?.ifBlank { null }
+            val baseHttpUrl = cleanBase?.toHttpUrlOrNull()
             val cleanProxy = proxyPath?.trim()?.ifBlank { null }
-            if (cleanBase != null && cleanProxy != null) {
-                val resolved = if (
+            if (cleanBase != null && baseHttpUrl != null && cleanProxy != null) {
+                val resolved = when {
+                    cleanProxy.startsWith("//") || cleanProxy.contains('\\') -> null
                     cleanProxy.startsWith("http://", ignoreCase = true) ||
-                    cleanProxy.startsWith("https://", ignoreCase = true)
-                ) {
-                    cleanProxy
-                } else {
-                    val path = if (cleanProxy.startsWith("/")) cleanProxy else "/$cleanProxy"
-                    "$cleanBase$path"
+                        cleanProxy.startsWith("https://", ignoreCase = true) -> {
+                        val parsedProxy = cleanProxy.toHttpUrlOrNull()
+                        if (parsedProxy != null && isSameOrigin(baseHttpUrl, parsedProxy)) {
+                            parsedProxy.toString()
+                        } else {
+                            null
+                        }
+                    }
+                    else -> {
+                        val path = if (cleanProxy.startsWith("/")) cleanProxy else "/$cleanProxy"
+                        val candidate = "$cleanBase$path".toHttpUrlOrNull()
+                        if (candidate != null && isSameOrigin(baseHttpUrl, candidate) && !cleanProxy.contains("..")) {
+                            candidate.toString()
+                        } else {
+                            null
+                        }
+                    }
                 }
-                targets.add(UpdateTarget(url = resolved, sendAuthHeader = true))
+                if (resolved != null) {
+                    targets.add(UpdateTarget(url = resolved, sendAuthHeader = true))
+                }
             }
             val cleanDirect = directUrl?.trim()?.ifBlank { null }
-            if (cleanDirect != null && targets.none { it.url == cleanDirect }) {
-                targets.add(UpdateTarget(url = cleanDirect, sendAuthHeader = false))
+            val parsedDirect = cleanDirect?.toHttpUrlOrNull()
+            if (
+                parsedDirect != null &&
+                (parsedDirect.isHttps || (baseHttpUrl != null && isSameOrigin(baseHttpUrl, parsedDirect))) &&
+                targets.none { it.url == parsedDirect.toString() }
+            ) {
+                targets.add(UpdateTarget(url = parsedDirect.toString(), sendAuthHeader = false))
             }
             return targets
         }

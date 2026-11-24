@@ -64,8 +64,9 @@ beforeAll(async () => {
 afterAll(async () => {
   child?.kill();
   await app?.close();
-  await rm(apiDir, { recursive: true, force: true });
-  await rm(nodeDir, { recursive: true, force: true });
+  await engine?.close();
+  await rm(apiDir, { recursive: true, force: true }).catch(() => undefined);
+  await rm(nodeDir, { recursive: true, force: true }).catch(() => undefined);
 });
 
 const wait = (ms: number) => new Promise((done) => setTimeout(done, ms));
@@ -111,7 +112,7 @@ describe('the shipped extraction node, as a child process', () => {
     });
     expect(response.status).toBe(401);
     expect(await response.json()).toEqual({
-      error: { code: 'NOT_FOUND', message: 'Not found.' },
+      error: { code: 'NOT_FOUND', message: 'Not found.', retryable: false },
     });
   });
 

@@ -2,7 +2,7 @@ import { fileURLToPath } from 'node:url';
 import type { NextConfig } from 'next';
 import { buildCspHeader } from './src/lib/csp';
 
-const csp = buildCspHeader();
+const csp = buildCspHeader({ isDev: process.env.NODE_ENV === 'development' });
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
@@ -25,9 +25,10 @@ const nextConfig: NextConfig = {
           { key: 'x-frame-options', value: 'DENY' },
           {
             key: 'permissions-policy',
-            value: 'camera=(), microphone=(), geolocation=(), interest-cohort=()',
+            value: 'camera=(), microphone=(), geolocation=()',
           },
           { key: 'cross-origin-opener-policy', value: 'same-origin' },
+          { key: 'x-permitted-cross-domain-policies', value: 'none' },
           {
             key: 'strict-transport-security',
             value: 'max-age=63072000; includeSubDomains',

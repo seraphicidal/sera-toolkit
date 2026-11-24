@@ -97,7 +97,7 @@ export function ThemeToggle() {
               )
             }
             className={cx(
-              'grid size-7 cursor-pointer place-items-center rounded-full transition-colors duration-150',
+              'grid size-9 cursor-pointer place-items-center rounded-full transition-colors duration-150',
               selected
                 ? 'bg-[var(--color-sunken)] text-[var(--color-ink)]'
                 : 'text-[var(--color-ink-faint)] hover:text-[var(--color-ink)]',

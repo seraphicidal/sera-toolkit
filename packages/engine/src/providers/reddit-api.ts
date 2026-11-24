@@ -1,6 +1,7 @@
 import { seraError } from '../errors.js';
 import type { Logger } from '../logging.js';
 import { readBoundedJson } from '../security/http.js';
+import { InFlightCoalescer } from '../util/coalesce.js';
 
 const TOKEN_ENDPOINT = 'https://www.reddit.com/api/v1/access_token';
 const MAX_REDDIT_JSON_BYTES = 8 * 1024 * 1024;
@@ -20,7 +21,7 @@ interface CachedToken {
 
 export class RedditTokenSource {
   private cached: CachedToken | undefined;
-  private inFlight: Promise<string> | undefined;
+  private readonly coalescer = new InFlightCoalescer<string>();
 
   constructor(
     private readonly credentials: RedditCredentials,
@@ -32,10 +33,16 @@ export class RedditTokenSource {
   async token(signal?: AbortSignal, fetchOverride?: typeof fetch): Promise<string> {
     const cached = this.cached;
     if (cached && cached.expiresAt - RENEW_MARGIN_MS > this.now()) return cached.value;
-    this.inFlight ??= this.request(signal, fetchOverride).finally(() => {
-      this.inFlight = undefined;
-    });
-    return this.inFlight;
+    try {
+      return await this.coalescer.run(
+        'token',
+        (coalescedSignal) => this.request(coalescedSignal, fetchOverride),
+        signal,
+      );
+    } catch (error) {
+      if (signal?.aborted) throw seraError('CANCELLED', { cause: error });
+      throw error;
+    }
   }
 
   invalidate(): void {

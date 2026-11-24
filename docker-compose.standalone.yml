@@ -28,12 +28,17 @@ services:
     restart: unless-stopped
     read_only: true
     tmpfs:
-      - /tmp
-      - /app/apps/web/.next/cache
+      - /tmp:noexec,nosuid,nodev,size=64m
+      - /app/apps/web/.next/cache:noexec,nosuid,nodev,size=128m
+    pids_limit: 128
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    deploy:
+      resources:
+        limits:
+          memory: 512m
 
   api:
     image: ${SERA_IMAGE_API:-ghcr.io/seraphicidal/sera-api:latest}
@@ -86,13 +91,14 @@ services:
       SERA_ENABLED_PROVIDERS: ${SERA_ENABLED_PROVIDERS:-}
       SERA_DISABLED_PROVIDERS: ${SERA_DISABLED_PROVIDERS:-}
       SERA_ALLOW_PRIVATE_ADDRESSES: ${SERA_ALLOW_PRIVATE_ADDRESSES:-false}
-      SERA_TRUST_PROXY: ${SERA_TRUST_PROXY:-127.0.0.1/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7}
+      SERA_TRUST_PROXY: ${SERA_TRUST_PROXY:-1}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     volumes:
       - media:/data
     read_only: true
     tmpfs:
-      - /tmp:exec
+      - /tmp:exec,nosuid,nodev,size=256m
+    pids_limit: 256
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true

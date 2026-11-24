@@ -250,9 +250,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): EngineConfig {
   const e = parsed.data;
   const isProduction = e.NODE_ENV === 'production';
 
-  if (isProduction && !e.SERA_SECRET) {
+  if (isProduction && e.SERA_SECRET.trim().length < 32) {
     throw new ConfigError(
-      'SERA_SECRET must be set in production. Generate one with:\n' +
+      'SERA_SECRET must be set to at least 32 characters in production. Generate one with:\n' +
         "  node -e \"console.log(require('node:crypto').randomBytes(32).toString('hex'))\"",
     );
   }
@@ -287,10 +287,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): EngineConfig {
 
   const legacyToken = e.SERA_EXTRACTION_NODE_TOKEN.trim();
   const legacyTokenUsed = nodeTokens.size === 0 && Boolean(legacyToken);
-  const workerToken =
-    e.SERA_EXTRACTION_WORKER_TOKEN.trim() ||
-    (legacyTokenUsed ? legacyToken : '') ||
-    e.SERA_ADMIN_TOKEN.trim();
+  const workerToken = e.SERA_EXTRACTION_WORKER_TOKEN.trim();
   const nodesEnabled = nodeTokens.size > 0 || legacyToken.length > 0;
 
   const extractionProxy = e.SERA_EXTRACTION_PROXY_URL.trim();

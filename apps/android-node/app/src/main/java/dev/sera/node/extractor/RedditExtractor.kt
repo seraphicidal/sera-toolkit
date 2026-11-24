@@ -242,7 +242,7 @@ class RedditExtractor(
             url = url.toString(),
             type = if (items.size > 1) "collection" else "single",
             title = title,
-            author = author?.let { "u/$it" },
+            author = author?.let { "u/$it".take(200) },
             thumbnailUrl = items.firstOrNull()?.thumbnailUrl,
             items = items,
             metadata = mapOf(
@@ -438,8 +438,8 @@ private fun redditGalleryItems(post: RedditPost, limit: Int): List<ResolvedItem>
         val still = redditHttpsUrl(media.s?.u)
         val gif = redditHttpsUrl(media.s?.gif)
         val mp4 = redditHttpsUrl(media.s?.mp4)
-        val width = media.s?.x
-        val height = media.s?.y
+        val width = media.s?.x?.takeIf { it > 0 }
+        val height = media.s?.y?.takeIf { it > 0 }
 
         if (media.e == "AnimatedImage" && (mp4 != null || gif != null)) {
             val plans = ArrayList<ResolvedPlan>()
@@ -473,7 +473,7 @@ private fun redditGalleryItems(post: RedditPost, limit: Int): List<ResolvedItem>
             }
             items.add(
                 ResolvedItem(
-                    sourceId = id,
+                    sourceId = stableSourceId(id),
                     index = items.size,
                     kind = "gif",
                     title = "GIF ${items.size + 1}",
@@ -491,7 +491,7 @@ private fun redditGalleryItems(post: RedditPost, limit: Int): List<ResolvedItem>
         val container = redditContainerFromMime(media.m, still)
         items.add(
             ResolvedItem(
-                sourceId = id,
+                sourceId = stableSourceId(id),
                 index = items.size,
                 kind = "image",
                 title = "Image ${items.size + 1}",
@@ -524,7 +524,10 @@ private fun redditVideoItem(video: RedditVideo, post: RedditPost): ResolvedItem?
         FetchPlan.Direct(url = url)
     }
 
-    val dimText = if (video.width != null && video.height != null) "${video.width} \u00d7 ${video.height}" else null
+    val safeWidth = video.width?.takeIf { it > 0 }
+    val safeHeight = video.height?.takeIf { it > 0 }
+    val safeDuration = video.duration?.takeIf { it.isFinite() && it >= 0.0 }
+    val dimText = if (safeWidth != null && safeHeight != null) "$safeWidth \u00d7 $safeHeight" else null
     val silentText = if (video.has_audio == false || isGif) "silent" else null
     val plans = ArrayList<ResolvedPlan>()
     plans.add(
@@ -533,8 +536,8 @@ private fun redditVideoItem(video: RedditVideo, post: RedditPost): ResolvedItem?
             container = "mp4",
             label = if (viaManifest && !isGif) "Best available" else "Original",
             detail = joinDetail("MP4", dimText, silentText),
-            width = video.width,
-            height = video.height,
+            width = safeWidth,
+            height = safeHeight,
             requiresConversion = false,
             recommended = true,
             fetch = fetchPlan,
@@ -588,9 +591,9 @@ private fun redditVideoItem(video: RedditVideo, post: RedditPost): ResolvedItem?
         kind = if (isGif) "gif" else "video",
         title = nonEmpty(post.title)?.let { truncateText(it, 120) } ?: "Video",
         thumbnailUrl = thumbnail,
-        width = video.width,
-        height = video.height,
-        duration = video.duration,
+        width = safeWidth,
+        height = safeHeight,
+        duration = safeDuration,
         container = "mp4",
         plans = ensureRecommendations(plans),
     )
@@ -610,6 +613,8 @@ fun redditItemsFrom(post: RedditPost, limit: Int): List<ResolvedItem> {
     if (direct != null && DIRECT_REDDIT_IMAGE_REGEX.containsMatchIn(direct)) {
         val url = unescapeRedditUrl(direct)
         val source = post.preview?.images?.firstOrNull()?.source
+        val safeWidth = source?.width?.takeIf { it > 0 }
+        val safeHeight = source?.height?.takeIf { it > 0 }
         val container = redditContainerFromMime(null, url)
         val kind = if (container == "gif") "gif" else "image"
         return listOf(
@@ -619,10 +624,10 @@ fun redditItemsFrom(post: RedditPost, limit: Int): List<ResolvedItem> {
                 kind = kind,
                 title = nonEmpty(post.title)?.let { truncateText(it, 120) } ?: "Image",
                 thumbnailUrl = url,
-                width = source?.width,
-                height = source?.height,
+                width = safeWidth,
+                height = safeHeight,
                 container = container,
-                plans = ensureRecommendations(listOf(redditImagePlan(url, container, source?.width, source?.height))),
+                plans = ensureRecommendations(listOf(redditImagePlan(url, container, safeWidth, safeHeight))),
             ),
         )
     }
@@ -638,7 +643,7 @@ private fun embedImageItem(url: String, index: Int): ResolvedItem {
     val container = redditContainerFromMime(null, url)
     val kind = if (container == "gif") "gif" else "image"
     return ResolvedItem(
-        sourceId = url.substringAfterLast('/').ifEmpty { index.toString() },
+        sourceId = stableSourceId(url.substringAfterLast('/').ifEmpty { index.toString() }),
         index = index,
         kind = kind,
         title = "Image ${index + 1}",
@@ -662,7 +667,7 @@ private fun embedImageItem(url: String, index: Int): ResolvedItem {
 
 private fun embedVideoItem(base: String): ResolvedItem =
     ResolvedItem(
-        sourceId = base.substringAfterLast('/').ifEmpty { "video" },
+        sourceId = stableSourceId(base.substringAfterLast('/').ifEmpty { "video" }),
         index = 0,
         kind = "video",
         title = "Video",
@@ -788,7 +793,7 @@ suspend fun readRedditViaEmbed(
         url = extractFrom,
         type = if (items.size > 1) "collection" else "single",
         title = title?.let { truncateText(it, 200) } ?: "Reddit post",
-        author = author?.let { "u/$it" },
+        author = author?.let { "u/$it".take(200) },
         thumbnailUrl = items.firstOrNull()?.thumbnailUrl,
         items = items,
         metadata = meta,

@@ -145,4 +145,56 @@ describe('Denylist', () => {
       await rm(dir, { recursive: true, force: true }).catch(() => undefined);
     }
   });
+
+  it('canonicalizes provider URLs and blocks query-mutated variants without false positives', async () => {
+    const { ProviderRegistry, normalizeForProvider } = await import('../providers/index.js');
+    const registry = new ProviderRegistry();
+    const denylist = new Denylist({
+      canonicalizeUrl: (url) => {
+        const provider = registry.detect(url);
+        return provider ? normalizeForProvider(provider, url) : url;
+      },
+    });
+    denylist.blockUrl('https://youtu.be/dQw4w9WgXcQ', 'Copyright notice');
+    expect(denylist.isBlocked('https://www.youtube.com/watch?v=dQw4w9WgXcQ').blocked).toBe(true);
+    expect(
+      denylist.isBlocked('https://www.youtube.com/watch?v=dQw4w9WgXcQ&extra=bypass&t=42').blocked,
+    ).toBe(true);
+    expect(denylist.isBlocked('https://www.youtube.com/watch?v=otherVideo12').blocked).toBe(false);
+  });
+
+  it('merges concurrent multi-process writes and notifies listeners on async disk reload', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'sera-deny-sync-'));
+    try {
+      const filePath = join(dir, 'denylist.json');
+      const a = new Denylist({ filePath });
+      const b = new Denylist({ filePath });
+      let bNotified = 0;
+      b.onUpdate(() => {
+        bNotified += 1;
+      });
+
+      a.blockHost('first-bad.example', 'from A');
+      await a.flush();
+      b.blockHost('second-bad.example', 'from B');
+      await b.flush();
+
+      await a.reload();
+      expect(a.isBlocked('https://first-bad.example/x').blocked).toBe(true);
+      expect(a.isBlocked('https://second-bad.example/y').blocked).toBe(true);
+      expect(b.isBlocked('https://first-bad.example/x').blocked).toBe(true);
+      expect(b.isBlocked('https://second-bad.example/y').blocked).toBe(true);
+
+      const c = new Denylist({ filePath });
+      let cNotified = 0;
+      c.onUpdate(() => {
+        cNotified += 1;
+      });
+      await c.reload();
+      expect(cNotified).toBeGreaterThanOrEqual(1);
+      expect(bNotified).toBeGreaterThanOrEqual(1);
+    } finally {
+      await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+    }
+  });
 });

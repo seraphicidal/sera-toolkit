@@ -10,16 +10,28 @@ import android.provider.Settings
 import dev.sera.node.data.NodeLogStore
 import dev.sera.node.data.NodeSettings
 import dev.sera.node.model.AndroidAppUpdateInfo
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import okhttp3.Call
+import okhttp3.Callback
+import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resumeWithException
 
 object Sha256Verifier {
     fun normalizeExpected(raw: String): String {
@@ -140,6 +152,9 @@ class AppSelfUpdater(
         updatesDir: File,
         onProgress: (Long, Long?) -> Unit = { _, _ -> },
     ): ApkDownloadOutcome = withContext(Dispatchers.IO) {
+        if (info.versionCode <= 0) {
+            return@withContext ApkDownloadOutcome.Failed("Invalid APK version code in manifest")
+        }
         val expectedSha = Sha256Verifier.normalizeExpected(info.sha256)
         if (!Regex("^[a-f0-9]{64}$").matches(expectedSha)) {
             return@withContext ApkDownloadOutcome.Failed("Invalid APK SHA-256 in manifest")
@@ -172,14 +187,24 @@ class AppSelfUpdater(
         var lastError = "APK download failed"
 
         for (target in targets) {
+            currentCoroutineContext().ensureActive()
             partFile.delete()
+            var call: Call? = null
+            val cancelHandle = currentCoroutineContext()[Job]?.invokeOnCompletion { cause ->
+                if (cause != null) call?.cancel()
+            }
             try {
                 logStore.info("UPDATER", "Downloading APK update v${info.versionName} (${info.versionCode}) from ${target.url}")
                 val reqBuilder = Request.Builder().url(target.url).get()
-                if (target.sendAuthHeader && !authToken.isNullOrBlank()) {
-                    reqBuilder.header("Authorization", "Bearer ${authToken.trim()}")
+                if (target.sendAuthHeader) {
+                    val safeToken = sanitizeBearerToken(authToken)
+                    if (safeToken != null) {
+                        reqBuilder.header("Authorization", "Bearer $safeToken")
+                    }
                 }
-                downloadClient.newCall(reqBuilder.build()).execute().use { response ->
+                val activeCall = downloadClient.newCall(reqBuilder.build())
+                call = activeCall
+                awaitCall(activeCall).use { response ->
                     if (!response.isSuccessful) {
                         lastError = "HTTP ${response.code} downloading ${target.url}"
                         logStore.warn("UPDATER", lastError)
@@ -197,6 +222,7 @@ class AppSelfUpdater(
                     body.byteStream().use { input ->
                         FileOutputStream(partFile).use { output ->
                             while (true) {
+                                currentCoroutineContext().ensureActive()
                                 val read = input.read(buffer)
                                 if (read <= 0) break
                                 output.write(buffer, 0, read)
@@ -230,14 +256,41 @@ class AppSelfUpdater(
                         sourceUrl = target.url,
                     )
                 }
+            } catch (cancelled: CancellationException) {
+                partFile.delete()
+                throw cancelled
             } catch (error: IOException) {
                 partFile.delete()
                 lastError = error.message ?: "Network error downloading APK"
                 logStore.warn("UPDATER", "APK download attempt failed: $lastError")
+            } finally {
+                cancelHandle?.dispose()
             }
         }
 
         ApkDownloadOutcome.Failed(lastError)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private suspend fun awaitCall(call: Call): Response {
+        return suspendCancellableCoroutine { cont ->
+            cont.invokeOnCancellation {
+                call.cancel()
+            }
+            call.enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    if (!cont.isCancelled) {
+                        cont.resumeWithException(e)
+                    }
+                }
+
+                override fun onResponse(call: Call, response: Response) {
+                    cont.resume(response) { _, res, _ ->
+                        res.close()
+                    }
+                }
+            })
+        }
     }
 
     suspend fun installApkWithPackageInstaller(
@@ -311,6 +364,23 @@ class AppSelfUpdater(
     }
 
     companion object {
+        private fun sanitizeBearerToken(raw: String?): String? {
+            val trimmed = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+            return trimmed.takeIf { token -> token.all { it.code in 0x21..0x7E } }
+        }
+
+        private fun isSameOrigin(a: HttpUrl, b: HttpUrl): Boolean =
+            a.scheme.equals(b.scheme, ignoreCase = true) &&
+                a.host.equals(b.host, ignoreCase = true) &&
+                a.port == b.port
+
+        private fun isSafeRelativeProxyPath(path: String): Boolean {
+            if (!path.startsWith("/") || path.startsWith("//") || path.contains('\\')) return false
+            if (path.any { it.code < 0x20 || it.code == 0x7F }) return false
+            val withoutQuery = path.substringBefore('?').substringBefore('#')
+            return withoutQuery.split('/').none { it == ".." }
+        }
+
         fun resolveDownloadTargets(
             apiBaseUrl: String?,
             proxyPath: String?,
@@ -318,21 +388,34 @@ class AppSelfUpdater(
         ): List<DownloadTarget> {
             val targets = mutableListOf<DownloadTarget>()
             val cleanBase = apiBaseUrl?.trim()?.let { NodeSettings.normalizeBaseUrl(it) }?.ifBlank { null }
+            val baseHttpUrl = cleanBase?.toHttpUrlOrNull()
             val cleanProxy = proxyPath?.trim()?.ifBlank { null }
-            if (cleanBase != null && cleanProxy != null) {
-                val resolved = if (cleanProxy.startsWith("http://", ignoreCase = true) ||
+            if (baseHttpUrl != null && cleanProxy != null) {
+                val resolvedUrl: HttpUrl? = if (
+                    cleanProxy.startsWith("http://", ignoreCase = true) ||
                     cleanProxy.startsWith("https://", ignoreCase = true)
                 ) {
-                    cleanProxy
+                    cleanProxy.toHttpUrlOrNull()?.takeIf { isSameOrigin(it, baseHttpUrl) }
                 } else {
-                    val path = if (cleanProxy.startsWith("/")) cleanProxy else "/$cleanProxy"
-                    "$cleanBase$path"
+                    val normalizedPath = if (cleanProxy.startsWith("/")) cleanProxy else "/$cleanProxy"
+                    if (isSafeRelativeProxyPath(normalizedPath)) {
+                        baseHttpUrl.resolve(normalizedPath)?.takeIf { isSameOrigin(it, baseHttpUrl) }
+                    } else {
+                        null
+                    }
                 }
-                targets += DownloadTarget(url = resolved, sendAuthHeader = true)
+                if (resolvedUrl != null) {
+                    targets += DownloadTarget(url = resolvedUrl.toString(), sendAuthHeader = true)
+                }
             }
             val cleanDirect = directUrl?.trim()?.ifBlank { null }
-            if (cleanDirect != null && targets.none { it.url == cleanDirect }) {
-                targets += DownloadTarget(url = cleanDirect, sendAuthHeader = false)
+            val directHttpUrl = cleanDirect?.toHttpUrlOrNull()
+            if (directHttpUrl != null) {
+                val allowedDirect = directHttpUrl.scheme == "https" ||
+                    (directHttpUrl.scheme == "http" && baseHttpUrl != null && isSameOrigin(directHttpUrl, baseHttpUrl))
+                if (allowedDirect && targets.none { it.url == directHttpUrl.toString() }) {
+                    targets += DownloadTarget(url = directHttpUrl.toString(), sendAuthHeader = false)
+                }
             }
             return targets
         }

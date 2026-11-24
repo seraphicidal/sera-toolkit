@@ -72,7 +72,7 @@ describe('createZip', () => {
     expect(new Set(names).size).toBe(3);
   });
 
-  it('reports progress once per entry', async () => {
+  it('reports monotonic streaming progress ending at 100%', async () => {
     const seen: [number, number, number][] = [];
     await createZip({
       entries: [
@@ -83,10 +83,23 @@ describe('createZip', () => {
       onProgress: (percent, current, total) => seen.push([percent, current, total]),
     });
 
-    expect(seen).toEqual([
-      [50, 1, 2],
-      [100, 2, 2],
-    ]);
+    expect(seen.length).toBeGreaterThanOrEqual(1);
+    expect(seen.at(-1)).toEqual([100, 2, 2]);
+    for (let i = 1; i < seen.length; i += 1) {
+      expect(seen[i]![0]).toBeGreaterThanOrEqual(seen[i - 1]![0]);
+    }
+  });
+
+  it('aborts and deletes archive when maxOutputBytes is exceeded', async () => {
+    const destination = join(dir, 'oversized.zip');
+    await expect(
+      createZip({
+        entries: [{ path: join(dir, 'a.mp4'), name: '1.mp4' }],
+        destination,
+        maxOutputBytes: 512,
+      }),
+    ).rejects.toMatchObject({ code: 'TOO_LARGE' });
+    await expect(readFile(destination)).rejects.toThrow();
   });
 
   it('fails clearly when a source file is missing', async () => {

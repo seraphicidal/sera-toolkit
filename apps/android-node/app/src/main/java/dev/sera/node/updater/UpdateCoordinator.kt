@@ -13,6 +13,7 @@ import dev.sera.node.model.ProviderHotConfig
 import dev.sera.node.model.ToolsVersionInfo
 import dev.sera.node.model.YtdlpUpdateInfo
 import dev.sera.node.net.ConnectivityMonitor
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -20,6 +21,12 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
+
+private data class ResolvedUpdateManifest(
+    val manifest: NodeUpdateManifest,
+    val fromPrimary: Boolean,
+    val hasYtdlpUpdate: Boolean,
+)
 
 data class UpdateState(
     val isChecking: Boolean = false,
@@ -47,6 +54,12 @@ class UpdateCoordinator(
     private val _state = MutableStateFlow(UpdateState())
     val state: StateFlow<UpdateState> = _state.asStateFlow()
 
+    @Volatile
+    private var lastFailedServerHash: String? = null
+
+    @Volatile
+    private var lastPrimaryFailureAtMs: Long = 0L
+
     private val updatesDir = File(context.applicationContext.filesDir, "updates")
 
     suspend fun refreshToolsStatus() {
@@ -65,19 +78,47 @@ class UpdateCoordinator(
     }
 
     suspend fun onManifestHashObserved(observedHash: String) {
+        val trimmed = observedHash.trim()
+        if (trimmed.isEmpty()) return
         val currentSettings = preferences.current()
-        if (observedHash.isNotBlank() && observedHash != currentSettings.cachedManifestHash) {
-            logStore.info("UPDATER", "Server manifest hash changed ($observedHash); syncing updates")
-            checkAndApplyUpdates(force = false, allowAppInstall = true)
+        if (trimmed == currentSettings.cachedManifestHash) return
+        val now = System.currentTimeMillis()
+        if (trimmed == lastFailedServerHash && now - lastPrimaryFailureAtMs < PRIMARY_MANIFEST_FAILURE_BACKOFF_MS) {
+            return
         }
+        if (checkMutex.isLocked) return
+        logStore.info("UPDATER", "Server manifest hash changed ($trimmed); syncing updates")
+        checkAndApplyUpdatesInternal(force = false, allowAppInstall = true, observedServerHash = trimmed)
     }
 
     suspend fun checkAndApplyUpdates(
         force: Boolean,
         allowAppInstall: Boolean = true,
+    ): String = checkAndApplyUpdatesInternal(
+        force = force,
+        allowAppInstall = allowAppInstall,
+        observedServerHash = null,
+    )
+
+    private suspend fun checkAndApplyUpdatesInternal(
+        force: Boolean,
+        allowAppInstall: Boolean,
+        observedServerHash: String?,
     ): String {
         return checkMutex.withLock {
             val settings = preferences.current()
+            if (!force && observedServerHash != null) {
+                if (observedServerHash == settings.cachedManifestHash) {
+                    return@withLock "Manifest already synchronized"
+                }
+                val nowCheck = System.currentTimeMillis()
+                if (
+                    observedServerHash == lastFailedServerHash &&
+                    nowCheck - lastPrimaryFailureAtMs < PRIMARY_MANIFEST_FAILURE_BACKOFF_MS
+                ) {
+                    return@withLock "Primary manifest retry deferred"
+                }
+            }
             val net = connectivityMonitor.refreshNow()
             if (!net.isAllowed(settings.allowWifi, settings.allowCellular)) {
                 val msg = "Update skipped: current network disallowed or offline"
@@ -97,14 +138,27 @@ class UpdateCoordinator(
             try {
                 runCatching { toolsManager.ensureReady() }
 
-                val manifest = resolveManifest(settings.apiBaseUrl, settings.nodeToken, settings.githubReleasesRepo)
-                if (manifest == null) {
+                val resolved = resolveManifest(settings.apiBaseUrl, settings.nodeToken, settings.githubReleasesRepo)
+                if (resolved == null) {
+                    if (observedServerHash != null) {
+                        lastFailedServerHash = observedServerHash
+                        lastPrimaryFailureAtMs = System.currentTimeMillis()
+                    }
                     val msg = "No update manifest available"
                     logStore.warn("UPDATER", msg)
                     _state.update { it.copy(isChecking = false, lastError = msg) }
                     return@withLock msg
                 }
 
+                if (resolved.fromPrimary) {
+                    lastFailedServerHash = null
+                    lastPrimaryFailureAtMs = 0L
+                } else if (observedServerHash != null) {
+                    lastFailedServerHash = observedServerHash
+                    lastPrimaryFailureAtMs = System.currentTimeMillis()
+                }
+
+                val manifest = resolved.manifest
                 preferences.saveManifestCache(manifest.manifestHash, manifest.providerConfig)
                 val now = System.currentTimeMillis()
                 preferences.setLastUpdateCheckAt(now)
@@ -112,7 +166,7 @@ class UpdateCoordinator(
 
                 val summaryParts = mutableListOf<String>()
 
-                if (settings.autoUpdateTools || force) {
+                if ((settings.autoUpdateTools || force) && resolved.hasYtdlpUpdate) {
                     val toolResult = runCatching {
                         toolsManager.updateYtdlpFromManifest(
                             manifest = manifest.ytdlp,
@@ -120,6 +174,7 @@ class UpdateCoordinator(
                             apiBaseUrl = settings.apiBaseUrl.ifBlank { null },
                         )
                     }.getOrElse { error ->
+                        if (error is CancellationException) throw error
                         logStore.error("UPDATER", "yt-dlp update failed: ${error.message}")
                         null
                     }
@@ -211,6 +266,9 @@ class UpdateCoordinator(
                     )
                 }
                 return@withLock summary
+            } catch (cancelled: CancellationException) {
+                _state.update { it.copy(isChecking = false, apkDownloadProgressPercent = null) }
+                throw cancelled
             } catch (error: Exception) {
                 val msg = error.message ?: "Update check failed"
                 logStore.error("UPDATER", msg)
@@ -238,9 +296,10 @@ class UpdateCoordinator(
             _state.update { it.copy(isChecking = true, lastError = null) }
             try {
                 toolsManager.ensureReady()
-                val manifest = resolveManifest(settings.apiBaseUrl, settings.nodeToken, settings.githubReleasesRepo)
+                val resolved = resolveManifest(settings.apiBaseUrl, settings.nodeToken, settings.githubReleasesRepo)
+                val ytdlpManifest = resolved?.takeIf { it.hasYtdlpUpdate }?.manifest?.ytdlp
                 val result = toolsManager.forceRefreshTools(
-                    manifest = manifest?.ytdlp,
+                    manifest = ytdlpManifest,
                     authToken = settings.nodeToken.ifBlank { null },
                     apiBaseUrl = settings.apiBaseUrl.ifBlank { null },
                 )
@@ -254,6 +313,9 @@ class UpdateCoordinator(
                     )
                 }
                 result.message
+            } catch (cancelled: CancellationException) {
+                _state.update { it.copy(isChecking = false) }
+                throw cancelled
             } catch (error: Exception) {
                 val msg = error.message ?: "Force refresh failed"
                 logStore.error("UPDATER", msg)
@@ -287,22 +349,34 @@ class UpdateCoordinator(
         apiBaseUrl: String,
         nodeToken: String,
         githubRepo: String,
-    ): NodeUpdateManifest? {
+    ): ResolvedUpdateManifest? {
         if (apiBaseUrl.isNotBlank() && nodeToken.isNotBlank()) {
             val primary = runCatching {
                 apiClient.fetchUpdateManifest(apiBaseUrl, nodeToken)
             }.onFailure { err ->
+                if (err is CancellationException) throw err
                 logStore.warn("UPDATER", "Primary manifest fetch failed, trying GitHub fallback: ${err.message}")
             }.getOrNull()
 
             if (primary != null) {
+                val hasYtdlp = primary.ytdlp.version.isNotBlank() &&
+                    (primary.ytdlp.url.isNotBlank() || primary.ytdlp.proxyPath.isNotBlank())
                 if (primary.androidNodeApp != null || githubRepo.isBlank()) {
-                    return primary
+                    return ResolvedUpdateManifest(
+                        manifest = primary,
+                        fromPrimary = true,
+                        hasYtdlpUpdate = hasYtdlp,
+                    )
                 }
                 val ghApp = runCatching {
                     apiClient.fetchGithubLatestAndroidUpdate(githubRepo)
                 }.getOrNull()
-                return if (ghApp != null) primary.copy(androidNodeApp = ghApp) else primary
+                val merged = if (ghApp != null) primary.copy(androidNodeApp = ghApp) else primary
+                return ResolvedUpdateManifest(
+                    manifest = merged,
+                    fromPrimary = true,
+                    hasYtdlpUpdate = hasYtdlp,
+                )
             }
         }
 
@@ -327,16 +401,21 @@ class UpdateCoordinator(
         val hash = Sha256Verifier.computeHex(
             "${fallbackYtdlp.version}:${fallbackYtdlp.sha256.orEmpty()}:${ghApp?.versionCode ?: 0}:${ghApp?.sha256.orEmpty()}".toByteArray(),
         ).take(16)
-        return NodeUpdateManifest(
-            manifestHash = "gh-$hash",
-            generatedAt = "",
-            ytdlp = fallbackYtdlp,
-            androidNodeApp = ghApp,
-            providerConfig = cached,
+        return ResolvedUpdateManifest(
+            manifest = NodeUpdateManifest(
+                manifestHash = "gh-$hash",
+                generatedAt = "",
+                ytdlp = fallbackYtdlp,
+                androidNodeApp = ghApp,
+                providerConfig = cached,
+            ),
+            fromPrimary = false,
+            hasYtdlpUpdate = ghYtdlp != null,
         )
     }
 
     companion object {
         const val UPDATE_CHECK_INTERVAL_MS = 6L * 60L * 60L * 1000L
+        private const val PRIMARY_MANIFEST_FAILURE_BACKOFF_MS = 15L * 60L * 1000L
     }
 }

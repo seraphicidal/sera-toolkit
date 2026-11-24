@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { checkTrim, TIMECODE_PATTERN } from './types.js';
 import type {
   AndroidNodeAppUpdateInfo,
+  ApiErrorBody,
   ContainerFormat,
   CreateJobRequest,
   DownloadOption,
@@ -13,13 +14,16 @@ import type {
   JobError,
   MediaInfoType,
   MediaKind,
+  NodeAvailability,
   NodeFeature,
   NodeNetworkClass,
   NodeStatus,
   NodeTransport,
   NodeUpdateManifest,
   PackagingMode,
+  ProviderCapabilities,
   ProviderHotConfig,
+  ProviderSummary,
   RemoteProgress,
   RemoteResolvedBody,
   RemoteResolvedItem,
@@ -30,11 +34,12 @@ import type {
   RemoteTaskKind,
   RemoteTaskSubtitles,
   ResolveRequest,
+  ServiceInfo,
   YoutubeHotConfig,
   YtdlpUpdateInfo,
 } from './types.js';
 
-export const mediaKindSchema = z.enum(['video', 'audio', 'image', 'gif', 'unknown']);
+export const mediaKindSchema = z.enum(['video', 'audio', 'image', 'gif', 'file', 'unknown']);
 
 export const mediaInfoTypeSchema = z.enum(['single', 'collection', 'playlist']);
 
@@ -69,6 +74,8 @@ export const containerFormatSchema = z.enum([
 
 export const errorCodeSchema = z.enum([
   'INVALID_URL',
+  'VALIDATION_ERROR',
+  'FORBIDDEN',
   'UNSUPPORTED_SOURCE',
   'PRIVATE_CONTENT',
   'MEDIA_UNAVAILABLE',
@@ -105,10 +112,14 @@ export const jobErrorSchema = z.object({
   retryable: z.boolean(),
 });
 
+export const apiErrorBodySchema = z.object({
+  error: jobErrorSchema,
+});
+
 export const downloadOptionSchema = z.object({
   id: z.string(),
   itemId: z.string(),
-  kind: z.enum(['video', 'audio', 'image', 'gif']),
+  kind: z.enum(['video', 'audio', 'image', 'gif', 'file']),
   container: containerFormatSchema,
   label: z.string(),
   detail: z.string().optional(),
@@ -262,11 +273,167 @@ export const legalReportResponseSchema = z.object({
   mitigated: z.boolean().optional(),
 });
 
+export const providerCapabilitiesSchema = z.object({
+  video: z.boolean(),
+  image: z.boolean(),
+  audio: z.boolean(),
+  audioExtraction: z.boolean(),
+  carousel: z.boolean(),
+  gallery: z.boolean(),
+  gif: z.boolean(),
+  live: z.boolean(),
+  authenticatedMode: z.boolean(),
+  requiresOauth: z.boolean(),
+  residentialFallback: z.boolean(),
+  cloudExtraction: z.boolean(),
+  browserImport: z.boolean(),
+  authRequiredFor: z.array(z.string()).optional(),
+});
+
+export const providerSummarySchema = z.object({
+  id: z.string().min(1).max(32),
+  label: z.string().min(1).max(64),
+  hosts: z.array(z.string().min(1).max(256)),
+  status: z.enum(['ok', 'degraded', 'unavailable']),
+  capabilities: providerCapabilitiesSchema,
+});
+
+export const nodeAvailabilitySchema = z.object({
+  enabled: z.boolean(),
+  totalNodes: z.number().int().nonnegative(),
+  healthyNodes: z.number().int().nonnegative(),
+  residentialNodes: z.number().int().nonnegative(),
+  features: z.array(z.string().min(1).max(64)),
+  providers: z.array(z.string().min(1).max(32)),
+});
+
+export const serviceInfoSchema = z.object({
+  name: z.string().min(1),
+  version: z.string().min(1),
+  providers: z.array(providerSummarySchema),
+  limits: z.object({
+    maxFilesizeBytes: z.number().int().positive(),
+    maxDurationSeconds: z.number().int().positive(),
+    maxItemsPerJob: z.number().int().positive(),
+    retentionSeconds: z.number().int().positive(),
+  }),
+  nodeAvailability: nodeAvailabilitySchema.optional(),
+});
+
+export const ServiceInfoSchema = serviceInfoSchema;
+
 const httpUrlSchema = z
   .string()
-  .url()
   .max(MAX_URL_LENGTH)
-  .refine((u) => /^https?:\/\//i.test(u), 'URL must use http or https.');
+  .refine((u) => !/[\x00-\x20\x7f]/.test(u), 'URL contains forbidden characters.')
+  .url()
+  .refine(
+    (u) => /^https?:\/\//i.test(u) && !/^https?:\/\/[^/?#]*@/i.test(u),
+    'URL must use http or https without credentials.',
+  );
+
+const SAFE_EXTRACTOR_ARG_RE = /^[a-z0-9][a-z0-9_-]{0,31}:[A-Za-z0-9_.,;+=-]{1,180}$/;
+const FORBIDDEN_EXTRACTOR_ARG_RE = /(?:^|[:;])(?:base_url|proxy|cookies?|file|path|exec)=/i;
+
+export const safeExtractorArgSchema = z
+  .string()
+  .min(3)
+  .max(200)
+  .regex(SAFE_EXTRACTOR_ARG_RE, 'Invalid extractor argument.')
+  .refine((value) => !FORBIDDEN_EXTRACTOR_ARG_RE.test(value), 'Disallowed extractor argument.');
+
+export const safeYtdlpSelectorSchema = z
+  .string()
+  .min(1)
+  .max(500)
+  .regex(/^[A-Za-z0-9_+.*[\]=!<>~^:,\s/-]{1,500}$/, 'Invalid format selector.')
+  .refine((value) => !value.trimStart().startsWith('-'), 'Format selector cannot start with -.');
+
+export const safeUseExtractorsSchema = z
+  .string()
+  .min(1)
+  .max(100)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9_.:,+-]{0,99}$/, 'Invalid extractor list.');
+
+const ALLOWED_YOUTUBE_BOOL_FLAGS = new Set([
+  '--force-ipv4',
+  '--force-ipv6',
+  '--geo-bypass',
+  '--no-geo-bypass',
+  '--no-remote-components',
+  '--prefer-free-formats',
+  '--no-prefer-free-formats',
+  '--hls-prefer-native',
+]);
+
+const ALLOWED_YOUTUBE_VALUE_FLAGS: Readonly<Record<string, (value: string) => boolean>> = {
+  '--sleep-requests': (v) => /^\d{1,2}(?:\.\d{1,2})?$/.test(v) && Number(v) <= 60,
+  '--sleep-interval': (v) => /^\d{1,2}(?:\.\d{1,2})?$/.test(v) && Number(v) <= 60,
+  '--max-sleep-interval': (v) => /^\d{1,3}(?:\.\d{1,2})?$/.test(v) && Number(v) <= 120,
+  '--sleep-subtitles': (v) => /^\d{1,2}(?:\.\d{1,2})?$/.test(v) && Number(v) <= 60,
+  '--retries': (v) => /^\d{1,2}$/.test(v) && Number(v) <= 20,
+  '--fragment-retries': (v) => /^\d{1,2}$/.test(v) && Number(v) <= 20,
+  '--extractor-retries': (v) => /^\d{1,2}$/.test(v) && Number(v) <= 20,
+  '--socket-timeout': (v) => /^\d{1,3}$/.test(v) && Number(v) >= 1 && Number(v) <= 120,
+  '--concurrent-fragments': (v) => /^[1-9]\d?$/.test(v) && Number(v) <= 16,
+  '--throttled-rate': (v) => /^\d{1,6}[KMG]?$/.test(v),
+  '--geo-bypass-country': (v) => /^[A-Z]{2}$/.test(v),
+  '--extractor-args': (v) => safeExtractorArgSchema.safeParse(v).success,
+  '--remote-components': (v) =>
+    /^[a-z0-9][a-z0-9_-]{0,31}:[a-z0-9_.,-]{1,80}(?:,[a-z0-9][a-z0-9_-]{0,31}:[a-z0-9_.,-]{1,80})*$/.test(
+      v,
+    ),
+  '--impersonate': (v) => /^[a-z0-9][a-z0-9_.,:-]{0,63}$/i.test(v),
+  '--compat-options': (v) => /^[a-z0-9][a-z0-9_,-]{0,63}$/i.test(v),
+  '--format-sort': (v) => /^[A-Za-z0-9][A-Za-z0-9_.:,+~-]{0,127}$/.test(v),
+};
+
+export function isSafeYoutubeExtraArgs(args: readonly string[]): boolean {
+  if (args.length > 50) return false;
+  let i = 0;
+  while (i < args.length) {
+    const token = args[i];
+    if (
+      typeof token !== 'string' ||
+      !token ||
+      token.length > 200 ||
+      /[\x00-\x1f\x7f]/.test(token)
+    ) {
+      return false;
+    }
+    if (!token.startsWith('--')) return false;
+    const eq = token.indexOf('=');
+    const flag = eq === -1 ? token : token.slice(0, eq);
+    if (ALLOWED_YOUTUBE_BOOL_FLAGS.has(flag)) {
+      if (eq !== -1) return false;
+      i += 1;
+      continue;
+    }
+    const validator = Object.hasOwn(ALLOWED_YOUTUBE_VALUE_FLAGS, flag)
+      ? ALLOWED_YOUTUBE_VALUE_FLAGS[flag]
+      : undefined;
+    if (!validator) return false;
+    let value: string | undefined;
+    if (eq !== -1) {
+      value = token.slice(eq + 1);
+      i += 1;
+    } else {
+      value = args[i + 1];
+      if (value === undefined) return false;
+      i += 2;
+    }
+    if (!value || value.length > 200 || /[\x00-\x1f\x7f]/.test(value) || value.startsWith('-')) {
+      return false;
+    }
+    if (!validator(value)) return false;
+  }
+  return true;
+}
+
+export const youtubeExtraArgsSchema = z
+  .array(z.string().min(1).max(200))
+  .max(50)
+  .refine(isSafeYoutubeExtraArgs, 'Contains disallowed or malformed yt-dlp extraArgs.');
 
 export const nodeNetworkClassSchema = z.enum(['datacenter', 'residential', 'unknown']);
 
@@ -340,6 +507,8 @@ export const progressSchema = z.object({
   step: z.string().min(1).max(120),
   bytesDownloaded: z.coerce.number().int().min(0).optional(),
   bytesTotal: z.coerce.number().int().min(0).optional(),
+  speedBytesPerSecond: z.coerce.number().min(0).finite().optional(),
+  etaSeconds: z.coerce.number().min(0).finite().optional(),
 });
 
 export const failedSchema = z.object({
@@ -364,8 +533,8 @@ export const nodeStatusSchema = z.object({
 });
 
 export const resolvedPlanSchema = z.object({
-  kind: z.enum(['video', 'audio', 'image', 'gif']),
-  container: z.string().min(1).max(16),
+  kind: z.enum(['video', 'audio', 'image', 'gif', 'file']),
+  container: containerFormatSchema,
   label: z.string().min(1).max(64),
   detail: z.string().max(500).optional(),
   width: z.number().int().positive().optional(),
@@ -381,18 +550,21 @@ export const resolvedPlanSchema = z.object({
   fetch: z.discriminatedUnion('via', [
     z.object({
       via: z.literal('ytdlp'),
-      selector: z.string().min(1).max(500),
-      merge: z.string().max(16).optional(),
+      selector: safeYtdlpSelectorSchema,
+      merge: z.enum(['mp4', 'webm', 'mkv', 'mov']).optional(),
       audio: z
         .object({
-          format: z.string().min(1).max(16),
-          quality: z.string().max(16).optional(),
+          format: z.enum(['mp3', 'm4a', 'aac', 'opus', 'ogg', 'wav', 'flac', 'best']),
+          quality: z
+            .string()
+            .regex(/^(?:[0-9]|10|\d{2,4}[Kk])$/, 'Invalid audio quality.')
+            .optional(),
         })
         .optional(),
-      remux: z.string().max(16).optional(),
-      extractorArgs: z.array(z.string().max(200)).max(20).optional(),
+      remux: z.enum(['mp4', 'webm', 'mkv', 'mov']).optional(),
+      extractorArgs: z.array(safeExtractorArgSchema).max(20).optional(),
       target: httpUrlSchema.optional(),
-      useExtractors: z.string().max(100).optional(),
+      useExtractors: safeUseExtractorsSchema.optional(),
     }),
     z.object({
       via: z.literal('direct'),
@@ -433,7 +605,7 @@ export const resolvedItemSchema = z.object({
   subtitles: z
     .array(
       z.object({
-        lang: z.string().max(40),
+        lang: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/),
         label: z.string().max(100),
         auto: z.boolean().optional(),
       }),
@@ -450,7 +622,7 @@ export const resolvedItemSchema = z.object({
   width: z.number().int().positive().optional(),
   height: z.number().int().positive().optional(),
   duration: z.number().nonnegative().optional(),
-  container: z.string().max(16).optional(),
+  container: containerFormatSchema.optional(),
   filesizeBytes: z.number().nonnegative().optional(),
   isLive: z.boolean().optional(),
   plans: z.array(resolvedPlanSchema).min(1).max(64),
@@ -498,9 +670,11 @@ export const androidNodeAppUpdateInfoSchema = z.object({
 });
 
 export const youtubeHotConfigSchema = z.object({
-  playerClients: z.array(z.string().min(1).max(64)).max(20),
-  extraArgs: z.array(z.string().min(1).max(500)).max(50),
-  remoteComponents: z.array(z.string().min(1).max(128)).max(20),
+  playerClients: z.array(z.string().regex(/^[a-z0-9_+-]{1,64}$/i)).max(20),
+  extraArgs: youtubeExtraArgsSchema,
+  remoteComponents: z
+    .array(z.string().regex(/^[a-z0-9][a-z0-9_-]{0,31}:[a-z0-9_.,-]{1,80}$/))
+    .max(20),
   potProviderUrl: httpUrlSchema.optional(),
 });
 
@@ -558,6 +732,21 @@ type _MediaInfoTypeMatches = Assert<Exact<z.infer<typeof mediaInfoTypeSchema>, M
 type _ContainerMatches = Assert<Exact<z.infer<typeof containerFormatSchema>, ContainerFormat>>;
 type _PackagingMatches = Assert<Exact<z.infer<typeof packagingModeSchema>, PackagingMode>>;
 type _JobErrorMatches = Assert<SameShape<z.infer<typeof jobErrorSchema>, Writable<JobError>>>;
+type _ApiErrorBodyMatches = Assert<
+  SameShape<z.infer<typeof apiErrorBodySchema>, DeepMutable<ApiErrorBody>>
+>;
+type _ProviderCapabilitiesMatches = Assert<
+  SameShape<z.infer<typeof providerCapabilitiesSchema>, DeepMutable<ProviderCapabilities>>
+>;
+type _ProviderSummaryMatches = Assert<
+  SameShape<z.infer<typeof providerSummarySchema>, DeepMutable<ProviderSummary>>
+>;
+type _NodeAvailabilityMatches = Assert<
+  SameShape<z.infer<typeof nodeAvailabilitySchema>, DeepMutable<NodeAvailability>>
+>;
+type _ServiceInfoMatches = Assert<
+  SameShape<z.infer<typeof serviceInfoSchema>, DeepMutable<ServiceInfo>>
+>;
 type _ResolveMatches = Assert<
   SameShape<z.infer<typeof resolveRequestSchema>, Writable<ResolveRequest>>
 >;

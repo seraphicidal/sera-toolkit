@@ -1,58 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { FRAGMENT_VERSION, PAYLOAD, readImportFragment, trustedImport } from './import-handshake';
-
-const opener = { name: 'opener' } as unknown as Window;
-const post = {
-  type: PAYLOAD,
-  url: 'https://www.instagram.com/p/DcOX3hWFiey/',
-  node: { code: 'DcOX3hWFiey', media_type: 1 },
-};
-
-const event = (over: { origin?: string; source?: unknown; data?: unknown }): MessageEvent =>
-  ({
-    origin: over.origin ?? 'https://www.instagram.com',
-    source: 'source' in over ? over.source : opener,
-    data: 'data' in over ? over.data : post,
-  }) as MessageEvent;
-
-describe('trustedImport', () => {
-  it('accepts a post from the opener on instagram.com', () => {
-    expect(trustedImport(event({}), opener)).toEqual({ url: post.url, node: post.node });
-    expect(trustedImport(event({ origin: 'https://instagram.com' }), opener)).toBeDefined();
-  });
-
-  it('ignores a message from any other origin', () => {
-    for (const origin of [
-      'https://instagram.com.evil.example',
-      'http://www.instagram.com',
-      'https://www.example.com',
-      'null',
-    ]) {
-      expect(trustedImport(event({ origin }), opener), origin).toBeUndefined();
-    }
-  });
-
-  it('ignores a message from a window that is not the opener', () => {
-    expect(trustedImport(event({ source: { name: 'someone-else' } }), opener)).toBeUndefined();
-    expect(trustedImport(event({}), null)).toBeUndefined();
-  });
-
-  it('ignores anything that is not a well-formed post', () => {
-    expect(
-      trustedImport(event({ data: { type: 'something-else', url: post.url, node: {} } }), opener),
-    ).toBeUndefined();
-    expect(
-      trustedImport(event({ data: { type: PAYLOAD, url: 42, node: {} } }), opener),
-    ).toBeUndefined();
-    expect(
-      trustedImport(event({ data: { type: PAYLOAD, url: post.url } }), opener),
-    ).toBeUndefined();
-    expect(
-      trustedImport(event({ data: { type: PAYLOAD, url: post.url, node: [] } }), opener),
-    ).toBeUndefined();
-    expect(trustedImport(event({ data: undefined }), opener)).toBeUndefined();
-  });
-});
+import { FRAGMENT_VERSION, readImportFragment } from './import-handshake';
 
 describe('readImportFragment', () => {
   const POST = 'https://www.instagram.com/p/DcOX3hWFiey/';

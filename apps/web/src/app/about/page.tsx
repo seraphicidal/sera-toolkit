@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { ClearHistoryButton } from '@/components/clear-history-button';
 import { Wordmark } from '@/components/wordmark';
+import { formatLimitDuration, pluralize } from '@/lib/format';
 import { loadServiceInfo } from '@/lib/service-info';
 
 export const metadata: Metadata = {
@@ -9,8 +10,6 @@ export const metadata: Metadata = {
   description:
     'What SERA.toolkit supports, what it keeps, and what you are responsible for when you use it.',
 };
-
-export const revalidate = 60;
 
 function formatGigabytes(bytes: number): string {
   const gb = bytes / 1024 ** 3;
@@ -24,6 +23,7 @@ export default async function AboutPage() {
   const providers = service?.providers ?? [];
   const degraded = providers.filter((provider) => provider.status !== 'ok');
   const partial = providers.filter((provider) => provider.capabilities?.authRequiredFor?.length);
+  const nodeAvailability = service?.nodeAvailability;
 
   return (
     <article className="flex flex-col gap-10 pt-4 pb-16">
@@ -55,21 +55,34 @@ export default async function AboutPage() {
         {providers.length > 0 ? (
           <>
             <ul className="grid grid-cols-2 gap-x-6 gap-y-1.5 sm:grid-cols-3">
-              {providers.map((provider) => (
-                <li key={provider.id} className="flex items-center gap-2 text-[0.875rem]">
-                  <span
-                    aria-hidden="true"
-                    className={
-                      provider.status === 'ok'
-                        ? 'inline-block size-1.5 shrink-0 rounded-full bg-[var(--color-success)]'
-                        : 'inline-block size-1.5 shrink-0 rounded-full bg-[var(--color-danger)]'
-                    }
-                  />
-                  <span className={provider.status === 'ok' ? '' : 'text-[var(--color-ink-faint)]'}>
-                    {provider.label}
-                  </span>
-                </li>
-              ))}
+              {providers.map((provider) => {
+                const dotColor =
+                  provider.status === 'ok'
+                    ? 'bg-[var(--color-success)]'
+                    : provider.status === 'degraded'
+                      ? 'bg-[var(--color-warning)]'
+                      : 'bg-[var(--color-danger)]';
+                const statusLabel =
+                  provider.status === 'ok'
+                    ? 'Available'
+                    : provider.status === 'degraded'
+                      ? 'Degraded'
+                      : 'Unavailable';
+                return (
+                  <li key={provider.id} className="flex items-center gap-2 text-[0.875rem]">
+                    <span
+                      aria-hidden="true"
+                      className={`inline-block size-1.5 shrink-0 rounded-full ${dotColor}`}
+                    />
+                    <span
+                      className={provider.status === 'ok' ? '' : 'text-[var(--color-ink-faint)]'}
+                    >
+                      {provider.label}
+                    </span>
+                    <span className="sr-only"> ({statusLabel})</span>
+                  </li>
+                );
+              })}
             </ul>
             {partial.length > 0 && (
               <ul className="flex flex-col gap-1.5 text-[0.8125rem] text-[var(--color-ink-muted)]">
@@ -98,10 +111,27 @@ export default async function AboutPage() {
             {degraded.length > 0 && (
               <p className="rounded-xl border border-[var(--color-line)] bg-[var(--color-sunken)] px-3.5 py-3 text-[0.875rem]">
                 {degraded.map((provider) => provider.label).join(', ')}{' '}
-                {degraded.length === 1 ? 'is' : 'are'} temporarily unavailable. Sites change how
-                they serve media, and support returns once the extractor catches up. Everything else
-                keeps working in the meantime.
+                {degraded.length === 1 ? 'is' : 'are'} currently degraded or temporarily
+                unavailable. Sites change how they serve media, and support returns once the
+                extractor catches up. Everything else keeps working in the meantime.
               </p>
+            )}
+            {nodeAvailability?.enabled && (
+              <div className="flex items-center gap-2 rounded-xl border border-[var(--color-line)] bg-[var(--color-sunken)] px-3.5 py-2.5 text-[0.8125rem] text-[var(--color-ink-muted)]">
+                <span
+                  aria-hidden="true"
+                  className={
+                    nodeAvailability.healthyNodes > 0
+                      ? 'inline-block size-2 shrink-0 rounded-full bg-[var(--color-success)]'
+                      : 'inline-block size-2 shrink-0 rounded-full bg-[var(--color-warning)]'
+                  }
+                />
+                <span>
+                  {nodeAvailability.healthyNodes > 0
+                    ? `Extraction nodes: ${pluralize(nodeAvailability.healthyNodes, 'healthy node')} online (${pluralize(nodeAvailability.residentialNodes, 'residential node')}).`
+                    : 'Extraction nodes: no healthy residential nodes currently online — sources requiring a home connection may fail.'}
+                </span>
+              </div>
             )}
             <p>
               Beyond these, SERA reads any page that publishes its own media in the standard way,
@@ -119,8 +149,8 @@ export default async function AboutPage() {
         <p>
           Video comes back as MP4, WebM or MOV — whichever the source can be put into without
           re-encoding — at whatever resolutions the site actually publishes. Audio can be extracted
-          as MP3, M4A, Opus or WAV. Images come back untouched, and short videos can be converted to
-          GIF.
+          as MP3, M4A, Opus, WAV or FLAC. Images come back untouched, and short videos can be
+          converted to GIF.
         </p>
         <p>
           A quality is only offered when the source has it. If the original audio is 128 kbps, SERA
@@ -137,12 +167,12 @@ export default async function AboutPage() {
             />
             <Limit
               label="Maximum duration"
-              value={`${Math.round(service.limits.maxDurationSeconds / 3600)} hours`}
+              value={formatLimitDuration(service.limits.maxDurationSeconds)}
             />
             <Limit label="Items per download" value={String(service.limits.maxItemsPerJob)} />
             <Limit
               label="Files kept on the server"
-              value={`${Math.round(service.limits.retentionSeconds / 60)} minutes`}
+              value={formatLimitDuration(service.limits.retentionSeconds)}
             />
           </ul>
         </Section>
@@ -156,11 +186,9 @@ export default async function AboutPage() {
         </p>
         <p>
           Finished files live in a temporary directory and are deleted automatically
-          {service
-            ? ` after about ${Math.round(service.limits.retentionSeconds / 60)} minutes`
-            : ''}
-          , whether or not you downloaded them. Thumbnails are fetched by the server rather than
-          your browser, so the site you pasted from never sees your address.
+          {service ? ` after about ${formatLimitDuration(service.limits.retentionSeconds)}` : ''},
+          whether or not you downloaded them. Thumbnails are fetched by the server rather than your
+          browser, so the site you pasted from never sees your address.
         </p>
         <p>
           To see which sites work, the server keeps daily totals per site: how many links were
@@ -199,7 +227,7 @@ export default async function AboutPage() {
             to the server.
           </li>
         </ul>
-        <div className="mt-2 flex items-center justify-between rounded-xl border border-[var(--color-line)] bg-[var(--color-sunken)] p-3.5">
+        <div className="mt-2 flex items-center justify-between gap-3 rounded-xl border border-[var(--color-line)] bg-[var(--color-sunken)] p-3.5">
           <span className="text-[0.875rem] text-[var(--color-ink)]">
             Clear locally stored download history:
           </span>

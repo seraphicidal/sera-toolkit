@@ -5,6 +5,7 @@ import type {
   Job,
   JobError,
   MediaInfo,
+  ServiceInfo,
 } from '@sera/contracts/types';
 
 export class ApiError extends Error {
@@ -28,6 +29,11 @@ const NETWORK_FAILURE: JobError = {
   retryable: true,
 };
 
+function isAbortError(caught: unknown, signal?: AbortSignal | null): boolean {
+  if (signal?.aborted) return true;
+  return caught instanceof Error && caught.name === 'AbortError';
+}
+
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   if (init?.body !== undefined && !headers.has('content-type')) {
@@ -39,7 +45,8 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
       ...init,
       headers,
     });
-  } catch {
+  } catch (caught) {
+    if (isAbortError(caught, init?.signal)) throw caught;
     throw new ApiError(NETWORK_FAILURE);
   }
 
@@ -47,7 +54,8 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
     let body: ApiErrorBody | undefined;
     try {
       body = (await response.json()) as ApiErrorBody;
-    } catch {
+    } catch (caught) {
+      if (isAbortError(caught, init?.signal)) throw caught;
       body = undefined;
     }
     throw new ApiError(
@@ -61,13 +69,20 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
 
   try {
     return (await response.json()) as T;
-  } catch {
+  } catch (caught) {
+    if (isAbortError(caught, init?.signal)) throw caught;
     throw new ApiError({
       code: 'INTERNAL',
       message: 'Something went wrong on our side.',
       retryable: true,
     });
   }
+}
+
+export function getServiceInfo(signal?: AbortSignal): Promise<ServiceInfo> {
+  return call<ServiceInfo>('/api/info', {
+    ...(signal ? { signal } : {}),
+  });
 }
 
 export function resolveMedia(url: string, signal?: AbortSignal): Promise<MediaInfo> {
@@ -86,8 +101,12 @@ export function importMedia(request: ImportRequest, signal?: AbortSignal): Promi
   });
 }
 
-export function createJob(request: CreateJobRequest): Promise<Job> {
-  return call<Job>('/api/jobs', { method: 'POST', body: JSON.stringify(request) });
+export function createJob(request: CreateJobRequest, signal?: AbortSignal): Promise<Job> {
+  return call<Job>('/api/jobs', {
+    method: 'POST',
+    body: JSON.stringify(request),
+    ...(signal ? { signal } : {}),
+  });
 }
 
 export function getJob(id: string, signal?: AbortSignal): Promise<Job> {

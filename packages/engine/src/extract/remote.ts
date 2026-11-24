@@ -72,7 +72,9 @@ interface Pending {
   readonly files: RemoteFile[];
   readonly onProgress?: (progress: RemoteProgress) => void;
   readonly onClaimed?: (nodeId: string) => void;
+  readonly onTaskId?: (taskId: string) => void;
   readonly timer: NodeJS.Timeout;
+  unclaimedTimer?: NodeJS.Timeout;
   cancelled: boolean;
   claimedAt?: number;
   claimedBy?: string;
@@ -107,31 +109,65 @@ export interface RemoteExtraction {
     options?: {
       onProgress?: (progress: RemoteProgress) => void;
       onClaimed?: (nodeId: string) => void;
+      onTaskId?: (taskId: string) => void;
       signal?: AbortSignal;
     },
   ): Promise<ResolvedMedia>;
   dispatchJob(
     task: Omit<RemoteTask, 'id' | 'createdAt'>,
-    options?: { onProgress?: (progress: RemoteProgress) => void; signal?: AbortSignal },
+    options?: {
+      onProgress?: (progress: RemoteProgress) => void;
+      onTaskId?: (taskId: string) => void;
+      signal?: AbortSignal;
+    },
   ): Promise<readonly RemoteFile[]>;
 }
+
+const DEFAULT_UNCLAIMED_TIMEOUT_MS = 30_000;
 
 export class ExtractionNodeRegistry implements RemoteExtraction {
   private readonly queue: RemoteTask[] = [];
   private readonly waiting: Waiter[] = [];
   private readonly pending = new Map<string, Pending>();
   private readonly nodes = new Map<string, NodeRecord>();
+  private readonly cleanupListeners = new Set<(taskId: string) => void>();
   private readonly settled = new Map<
     string,
     { claimedBy?: string; cancelled: boolean; settledAt: number }
   >();
+  private readonly unclaimedTimeoutMs: number;
 
   constructor(
     private readonly logger: Logger,
     private readonly staleAfterMs = 90_000,
     private readonly taskTimeoutMs = 15 * 60_000,
     private readonly leaseMs = defaultLeaseMs(),
-  ) {}
+    unclaimedTimeoutMs?: number,
+  ) {
+    this.unclaimedTimeoutMs = Math.min(
+      taskTimeoutMs,
+      unclaimedTimeoutMs ?? DEFAULT_UNCLAIMED_TIMEOUT_MS,
+    );
+  }
+
+  getTask(taskId: string): RemoteTask | undefined {
+    return this.pending.get(taskId)?.task;
+  }
+
+  onTaskCleanup(listener: (taskId: string) => void): () => void {
+    this.cleanupListeners.add(listener);
+    return () => {
+      this.cleanupListeners.delete(listener);
+    };
+  }
+
+  private emitCleanup(taskId: string): void {
+    for (const listener of this.cleanupListeners) {
+      try {
+        listener(taskId);
+      } catch {}
+    }
+  }
 
   register(
     nodeId: string,
@@ -289,6 +325,9 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
   completeResolve(taskId: string, media: ResolvedMedia): boolean {
     const pending = this.pending.get(taskId);
     if (!pending) return false;
+    if (pending.task.kind !== 'resolve' || media.provider !== pending.task.providerId) {
+      return false;
+    }
     pending.settle({ media });
     return true;
   }
@@ -390,6 +429,7 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
     options: {
       onProgress?: (progress: RemoteProgress) => void;
       onClaimed?: (nodeId: string) => void;
+      onTaskId?: (taskId: string) => void;
       signal?: AbortSignal;
     } = {},
   ): Promise<ResolvedMedia> {
@@ -403,12 +443,31 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
 
   dispatchJob(
     task: Omit<RemoteTask, 'id' | 'createdAt'>,
-    options: { onProgress?: (progress: RemoteProgress) => void; signal?: AbortSignal } = {},
+    options: {
+      onProgress?: (progress: RemoteProgress) => void;
+      onTaskId?: (taskId: string) => void;
+      signal?: AbortSignal;
+    } = {},
   ): Promise<readonly RemoteFile[]> {
     const required = requiredFeatures(task);
     const nodes = this.live(task.networkClass).filter(
       (node) => !node.providers.length || node.providers.includes(task.providerId),
     );
+    if (this.nodes.size > 0 && nodes.length === 0) {
+      if (required.includes('instagram-session')) {
+        return Promise.reject(
+          seraError('PROVIDER_AUTH_REQUIRED', {
+            message: 'This post needs a connected extraction node with an Instagram session.',
+            detail: 'remote: no healthy extraction node available',
+          }),
+        );
+      }
+      return Promise.reject(
+        seraError('PROVIDER_UNAVAILABLE', {
+          detail: 'remote: no healthy extraction node available for this provider',
+        }),
+      );
+    }
     if (
       required.length &&
       nodes.length &&
@@ -441,11 +500,40 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
     });
   }
 
+  private hasEligibleLiveNode(task: RemoteTask): boolean {
+    const needed = requiredFeatures(task);
+    return this.live(task.networkClass).some(
+      (node) =>
+        (!node.providers.length || node.providers.includes(task.providerId)) &&
+        !task.avoid?.includes(node.id) &&
+        needed.every((feature) => node.features.includes(feature)),
+    );
+  }
+
+  private armUnclaimed(pending: Pending): void {
+    if (pending.unclaimedTimer) clearTimeout(pending.unclaimedTimer);
+    if (this.unclaimedTimeoutMs >= this.taskTimeoutMs) return;
+    pending.unclaimedTimer = setTimeout(() => {
+      pending.unclaimedTimer = undefined;
+      if (this.pending.get(pending.task.id) !== pending || pending.claimedBy !== undefined) return;
+      if (this.hasEligibleLiveNode(pending.task)) return;
+      const queued = this.queue.indexOf(pending.task);
+      if (queued !== -1) this.queue.splice(queued, 1);
+      pending.settle({
+        error: seraError('PROVIDER_UNAVAILABLE', {
+          detail: `remote: no healthy node claimed task within ${Math.round(this.unclaimedTimeoutMs / 1000)}s`,
+        }),
+      });
+    }, this.unclaimedTimeoutMs);
+    pending.unclaimedTimer.unref();
+  }
+
   private enqueue(
     task: Omit<RemoteTask, 'id' | 'createdAt'>,
     options: {
       onProgress?: (progress: RemoteProgress) => void;
       onClaimed?: (nodeId: string) => void;
+      onTaskId?: (taskId: string) => void;
       signal?: AbortSignal;
     } = {},
   ): Promise<{ media?: ResolvedMedia; files?: readonly RemoteFile[] }> {
@@ -465,6 +553,7 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
           if (this.pending.get(id) !== pending) return;
           options.signal?.removeEventListener('abort', onAbort);
           clearTimeout(pending.timer);
+          clearTimeout(pending.unclaimedTimer);
           clearTimeout(pending.leaseTimer);
           this.pending.delete(id);
           this.sweepSettled();
@@ -475,6 +564,7 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
           });
           this.wakeOne();
           if (outcome.error) {
+            this.emitCleanup(id);
             cleanupFiles(pending.files);
             pending.files.length = 0;
             reject(outcome.error);
@@ -500,11 +590,13 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
           settle: finish,
           ...(options.onProgress ? { onProgress: options.onProgress } : {}),
           ...(options.onClaimed ? { onClaimed: options.onClaimed } : {}),
+          ...(options.onTaskId ? { onTaskId: options.onTaskId } : {}),
           files: [],
           timer,
           cancelled: false,
         };
         this.pending.set(full.id, pending);
+        options.onTaskId?.(full.id);
 
         const onAbort = () => {
           pending.cancelled = true;
@@ -515,6 +607,7 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
         options.signal?.addEventListener('abort', onAbort, { once: true });
 
         this.queue.push(full);
+        this.armUnclaimed(pending);
         this.wakeOne();
       },
     );
@@ -537,6 +630,10 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
   private markClaimed(task: RemoteTask, nodeId: string): void {
     const pending = this.pending.get(task.id);
     if (pending) {
+      if (pending.unclaimedTimer) {
+        clearTimeout(pending.unclaimedTimer);
+        pending.unclaimedTimer = undefined;
+      }
       pending.claimedAt = Date.now();
       pending.claimedBy = nodeId;
       pending.onClaimed?.(nodeId);
@@ -575,6 +672,7 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
     });
     this.pending.delete(previous.id);
 
+    this.emitCleanup(previous.id);
     cleanupFiles(pending.files);
     const needed = requiredFeatures(previous);
     const hasAlternativeNode =
@@ -599,6 +697,7 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
     delete pending.claimedBy;
     delete pending.leaseUntil;
     this.pending.set(pending.task.id, pending);
+    pending.onTaskId?.(pending.task.id);
 
     this.logger.warn(
       {
@@ -613,6 +712,7 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
     );
 
     this.queue.unshift(pending.task);
+    this.armUnclaimed(pending);
     this.wakeOne();
   }
 }

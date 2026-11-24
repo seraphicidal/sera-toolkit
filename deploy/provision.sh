@@ -38,7 +38,40 @@ log "Installing Docker"
 if command -v docker >/dev/null 2>&1; then
   echo "Docker already present: $(docker --version)"
 elif [ "$PKG" = apt ]; then
-  curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 20 https://get.docker.com | sh
+  DEBIAN_FRONTEND=noninteractive apt-get update -qq
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ca-certificates curl gnupg
+  install -m 0755 -d /etc/apt/keyrings
+  os_id=""
+  os_codename=""
+  if [ -r /etc/os-release ]; then
+    os_id=$(. /etc/os-release && printf '%s' "${ID:-}")
+    os_codename=$(. /etc/os-release && printf '%s' "${UBUNTU_CODENAME:-${VERSION_CODENAME:-}}")
+  fi
+  case "$os_id" in
+    ubuntu | debian) ;;
+    *) die "unsupported apt distribution '${os_id:-unknown}'; install Docker manually and re-run" ;;
+  esac
+  case "$os_codename" in
+    '' | *[!a-z0-9-]*) die "unsupported or missing distribution codename '${os_codename:-empty}'" ;;
+  esac
+  tmp_key=$(mktemp)
+  if ! curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 20 \
+    "https://download.docker.com/linux/${os_id}/gpg" -o "$tmp_key"; then
+    rm -f "$tmp_key"
+    die "failed to download Docker GPG key"
+  fi
+  expected_fpr="9DC858229FC7DD38854AE2D88D81803C0EBFCD88"
+  actual_fpr=$(gpg --batch --show-keys --with-colons "$tmp_key" 2>/dev/null | awk -F: '$1 == "fpr" { print $10; exit }')
+  if [ "$actual_fpr" != "$expected_fpr" ]; then
+    rm -f "$tmp_key"
+    die "Docker GPG key fingerprint mismatch: expected ${expected_fpr}, got ${actual_fpr:-none}"
+  fi
+  install -m 0644 "$tmp_key" /etc/apt/keyrings/docker.asc
+  rm -f "$tmp_key"
+  printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/%s %s stable\n' \
+    "$(dpkg --print-architecture)" "$os_id" "$os_codename" >/etc/apt/sources.list.d/docker.list
+  DEBIAN_FRONTEND=noninteractive apt-get update -qq
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 else
   dnf install -y -q dnf-plugins-core
   dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
@@ -97,6 +130,7 @@ if [ ! -f .env ]; then
 
   SECRET="$(openssl rand -hex 32)"
   REDIS_PASSWORD="$(openssl rand -hex 24)"
+  WORKER_TOKEN="$(openssl rand -hex 32)"
 
   CORES="$(nproc 2>/dev/null || echo 1)"
   CONCURRENCY="${SERA_WORKER_CONCURRENCY:-$CORES}"
@@ -105,6 +139,7 @@ if [ ! -f .env ]; then
   cat > .env <<EOF
 SERA_SECRET=${SECRET}
 SERA_REDIS_PASSWORD=${REDIS_PASSWORD}
+SERA_EXTRACTION_WORKER_TOKEN=${WORKER_TOKEN}
 SERA_DOMAIN=${DOMAIN}
 
 SERA_RETENTION_SECONDS=1800

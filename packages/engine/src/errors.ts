@@ -57,6 +57,8 @@ const DEFAULT_RETRYABLE = new Set<ErrorCode>([
 
 const DEFAULT_STATUS: Record<ErrorCode, number> = {
   INVALID_URL: 400,
+  VALIDATION_ERROR: 400,
+  FORBIDDEN: 403,
   UNSUPPORTED_SOURCE: 422,
   PRIVATE_CONTENT: 403,
   MEDIA_UNAVAILABLE: 404,
@@ -86,6 +88,8 @@ const DEFAULT_STATUS: Record<ErrorCode, number> = {
 
 export const MESSAGES: Record<ErrorCode, string> = {
   INVALID_URL: "That doesn't look like a valid link.",
+  VALIDATION_ERROR: 'That request was not valid.',
+  FORBIDDEN: 'Access denied.',
   UNSUPPORTED_SOURCE: "This source isn't currently supported.",
   PRIVATE_CONTENT: "This content isn't publicly accessible.",
   MEDIA_UNAVAILABLE: 'This media is no longer available.',

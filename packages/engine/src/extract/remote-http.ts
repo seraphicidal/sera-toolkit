@@ -1,4 +1,4 @@
-import { MESSAGES, SeraError, seraError } from '../errors.js';
+import { MESSAGES, seraError, type SeraError } from '../errors.js';
 import type { Logger } from '../logging.js';
 import type { ResolvedMedia } from '../providers/types.js';
 import { readBoundedJson } from '../security/http.js';
@@ -110,6 +110,7 @@ export class RemoteOverHttp implements RemoteExtraction {
     options: {
       onProgress?: (progress: RemoteProgress) => void;
       onClaimed?: (nodeId: string) => void;
+      onTaskId?: (taskId: string) => void;
       signal?: AbortSignal;
     } = {},
   ): Promise<ResolvedMedia> {
@@ -122,7 +123,11 @@ export class RemoteOverHttp implements RemoteExtraction {
 
   async dispatchJob(
     task: Omit<RemoteTask, 'id' | 'createdAt'>,
-    options: { onProgress?: (progress: RemoteProgress) => void; signal?: AbortSignal } = {},
+    options: {
+      onProgress?: (progress: RemoteProgress) => void;
+      onTaskId?: (taskId: string) => void;
+      signal?: AbortSignal;
+    } = {},
   ): Promise<readonly RemoteFile[]> {
     const outcome = await this.run({ ...task, kind: 'job' }, options);
     if (!outcome.files?.length) {
@@ -136,6 +141,7 @@ export class RemoteOverHttp implements RemoteExtraction {
     options: {
       onProgress?: (progress: RemoteProgress) => void;
       onClaimed?: (nodeId: string) => void;
+      onTaskId?: (taskId: string) => void;
       signal?: AbortSignal;
     },
   ): Promise<{ media?: ResolvedMedia; files?: readonly RemoteFile[] }> {
@@ -149,9 +155,11 @@ export class RemoteOverHttp implements RemoteExtraction {
         detail: 'invalid taskId from extraction dispatch',
       });
     }
+    options.onTaskId?.(taskId);
 
     let seenStep: string | undefined;
     let seenPercent: number | undefined;
+    let settledRemotely = false;
 
     try {
       for (;;) {
@@ -185,8 +193,12 @@ export class RemoteOverHttp implements RemoteExtraction {
           seenStep = state.progress.step;
           seenPercent = state.progress.percent;
         }
-        if (state.state === 'done') return { ...state };
+        if (state.state === 'done') {
+          settledRemotely = true;
+          return { ...state };
+        }
         if (state.state === 'failed') {
+          settledRemotely = true;
           const failure = state.error;
           const code =
             typeof failure?.code === 'string' && Object.hasOwn(MESSAGES, failure.code)
@@ -203,8 +215,11 @@ export class RemoteOverHttp implements RemoteExtraction {
         }
       }
     } catch (error) {
-      if (options.signal?.aborted || SeraError.from(error).code === 'CANCELLED') {
-        await this.call('DELETE', `/internal/extraction/dispatch/${taskId}`).catch(() => undefined);
+      if (!settledRemotely) {
+        const res = await this.call('DELETE', `/internal/extraction/dispatch/${taskId}`).catch(
+          () => undefined,
+        );
+        await res?.body?.cancel().catch(() => undefined);
       }
       throw error;
     }
