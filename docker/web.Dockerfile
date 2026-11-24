@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-FROM node:24.18.1-bookworm-slim AS build
+FROM node:26.13.1-bookworm-slim AS build
 WORKDIR /app
 
 COPY package.json package-lock.json ./
@@ -24,7 +24,7 @@ ENV NEXT_TELEMETRY_DISABLED=1
 
 RUN npm run build --workspace @sera/web
 
-FROM node:24.18.1-bookworm-slim AS runtime
+FROM node:26.13.1-bookworm-slim AS runtime
 
 ARG SERA_API_URL=http://api:4000
 
