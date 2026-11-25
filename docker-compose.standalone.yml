@@ -30,7 +30,6 @@ services:
     tmpfs:
       - /tmp:noexec,nosuid,nodev,size=64m
       - /app/apps/web/.next/cache:noexec,nosuid,nodev,size=128m
-    pids_limit: 128
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -39,6 +38,7 @@ services:
       resources:
         limits:
           memory: 512m
+          pids: 128
 
   api:
     image: ${SERA_IMAGE_API:-ghcr.io/seraphicidal/sera-api:latest}
@@ -100,7 +100,6 @@ services:
     read_only: true
     tmpfs:
       - /tmp:exec,nosuid,nodev,size=256m
-    pids_limit: 256
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
@@ -111,6 +110,7 @@ services:
         limits:
           cpus: '${SERA_WORKER_CPUS:-2}'
           memory: ${SERA_WORKER_MEMORY:-2g}
+          pids: 256
 
 volumes:
   media:
