@@ -17,6 +17,7 @@ import type {
   NodeAvailability,
   NodeFeature,
   NodeNetworkClass,
+  NodeRole,
   NodeStatus,
   NodeTransport,
   NodeUpdateManifest,
@@ -303,6 +304,8 @@ export const nodeAvailabilitySchema = z.object({
   totalNodes: z.number().int().nonnegative(),
   healthyNodes: z.number().int().nonnegative(),
   residentialNodes: z.number().int().nonnegative(),
+  primaryNodes: z.number().int().nonnegative().optional(),
+  backupNodes: z.number().int().nonnegative().optional(),
   features: z.array(z.string().min(1).max(64)),
   providers: z.array(z.string().min(1).max(32)),
 });
@@ -439,6 +442,8 @@ export const nodeNetworkClassSchema = z.enum(['datacenter', 'residential', 'unkn
 
 export const nodeTransportSchema = z.enum(['wifi', 'cellular', 'other']);
 
+export const nodeRoleSchema = z.enum(['primary', 'backup']);
+
 export const nodeFeatureSchema = z.enum(['trim', 'subtitles', 'items', 'instagram-session']);
 
 export const remoteTaskKindSchema = z.enum(['resolve', 'job']);
@@ -483,10 +488,14 @@ export const claimSchema = z.object({
   networkClass: nodeNetworkClassSchema.default('residential'),
   features: z.array(z.string().min(1).max(32)).max(20).default([]),
   transport: nodeTransportSchema.optional(),
+  role: nodeRoleSchema.optional(),
+  priority: z.coerce.number().int().min(-1000).max(1000).optional(),
   appVersion: z.string().min(1).max(64).optional(),
   ytdlpVersion: z.string().min(1).max(64).optional(),
   ffmpegVersion: z.string().min(1).max(64).optional(),
 });
+
+export const claimBodySchema = claimSchema;
 
 export const dispatchSchema = z.object({
   kind: remoteTaskKindSchema,
@@ -524,6 +533,8 @@ export const nodeStatusSchema = z.object({
   capacity: z.number().int().min(1).max(8),
   features: z.array(z.string().min(1).max(32)).max(20).optional(),
   transport: nodeTransportSchema.optional(),
+  role: nodeRoleSchema.optional(),
+  priority: z.number().int().min(-1000).max(1000).optional(),
   appVersion: z.string().min(1).max(64).optional(),
   ytdlpVersion: z.string().min(1).max(64).optional(),
   ffmpegVersion: z.string().min(1).max(64).optional(),
@@ -774,6 +785,7 @@ type _NodeNetworkClassMatches = Assert<
   Exact<z.infer<typeof nodeNetworkClassSchema>, NodeNetworkClass>
 >;
 type _NodeTransportMatches = Assert<Exact<z.infer<typeof nodeTransportSchema>, NodeTransport>>;
+type _NodeRoleMatches = Assert<Exact<z.infer<typeof nodeRoleSchema>, NodeRole>>;
 type _NodeFeatureMatches = Assert<Exact<z.infer<typeof nodeFeatureSchema>, NodeFeature>>;
 type _RemoteTaskKindMatches = Assert<Exact<z.infer<typeof remoteTaskKindSchema>, RemoteTaskKind>>;
 type _RemoteTaskItemMatches = Assert<

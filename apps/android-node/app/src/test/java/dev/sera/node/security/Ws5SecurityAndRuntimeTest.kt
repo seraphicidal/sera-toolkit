@@ -3,6 +3,7 @@ package dev.sera.node.security
 import dev.sera.node.data.ConnectionTestResult
 import dev.sera.node.data.EnvConfigParser
 import dev.sera.node.data.NodeLogStore
+import dev.sera.node.data.NodePreferences
 import dev.sera.node.data.NodeSettings
 import dev.sera.node.data.SecretCipher
 import dev.sera.node.data.SeraNodeApiClient
@@ -26,6 +27,7 @@ import dev.sera.node.extractor.YtdlpDownloadOptions
 import dev.sera.node.extractor.YtdlpProbeOptions
 import dev.sera.node.extractor.YtdlpSubtitleOptions
 import dev.sera.node.extractor.assertPublicUrlForExternalTool
+import dev.sera.node.extractor.isPublicAddress
 import dev.sera.node.extractor.parseUserUrl
 import dev.sera.node.extractor.parseYtdlpInfo
 import dev.sera.node.extractor.sanitizeResolvedMedia
@@ -76,8 +78,13 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import java.io.File
+import java.io.IOException
+import java.net.ConnectException
 import java.net.InetAddress
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import java.nio.file.Files
+import javax.net.ssl.SSLHandshakeException
 
 class Ws5SecurityAndRuntimeTest {
     private lateinit var server: MockWebServer
@@ -681,5 +688,106 @@ class Ws5SecurityAndRuntimeTest {
         assertFalse(stopped.isServiceRunning)
         assertNull(stopped.lastError)
         assertEquals(0, stopped.authFailureCount)
+    }
+
+    @Test
+    fun doesNotCacheTransientEmptyKeystoreDecryptionFailures() {
+        val cache = mutableMapOf<String, String>()
+        var attempts = 0
+        val ciphertext = "enc:v1:simulated_ciphertext"
+
+        val first = NodePreferences.resolveDecryptedSecret(ciphertext, cache) {
+            attempts += 1
+            ""
+        }
+        assertEquals("", first)
+        assertTrue(cache.isEmpty())
+
+        val second = NodePreferences.resolveDecryptedSecret(ciphertext, cache) {
+            attempts += 1
+            "  tok_recovered_123  "
+        }
+        assertEquals("tok_recovered_123", second)
+        assertEquals("tok_recovered_123", cache[ciphertext])
+
+        val third = NodePreferences.resolveDecryptedSecret(ciphertext, cache) {
+            attempts += 1
+            "should_not_be_called"
+        }
+        assertEquals("tok_recovered_123", third)
+        assertEquals(2, attempts)
+    }
+
+    @Test
+    fun validatesNat64EmbeddedIpv4AddressesAndFormatsConnectionDiagnostics() = runTest {
+        assertTrue(isPublicAddress("64:ff9b::93.184.216.34"))
+        assertTrue(isPublicAddress("64:ff9b::5db8:d822"))
+        assertFalse(isPublicAddress("64:ff9b::127.0.0.1"))
+        assertFalse(isPublicAddress("64:ff9b::7f00:1"))
+        assertFalse(isPublicAddress("64:ff9b::10.0.0.1"))
+        assertFalse(isPublicAddress("64:ff9b::169.254.169.254"))
+        assertFalse(isPublicAddress("64:ff9b::192.168.1.1"))
+        assertFalse(isPublicAddress("64:ff9b:1::93.184.216.34"))
+
+        val baseUrl = server.url("/").toString().trimEnd('/')
+        val api = SeraNodeApiClient(OkHttpClient())
+
+        server.enqueue(MockResponse().setResponseCode(403))
+        val forbidden = api.testConnection(baseUrl, "tok_mismatch", "phone-backup")
+        assertTrue(forbidden is ConnectionTestResult.AuthRejected)
+        assertEquals(403, (forbidden as ConnectionTestResult.AuthRejected).statusCode)
+        assertTrue(forbidden.message.contains("Node ID"))
+
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .addHeader("X-Sera-Node-Id", "laptop")
+                .setBody("{}"),
+        )
+        val nodeIdMismatch = api.testConnection(baseUrl, "tok_laptop", "phone-backup")
+        assertTrue(nodeIdMismatch is ConnectionTestResult.AuthRejected)
+        assertEquals(403, (nodeIdMismatch as ConnectionTestResult.AuthRejected).statusCode)
+        assertTrue(nodeIdMismatch.message.contains("phone-backup"))
+        assertTrue(nodeIdMismatch.message.contains("laptop"))
+
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .addHeader("X-Sera-Node-Id", "phone-backup")
+                .addHeader("X-Sera-Manifest-Hash", "hash-match")
+                .setBody("{}"),
+        )
+        val nodeIdMatch = api.testConnection(baseUrl, "tok_phone", "phone-backup")
+        assertTrue(nodeIdMatch is ConnectionTestResult.Success)
+        assertEquals("hash-match", (nodeIdMatch as ConnectionTestResult.Success).manifestHash)
+
+        server.enqueue(MockResponse().setResponseCode(502))
+        val badGateway = api.testConnection(baseUrl, "tok_valid")
+        assertTrue(badGateway is ConnectionTestResult.Failure)
+        assertTrue((badGateway as ConnectionTestResult.Failure).message.contains("502"))
+
+        val target = "https://130-61-188-184.sslip.io/internal/extraction/updates/manifest".toHttpUrl()
+        assertTrue(
+            SeraNodeApiClient.formatConnectionError(UnknownHostException("no host"), target)
+                .contains("DNS lookup failed"),
+        )
+        assertTrue(
+            SeraNodeApiClient.formatConnectionError(SSLHandshakeException("handshake failed"), target)
+                .contains("TLS/SSL error"),
+        )
+        assertTrue(
+            SeraNodeApiClient.formatConnectionError(SocketTimeoutException("timeout"), target)
+                .contains("timed out"),
+        )
+        assertTrue(
+            SeraNodeApiClient.formatConnectionError(ConnectException("refused"), target)
+                .contains("Could not connect"),
+        )
+        assertTrue(
+            SeraNodeApiClient.formatConnectionError(
+                IOException("CLEARTEXT communication to example.com not permitted"),
+                target,
+            ).contains("Cleartext HTTP blocked"),
+        )
     }
 }

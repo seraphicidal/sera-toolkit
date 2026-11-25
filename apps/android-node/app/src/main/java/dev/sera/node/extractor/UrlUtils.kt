@@ -404,10 +404,16 @@ private fun isPublicIpv6(words: IntArray): Boolean {
         }
         if (words[5] == 0) return false
     }
-    if ((words[0] and 0xff00) == 0) return false
     if (words[0] == 0x0064 && words[1] == 0xff9b && words[2] == 0 && words[3] == 0 && words[4] == 0 && words[5] == 0) {
-        return false
+        val embedded = intArrayOf(
+            words[6] ushr 8,
+            words[6] and 0xff,
+            words[7] ushr 8,
+            words[7] and 0xff,
+        )
+        return isPublicIpv4(embedded)
     }
+    if ((words[0] and 0xff00) == 0) return false
     if (words[0] == 0x0064 && words[1] == 0xff9b && words[2] == 0x0001) return false
     if (words[0] == 0x0100 && words[1] == 0 && words[2] == 0 && words[3] == 0) return false
     if (words[0] == 0x2001 && (words[1] ushr 9) == 0) return false

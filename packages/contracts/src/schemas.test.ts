@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   apiErrorBodySchema,
+  claimBodySchema,
+  claimSchema,
   errorCodeSchema,
   isSafeYoutubeExtraArgs,
   mediaKindSchema,
+  nodeRoleSchema,
+  nodeStatusSchema,
   progressSchema,
   resolvedPlanSchema,
   ServiceInfoSchema,
@@ -66,6 +70,70 @@ describe('contracts schemas hardening', () => {
       },
     });
     expect(parsed.nodeAvailability?.healthyNodes).toBe(1);
+
+    const withRoles = ServiceInfoSchema.parse({
+      name: 'SERA.toolkit',
+      version: '1.8.0',
+      providers: [],
+      limits: {
+        maxFilesizeBytes: 1024,
+        maxDurationSeconds: 60,
+        maxItemsPerJob: 10,
+        retentionSeconds: 600,
+      },
+      nodeAvailability: {
+        enabled: true,
+        totalNodes: 2,
+        healthyNodes: 2,
+        residentialNodes: 2,
+        primaryNodes: 1,
+        backupNodes: 1,
+        features: ['trim'],
+        providers: ['*'],
+      },
+    });
+    expect(withRoles.nodeAvailability?.primaryNodes).toBe(1);
+    expect(withRoles.nodeAvailability?.backupNodes).toBe(1);
+  });
+
+  it('validates nodeRoleSchema, claimSchema, and nodeStatusSchema with optional role and priority', () => {
+    expect(nodeRoleSchema.parse('primary')).toBe('primary');
+    expect(nodeRoleSchema.parse('backup')).toBe('backup');
+    expect(nodeRoleSchema.safeParse('secondary').success).toBe(false);
+    expect(claimBodySchema).toBe(claimSchema);
+
+    const legacyClaim = claimSchema.parse({
+      nodeId: 'desktop',
+      providers: [],
+    });
+    expect(legacyClaim.role).toBeUndefined();
+    expect(legacyClaim.priority).toBeUndefined();
+
+    const modernClaim = claimSchema.parse({
+      nodeId: 'android-node',
+      providers: ['youtube', 'instagram'],
+      capacity: 2,
+      networkClass: 'residential',
+      transport: 'wifi',
+      role: 'backup',
+      priority: -10,
+    });
+    expect(modernClaim.role).toBe('backup');
+    expect(modernClaim.priority).toBe(-10);
+
+    const status = nodeStatusSchema.parse({
+      id: 'android-node',
+      providers: ['youtube'],
+      networkClass: 'residential',
+      capacity: 2,
+      role: 'backup',
+      priority: 0,
+      inFlight: 0,
+      lastSeenMs: 20,
+      healthy: true,
+    });
+    expect(status.role).toBe('backup');
+    expect(status.priority).toBe(0);
   });
 
   it('enforces strict allowlist on youtubeHotConfig.extraArgs', () => {

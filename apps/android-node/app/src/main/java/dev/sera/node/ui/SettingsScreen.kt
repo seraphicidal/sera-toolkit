@@ -71,6 +71,7 @@ import androidx.compose.ui.unit.dp
 import dev.sera.node.data.NodeSettings
 import dev.sera.node.data.ParsedEnvConfig
 import dev.sera.node.data.ThemePreference
+import dev.sera.node.model.NodeRole
 import dev.sera.node.ui.theme.LocalSeraPalette
 import kotlinx.coroutines.delay
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
@@ -82,6 +83,7 @@ private data class EditableSettingsSnapshot(
     val apiBaseUrl: String,
     val nodeToken: String,
     val nodeId: String,
+    val nodeRole: NodeRole,
     val enableYoutube: Boolean,
     val enableInstagram: Boolean,
     val enableAllProviders: Boolean,
@@ -105,6 +107,7 @@ private data class EditableSettingsSnapshot(
             apiBaseUrl = settings.apiBaseUrl,
             nodeToken = settings.nodeToken,
             nodeId = settings.nodeId,
+            nodeRole = settings.nodeRole,
             enableYoutube = settings.enableYoutube,
             enableInstagram = settings.enableInstagram,
             enableAllProviders = settings.enableAllProviders,
@@ -131,7 +134,7 @@ private data class EditableSettingsSnapshot(
 fun SettingsScreen(
     settings: NodeSettings,
     connectionTestState: ConnectionTestUiState,
-    onTestConnection: (apiBaseUrl: String, nodeToken: String) -> Unit,
+    onTestConnection: (apiBaseUrl: String, nodeToken: String, nodeId: String) -> Unit,
     onResetConnectionTest: () -> Unit,
     onThemeChange: (ThemePreference) -> Unit,
     onReadClipboard: () -> String?,
@@ -141,6 +144,7 @@ fun SettingsScreen(
         apiBaseUrl: String,
         nodeToken: String,
         nodeId: String,
+        nodeRole: NodeRole,
         enableYoutube: Boolean,
         enableInstagram: Boolean,
         enableAllProviders: Boolean,
@@ -165,6 +169,7 @@ fun SettingsScreen(
         settings.apiBaseUrl,
         settings.nodeToken,
         settings.nodeId,
+        settings.nodeRole,
         settings.enableYoutube,
         settings.enableInstagram,
         settings.enableAllProviders,
@@ -189,6 +194,9 @@ fun SettingsScreen(
     var apiBaseUrl by rememberSaveable { mutableStateOf(persistedSnapshot.apiBaseUrl) }
     var nodeToken by rememberSaveable { mutableStateOf(persistedSnapshot.nodeToken) }
     var nodeId by rememberSaveable { mutableStateOf(persistedSnapshot.nodeId) }
+    var nodeRoleName by rememberSaveable { mutableStateOf(persistedSnapshot.nodeRole.name) }
+    val nodeRole = NodeRole.entries.firstOrNull { it.name == nodeRoleName }
+        ?: NodeRole.BACKUP
     var enableYoutube by rememberSaveable { mutableStateOf(persistedSnapshot.enableYoutube) }
     var enableInstagram by rememberSaveable { mutableStateOf(persistedSnapshot.enableInstagram) }
     var enableAllProviders by rememberSaveable { mutableStateOf(persistedSnapshot.enableAllProviders) }
@@ -221,6 +229,7 @@ fun SettingsScreen(
         apiBaseUrl = apiBaseUrl,
         nodeToken = nodeToken,
         nodeId = nodeId,
+        nodeRole = nodeRole,
         enableYoutube = enableYoutube,
         enableInstagram = enableInstagram,
         enableAllProviders = enableAllProviders,
@@ -244,6 +253,7 @@ fun SettingsScreen(
         apiBaseUrl = target.apiBaseUrl
         nodeToken = target.nodeToken
         nodeId = target.nodeId
+        nodeRoleName = target.nodeRole.name
         enableYoutube = target.enableYoutube
         enableInstagram = target.enableInstagram
         enableAllProviders = target.enableAllProviders
@@ -329,6 +339,7 @@ fun SettingsScreen(
                 parsed.apiBaseUrl?.let { apiBaseUrl = it }
                 parsed.nodeToken?.let { nodeToken = it }
                 parsed.nodeId?.let { nodeId = it }
+                parsed.nodeRole?.let { nodeRoleName = it.name }
                 parsed.enableYoutube?.let { enableYoutube = it }
                 parsed.enableInstagram?.let { enableInstagram = it }
                 parsed.enableAllProviders?.let { enableAllProviders = it }
@@ -420,7 +431,10 @@ fun SettingsScreen(
 
                 OutlinedTextField(
                     value = nodeId,
-                    onValueChange = { nodeId = it },
+                    onValueChange = {
+                        nodeId = it
+                        onResetConnectionTest()
+                    },
                     label = { Text("Node ID (SERA_NODE_ID)") },
                     placeholder = { Text("android-node") },
                     singleLine = true,
@@ -434,7 +448,7 @@ fun SettingsScreen(
                 )
 
                 FilledTonalButton(
-                    onClick = { onTestConnection(apiBaseUrl, nodeToken) },
+                    onClick = { onTestConnection(apiBaseUrl, nodeToken, nodeId) },
                     enabled = apiBaseUrl.isNotBlank() &&
                         nodeToken.isNotBlank() &&
                         apiBaseUrlError == null &&
@@ -459,6 +473,35 @@ fun SettingsScreen(
                 }
 
                 ConnectionTestBanner(state = connectionTestState)
+
+                Text(
+                    text = "Node Role (SERA_EXTRACTION_NODE_ROLE)",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = palette.inkMuted,
+                )
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    NodeRole.entries.forEach { candidate ->
+                        val chipLabel = if (candidate == NodeRole.BACKUP) {
+                            "${candidate.label} (Default)"
+                        } else {
+                            candidate.label
+                        }
+                        FilterChip(
+                            selected = nodeRole == candidate,
+                            onClick = { nodeRoleName = candidate.name },
+                            label = { Text(chipLabel) },
+                        )
+                    }
+                }
+                Text(
+                    text = if (nodeRole == NodeRole.BACKUP) {
+                        "Recommended for phones. Stays on standby and handles tasks when your PC primary node is offline or unavailable."
+                    } else {
+                        "Claims tasks immediately alongside any other primary nodes."
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = palette.inkMuted,
+                )
 
                 Text(
                     text = "Concurrent Task Capacity",
@@ -715,6 +758,7 @@ fun SettingsScreen(
                             apiBaseUrl,
                             nodeToken,
                             nodeId,
+                            nodeRole,
                             enableYoutube,
                             enableInstagram,
                             enableAllProviders,
@@ -779,7 +823,7 @@ private fun ConnectionTestBanner(state: ConnectionTestUiState) {
                         modifier = Modifier.size(18.dp),
                     )
                     Text(
-                        text = "${state.message} (${state.latencyMs} ms)",
+                        text = state.message,
                         style = MaterialTheme.typography.bodyMedium,
                         color = palette.success,
                         modifier = Modifier.weight(1f),
@@ -955,7 +999,7 @@ private fun EnvImportDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
-                    text = "Paste your SERA node environment file to auto-fill Server URL, Token, Node ID, Providers, YouTube/Instagram/Reddit credentials, Capacity, Network/Power policies, and GitHub Repo.",
+                    text = "Paste your SERA node environment file to auto-fill Server URL, Token, Node ID, Node Role, Providers, YouTube/Instagram/Reddit credentials, Capacity, Network/Power policies, and GitHub Repo.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = palette.inkMuted,
                 )

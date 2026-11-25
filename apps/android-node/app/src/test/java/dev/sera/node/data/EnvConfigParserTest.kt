@@ -1,5 +1,6 @@
 package dev.sera.node.data
 
+import dev.sera.node.model.NodeRole
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -102,5 +103,46 @@ class EnvConfigParserTest {
         assertEquals("reddit_id_123", parsed.redditClientId)
         assertEquals("reddit_sec_456", parsed.redditClientSecret)
         assertEquals(23, NodeSettings().activeProviders().size)
+        assertEquals(NodeRole.BACKUP, NodeSettings().nodeRole)
+        assertEquals(NodeRole.BACKUP, NodeSettings().toRuntimeConfig("/tmp/work").role)
+    }
+
+    @Test
+    fun parsesExtractionNodeRoleAndIgnoresInvalidValues() {
+        val primaryParsed = EnvConfigParser.parse(
+            """
+            SERA_EXTRACTION_NODE_ROLE=primary
+            """.trimIndent(),
+        )
+        assertEquals(NodeRole.PRIMARY, primaryParsed.nodeRole)
+        assertTrue(primaryParsed.importedFields.contains("Node Role"))
+
+        val backupParsed = EnvConfigParser.parse(
+            """
+            SERA_EXTRACTION_NODE_ROLE=BACKUP
+            """.trimIndent(),
+        )
+        assertEquals(NodeRole.BACKUP, backupParsed.nodeRole)
+        assertTrue(backupParsed.importedFields.contains("Node Role"))
+
+        val fallbackKeyParsed = EnvConfigParser.parse(
+            """
+            SERA_NODE_ROLE=primary
+            """.trimIndent(),
+        )
+        assertEquals(NodeRole.PRIMARY, fallbackKeyParsed.nodeRole)
+        assertTrue(fallbackKeyParsed.importedFields.contains("Node Role"))
+
+        val invalidParsed = EnvConfigParser.parse(
+            """
+            SERA_EXTRACTION_NODE_ROLE=standby
+            """.trimIndent(),
+        )
+        assertNull(invalidParsed.nodeRole)
+        assertFalse(invalidParsed.importedFields.contains("Node Role"))
+
+        assertEquals(NodeRole.BACKUP, NodeRole.fromStorage(null))
+        assertEquals(NodeRole.BACKUP, NodeRole.fromStorage("invalid"))
+        assertEquals(NodeRole.PRIMARY, NodeRole.fromStorage("primary"))
     }
 }

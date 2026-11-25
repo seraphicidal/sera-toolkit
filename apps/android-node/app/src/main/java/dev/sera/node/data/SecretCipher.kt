@@ -53,18 +53,27 @@ object SecretCipher {
     fun decrypt(stored: String): String {
         if (stored.isEmpty()) return ""
         if (!stored.startsWith(PREFIX)) return stored
-        val key = getOrCreateKey() ?: return ""
-        return try {
-            val payload = Base64.getDecoder().decode(stored.removePrefix(PREFIX))
-            if (payload.size <= IV_LENGTH_BYTES) return ""
-            val iv = payload.copyOfRange(0, IV_LENGTH_BYTES)
-            val ciphertext = payload.copyOfRange(IV_LENGTH_BYTES, payload.size)
-            val cipher = Cipher.getInstance(TRANSFORMATION)
-            cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(TAG_LENGTH_BITS, iv))
-            String(cipher.doFinal(ciphertext), Charsets.UTF_8)
+        val payload = try {
+            Base64.getDecoder().decode(stored.removePrefix(PREFIX))
         } catch (_: Exception) {
-            ""
+            return ""
         }
+        if (payload.size <= IV_LENGTH_BYTES) return ""
+        val iv = payload.copyOfRange(0, IV_LENGTH_BYTES)
+        val ciphertext = payload.copyOfRange(IV_LENGTH_BYTES, payload.size)
+        val maxAttempts = if (isAndroidKeyStoreAvailable()) 2 else 1
+        for (attempt in 1..maxAttempts) {
+            val key = getOrCreateKey() ?: continue
+            val decrypted = try {
+                val cipher = Cipher.getInstance(TRANSFORMATION)
+                cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(TAG_LENGTH_BITS, iv))
+                String(cipher.doFinal(ciphertext), Charsets.UTF_8)
+            } catch (_: Exception) {
+                null
+            }
+            if (decrypted != null) return decrypted
+        }
+        return ""
     }
 
     private fun isAndroidKeyStoreAvailable(): Boolean {

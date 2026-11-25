@@ -85,6 +85,12 @@ const envSchema = z.object({
   SERA_ALERT_NTFY_TOPIC: z.string().default(''),
   SERA_DOMAIN: z.string().default(''),
   SERA_EXTRACTION_CLAIM_HOLD_SECONDS: seconds.default(25),
+  SERA_EXTRACTION_PRIMARY_GRACE_MS: z.coerce.number().int().min(0).max(60_000).default(5_000),
+  SERA_EXTRACTION_PREFER_NODES: booleanish.default(true),
+  SERA_EXTRACTION_NODE_ROLE: z.enum(['primary', 'backup']).optional(),
+  SERA_NODE_ROLE: z.enum(['primary', 'backup']).optional(),
+  SERA_NODE_PRIORITY: z.coerce.number().int().min(-1000).max(1000).optional(),
+  SERA_EXTRACTION_NODE_PROVIDERS: z.string().default(''),
   SERA_NETWORK_CLASS: z.enum(['datacenter', 'residential', 'unknown']).default('unknown'),
   SERA_API_URL: z.string().default(''),
 
@@ -162,6 +168,8 @@ export interface EngineConfig {
     readonly workerToken: string;
     readonly enabled: boolean;
     readonly claimHoldMs: number;
+    readonly primaryGraceMs: number;
+    readonly preferNodes: boolean;
     readonly legacyTokenUsed: boolean;
   };
 
@@ -348,6 +356,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): EngineConfig {
       workerToken,
       enabled: nodesEnabled,
       claimHoldMs: e.SERA_EXTRACTION_CLAIM_HOLD_SECONDS * 1000,
+      primaryGraceMs: e.SERA_EXTRACTION_PRIMARY_GRACE_MS,
+      preferNodes: e.SERA_EXTRACTION_PREFER_NODES,
       legacyTokenUsed,
     },
 

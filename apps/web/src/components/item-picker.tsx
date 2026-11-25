@@ -15,6 +15,8 @@ const KIND_ICON = {
   unknown: VideoIcon,
 } as const;
 
+const FILTER_THRESHOLD = 6;
+
 export const ItemPicker = memo(function ItemPicker({
   info,
   selectedIds,
@@ -31,8 +33,6 @@ export const ItemPicker = memo(function ItemPicker({
   readonly maxItems?: number;
 }) {
   const [filterQuery, setFilterQuery] = useState('');
-  const [rangeStart, setRangeStart] = useState('1');
-  const [rangeEnd, setRangeEnd] = useState(() => String(info.items.length));
   const [capNotice, setCapNotice] = useState<string | undefined>(undefined);
   const lastClickedIndexRef = useRef<number | undefined>(undefined);
   const selectedIdsRef = useRef<ReadonlySet<string>>(selectedIds);
@@ -40,15 +40,15 @@ export const ItemPicker = memo(function ItemPicker({
 
   useEffect(() => {
     setFilterQuery('');
-    setRangeStart('1');
-    setRangeEnd(String(info.items.length));
     setCapNotice(undefined);
     lastClickedIndexRef.current = undefined;
   }, [info.id, info.items.length]);
 
+  const showFilter = info.items.length > FILTER_THRESHOLD;
+
   const visibleItems = useMemo(
-    () => filterMediaItems(info.items, filterQuery),
-    [info.items, filterQuery],
+    () => (showFilter ? filterMediaItems(info.items, filterQuery) : info.items),
+    [info.items, filterQuery, showFilter],
   );
 
   const applySelection = useCallback(
@@ -82,24 +82,6 @@ export const ItemPicker = memo(function ItemPicker({
     applySelection(next);
     if (maxItems !== undefined && visibleItems.length > maxItems) {
       setCapNotice(`Selected the first ${maxItems} items (server limit per download).`);
-    } else {
-      setCapNotice(undefined);
-    }
-  };
-
-  const handleSelectRange = (): void => {
-    const fromNum = Number.parseInt(rangeStart, 10);
-    const toNum = Number.parseInt(rangeEnd, 10);
-    if (!Number.isFinite(fromNum) || !Number.isFinite(toNum)) return;
-    const start = Math.min(fromNum, toNum);
-    const end = Math.max(fromNum, toNum);
-    const matchingCount = visibleItems.filter(
-      (item) => item.index >= start && item.index <= end,
-    ).length;
-    const next = selectItemRange(visibleItems, fromNum, toNum, maxItems);
-    applySelection(next);
-    if (maxItems !== undefined && matchingCount > maxItems) {
-      setCapNotice(`Range capped at ${maxItems} items (server limit per download).`);
     } else {
       setCapNotice(undefined);
     }
@@ -149,15 +131,17 @@ export const ItemPicker = memo(function ItemPicker({
 
   return (
     <fieldset data-item-picker="true" className="flex flex-col gap-3">
-      <legend className="mb-1 text-xs font-medium tracking-wide text-[var(--color-ink-faint)] uppercase">
-        {pluralize(info.items.length, 'item')} found
-        {visibleItems.length !== info.items.length
-          ? ` · ${pluralize(visibleItems.length, 'match', 'matches')}`
-          : ''}
-      </legend>
+      <legend className="sr-only">Items to download</legend>
 
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex flex-wrap items-center gap-2">
+        <span className="text-xs font-medium tracking-wide text-[var(--color-ink-faint)] uppercase">
+          {pluralize(info.items.length, 'item')} found
+          {visibleItems.length !== info.items.length
+            ? ` · ${pluralize(visibleItems.length, 'match', 'matches')}`
+            : ''}
+        </span>
+
+        <div className="flex flex-wrap items-center gap-1">
           <button
             type="button"
             onClick={handleSelectAllVisible}
@@ -165,35 +149,6 @@ export const ItemPicker = memo(function ItemPicker({
           >
             {cappedPlaylist ? `Select first ${maxItems}` : 'Select All'}
           </button>
-
-          <div className="flex min-h-9 items-center gap-1 rounded-lg border border-[var(--color-line)] bg-[var(--color-canvas)] px-2 py-0.5 text-xs transition-colors focus-within:border-[var(--color-accent)] focus-within:shadow-[var(--shadow-focus)]">
-            <input
-              type="number"
-              min={1}
-              max={info.items.length}
-              value={rangeStart}
-              onChange={(event) => setRangeStart(event.target.value)}
-              aria-label="Range start index"
-              className="tabular w-14 [appearance:textfield] bg-transparent text-center text-[var(--color-ink)] outline-none [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-            />
-            <span className="text-[var(--color-ink-faint)]">–</span>
-            <input
-              type="number"
-              min={1}
-              max={info.items.length}
-              value={rangeEnd}
-              onChange={(event) => setRangeEnd(event.target.value)}
-              aria-label="Range end index"
-              className="tabular w-14 [appearance:textfield] bg-transparent text-center text-[var(--color-ink)] outline-none [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-            />
-            <button
-              type="button"
-              onClick={handleSelectRange}
-              className="cursor-pointer rounded px-2 py-1 font-medium text-[var(--color-accent)] transition-opacity hover:opacity-80"
-            >
-              Select Range
-            </button>
-          </div>
 
           <button
             type="button"
@@ -206,26 +161,28 @@ export const ItemPicker = memo(function ItemPicker({
         </div>
       </div>
 
-      <div className="relative">
-        <input
-          type="search"
-          value={filterQuery}
-          onChange={(event) => setFilterQuery(event.target.value)}
-          placeholder="Filter items..."
-          aria-label="Filter playlist items"
-          className="w-full rounded-xl border border-[var(--color-line)] bg-[var(--color-canvas)] py-2 pr-9 pl-3 text-[0.8125rem] text-[var(--color-ink)] transition-colors outline-none placeholder:text-[var(--color-ink-faint)] focus:border-[var(--color-accent)] focus-visible:shadow-[var(--shadow-focus)]"
-        />
-        {filterQuery && (
-          <button
-            type="button"
-            onClick={() => setFilterQuery('')}
-            aria-label="Clear filter"
-            className="absolute top-1/2 right-1.5 grid size-7 -translate-y-1/2 cursor-pointer place-items-center rounded text-[var(--color-ink-faint)] hover:bg-[var(--color-sunken)] hover:text-[var(--color-ink)]"
-          >
-            <CloseIcon size={14} />
-          </button>
-        )}
-      </div>
+      {showFilter && (
+        <div className="relative">
+          <input
+            type="search"
+            value={filterQuery}
+            onChange={(event) => setFilterQuery(event.target.value)}
+            placeholder="Filter items..."
+            aria-label="Filter playlist items"
+            className="w-full rounded-xl border border-[var(--color-line)] bg-[var(--color-canvas)] py-2 pr-9 pl-3 text-[0.8125rem] text-[var(--color-ink)] transition-colors outline-none placeholder:text-[var(--color-ink-faint)] focus:border-[var(--color-accent)] focus-visible:shadow-[var(--shadow-focus)] [&::-webkit-search-cancel-button]:appearance-none"
+          />
+          {filterQuery && (
+            <button
+              type="button"
+              onClick={() => setFilterQuery('')}
+              aria-label="Clear filter"
+              className="absolute top-1/2 right-1.5 grid size-7 -translate-y-1/2 cursor-pointer place-items-center rounded text-[var(--color-ink-faint)] hover:bg-[var(--color-sunken)] hover:text-[var(--color-ink)]"
+            >
+              <CloseIcon size={14} />
+            </button>
+          )}
+        </div>
+      )}
 
       {visibleItems.length === 0 ? (
         <p className="rounded-xl border border-[var(--color-line)] bg-[var(--color-canvas)] px-3.5 py-4 text-center text-[0.8125rem] text-[var(--color-ink-muted)]">

@@ -73,6 +73,7 @@ describe('ExtractionRouter', () => {
       logger: silentLogger(),
       fallbacks: () => [home],
       capabilitiesOf: caps(),
+      preferRemote: false,
     });
 
     const outcome = await router.resolve(url, 'youtube');
@@ -89,6 +90,7 @@ describe('ExtractionRouter', () => {
       logger: silentLogger(),
       fallbacks: () => [home],
       capabilitiesOf: caps(),
+      preferRemote: false,
     });
 
     const outcome = await router.resolve(url, 'youtube');
@@ -106,6 +108,7 @@ describe('ExtractionRouter', () => {
         logger: silentLogger(),
         fallbacks: () => [home],
         capabilitiesOf: caps(),
+        preferRemote: false,
       });
 
       const error = await router.resolve(url, 'youtube').then(
@@ -126,6 +129,7 @@ describe('ExtractionRouter', () => {
       logger: silentLogger(),
       fallbacks: () => [down, wrongProvider],
       capabilitiesOf: caps(),
+      preferRemote: false,
     });
 
     await expect(router.resolve(url, 'youtube')).rejects.toMatchObject({
@@ -143,6 +147,7 @@ describe('ExtractionRouter', () => {
       logger: silentLogger(),
       fallbacks: () => [home],
       capabilitiesOf: caps(),
+      preferRemote: false,
     });
 
     await expect(router.resolve(url, 'youtube')).rejects.toMatchObject({
@@ -160,6 +165,7 @@ describe('ExtractionRouter', () => {
       logger: silentLogger(),
       fallbacks: () => connected,
       capabilitiesOf: caps(),
+      preferRemote: false,
     });
 
     await expect(router.resolve(url, 'youtube')).rejects.toMatchObject({ code: 'SOURCE_BLOCKED' });
@@ -231,7 +237,7 @@ describe('the capability matrix decides where work may go', () => {
     expect(primary.calls).toBe(0);
   });
 
-  it('does not reorder when the operator has not said what their network is', async () => {
+  it('does not reorder when preferRemote is disabled and networkClass is unknown', async () => {
     const primary = backend('oracle', { result: 'ok', networkClass: 'unknown' });
     const home = backend('residential', { result: 'ok' });
     const router = new ExtractionRouter({
@@ -239,6 +245,7 @@ describe('the capability matrix decides where work may go', () => {
       logger: silentLogger(),
       fallbacks: () => [home],
       capabilitiesOf: caps({ cloudExtraction: false }),
+      preferRemote: false,
     });
 
     expect((await router.resolve(url, 'youtube')).backend).toBe('oracle');
@@ -272,6 +279,41 @@ describe('the capability matrix decides where work may go', () => {
     expect(home.calls).toBe(1);
   });
 
+  it('comes home when a remote node returns PROVIDER_UNAVAILABLE', async () => {
+    const primary = backend('oracle', { result: 'ok' });
+    const home = backend('residential', { result: seraError('PROVIDER_UNAVAILABLE') });
+    const router = new ExtractionRouter({
+      primary,
+      logger: silentLogger(),
+      fallbacks: () => [home],
+      capabilitiesOf: caps(),
+    });
+
+    const outcome = await router.resolve(url, 'generic');
+    expect(outcome.backend).toBe('oracle');
+    expect(outcome.fallbackUsed).toBe(true);
+    expect(home.calls).toBe(1);
+  });
+
+  it('routes all websites including generic and direct to connected nodes by default', async () => {
+    const primary = backend('oracle', { result: 'ok', networkClass: 'unknown' });
+    const home = backend('residential', { providers: ['*'], result: 'ok' });
+    const router = new ExtractionRouter({
+      primary,
+      logger: silentLogger(),
+      fallbacks: () => [home],
+      capabilitiesOf: caps(),
+    });
+
+    for (const providerId of ['youtube', 'twitter', 'tiktok', 'instagram', 'generic', 'direct']) {
+      const outcome = await router.resolve(url, providerId);
+      expect(outcome.backend, providerId).toBe('residential');
+      expect(outcome.remote, providerId).toBe(true);
+    }
+    expect(primary.calls).toBe(0);
+    expect(home.calls).toBe(6);
+  });
+
   it('says a node answered even when the node was the first choice', async () => {
     const primary = backend('oracle', { result: 'ok' });
     const home = backend('residential', { result: 'ok' });
@@ -294,6 +336,7 @@ describe('the capability matrix decides where work may go', () => {
       logger: silentLogger(),
       fallbacks: () => [backend('residential', { result: 'ok' })],
       capabilitiesOf: caps(),
+      preferRemote: false,
     });
     expect((await router.resolve(url, 'youtube')).remote).toBe(false);
   });

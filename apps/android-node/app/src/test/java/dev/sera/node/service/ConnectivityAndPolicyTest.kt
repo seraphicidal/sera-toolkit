@@ -6,7 +6,10 @@ import dev.sera.node.data.NonRetryableUploadException
 import dev.sera.node.data.TaskCancelledException
 import dev.sera.node.model.NetworkState
 import dev.sera.node.model.NetworkTransport
+import dev.sera.node.net.NetworkCandidate
 import dev.sera.node.net.classifyNetworkTransport
+import dev.sera.node.net.isNetworkUsable
+import dev.sera.node.net.resolveNetworkState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -33,6 +36,85 @@ class ConnectivityAndPolicyTest {
             NetworkTransport.OTHER,
             classifyNetworkTransport(hasWifi = false, hasCellular = false, hasEthernet = true, isConnected = true),
         )
+        assertEquals(
+            NetworkTransport.OTHER,
+            classifyNetworkTransport(
+                hasWifi = false,
+                hasCellular = false,
+                hasEthernet = false,
+                isConnected = true,
+                hasVpn = true,
+            ),
+        )
+    }
+
+    @Test
+    fun acceptsUnvalidatedNonCaptiveAndVpnNetworksWhileRejectingCaptivePortals() {
+        assertTrue(isNetworkUsable(hasInternet = true, hasValidated = true, hasCaptivePortal = false))
+        assertTrue(isNetworkUsable(hasInternet = true, hasValidated = false, hasCaptivePortal = false))
+        assertFalse(isNetworkUsable(hasInternet = true, hasValidated = false, hasCaptivePortal = true))
+        assertFalse(isNetworkUsable(hasInternet = false, hasValidated = true, hasCaptivePortal = false))
+
+        val unvalidatedWifi = NetworkCandidate(
+            networkId = 101L,
+            hasInternet = true,
+            hasValidated = false,
+            hasCaptivePortal = false,
+            hasWifi = true,
+            hasCellular = false,
+            hasEthernet = false,
+            hasVpn = false,
+            isMetered = false,
+        )
+        val eduroamState = resolveNetworkState(unvalidatedWifi, listOf(unvalidatedWifi))
+        assertTrue(eduroamState.isConnected)
+        assertEquals(NetworkTransport.WIFI, eduroamState.transport)
+        assertTrue(eduroamState.isAllowed(allowWifi = true, allowCellular = false))
+
+        val vpnOnly = NetworkCandidate(
+            networkId = 202L,
+            hasInternet = true,
+            hasValidated = false,
+            hasCaptivePortal = false,
+            hasWifi = false,
+            hasCellular = false,
+            hasEthernet = false,
+            hasVpn = true,
+            isMetered = false,
+        )
+        val vpnOverWifiState = resolveNetworkState(vpnOnly, listOf(vpnOnly, unvalidatedWifi))
+        assertTrue(vpnOverWifiState.isConnected)
+        assertEquals(NetworkTransport.WIFI, vpnOverWifiState.transport)
+
+        val standaloneVpnState = resolveNetworkState(vpnOnly, listOf(vpnOnly))
+        assertTrue(standaloneVpnState.isConnected)
+        assertEquals(NetworkTransport.OTHER, standaloneVpnState.transport)
+        assertTrue(standaloneVpnState.isAllowed(allowWifi = true, allowCellular = false))
+
+        val captiveWifi = unvalidatedWifi.copy(networkId = 303L, hasCaptivePortal = true)
+        val validatedCellular = NetworkCandidate(
+            networkId = 404L,
+            hasInternet = true,
+            hasValidated = true,
+            hasCaptivePortal = false,
+            hasWifi = false,
+            hasCellular = true,
+            hasEthernet = false,
+            hasVpn = false,
+            isMetered = true,
+        )
+        val captiveFallbackState = resolveNetworkState(captiveWifi, listOf(captiveWifi, validatedCellular))
+        assertTrue(captiveFallbackState.isConnected)
+        assertEquals(NetworkTransport.CELLULAR, captiveFallbackState.transport)
+        assertEquals(404L, captiveFallbackState.activeNetworkId)
+
+        val captiveOnlyState = resolveNetworkState(captiveWifi, listOf(captiveWifi))
+        assertFalse(captiveOnlyState.isConnected)
+        assertEquals(NetworkTransport.NONE, captiveOnlyState.transport)
+
+        val preferValidatedState = resolveNetworkState(null, listOf(unvalidatedWifi, validatedCellular))
+        assertTrue(preferValidatedState.isConnected)
+        assertEquals(404L, preferValidatedState.activeNetworkId)
     }
 
     @Test

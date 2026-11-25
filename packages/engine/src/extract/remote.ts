@@ -4,6 +4,7 @@ import { rm } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import type {
   NodeFeature,
+  NodeRole,
   NodeStatus,
   NodeTransport,
   RemoteProgress,
@@ -11,13 +12,14 @@ import type {
   RemoteTaskItem,
   RemoteTaskKind,
 } from '@sera/contracts/types';
-import { seraError, type SeraError } from '../errors.js';
+import { seraError, SeraError } from '../errors.js';
 import type { Logger } from '../logging.js';
 import type { ResolvedMedia } from '../providers/types.js';
 import type { ExtractionBackend, NetworkClass } from './router.js';
 
 export type {
   NodeFeature,
+  NodeRole,
   NodeStatus,
   NodeTransport,
   RemoteProgress,
@@ -28,9 +30,42 @@ export type {
 
 export interface NodeMetadata {
   readonly transport?: NodeTransport;
+  readonly role?: NodeRole;
+  readonly priority?: number;
   readonly appVersion?: string;
   readonly ytdlpVersion?: string;
   readonly ffmpegVersion?: string;
+}
+
+export function nodeSupportsProvider(providers: readonly string[], providerId: string): boolean {
+  return (
+    providers.length === 0 ||
+    providers.includes('*') ||
+    providers.includes('all') ||
+    providers.includes(providerId)
+  );
+}
+
+export function isWildcardProviders(providers: readonly string[]): boolean {
+  return providers.length === 0 || providers.includes('*') || providers.includes('all');
+}
+
+export function resolveNodeRole(metadata?: NodeMetadata, previousRole?: NodeRole): NodeRole {
+  if (metadata?.role) return metadata.role;
+  if (metadata?.transport !== undefined || metadata?.appVersion !== undefined) {
+    return 'backup';
+  }
+  return previousRole ?? 'primary';
+}
+
+function roleRank(role: NodeRole): number {
+  return role === 'primary' ? 0 : 1;
+}
+
+function compareNodes(a: NodeRecord, b: NodeRecord): number {
+  const roleDiff = roleRank(a.role) - roleRank(b.role);
+  if (roleDiff !== 0) return roleDiff;
+  return b.priority - a.priority;
 }
 
 export function requiredFeatures(
@@ -55,6 +90,8 @@ interface NodeRecord {
   capacity: number;
   networkClass: NetworkClass;
   features: string[];
+  role: NodeRole;
+  priority: number;
   transport?: NodeTransport;
   appVersion?: string;
   ytdlpVersion?: string;
@@ -75,6 +112,8 @@ interface Pending {
   readonly onTaskId?: (taskId: string) => void;
   readonly timer: NodeJS.Timeout;
   unclaimedTimer?: NodeJS.Timeout;
+  primaryGraceUntil?: number;
+  primaryGraceTimer?: NodeJS.Timeout;
   cancelled: boolean;
   claimedAt?: number;
   claimedBy?: string;
@@ -89,6 +128,7 @@ export interface RemoteFile {
 }
 
 const DEFAULT_LEASE_SECONDS = 60;
+const DEFAULT_PRIMARY_GRACE_MS = 5_000;
 
 function defaultLeaseMs(): number {
   const raw = process.env.SERA_EXTRACTION_LEASE_SECONDS;
@@ -96,6 +136,14 @@ function defaultLeaseMs(): number {
   const parsed = Number.parseInt(raw.trim(), 10);
   if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_LEASE_SECONDS * 1000;
   return parsed * 1000;
+}
+
+function defaultPrimaryGraceMs(): number {
+  const raw = process.env.SERA_EXTRACTION_PRIMARY_GRACE_MS;
+  if (!raw) return DEFAULT_PRIMARY_GRACE_MS;
+  const parsed = Number.parseInt(raw.trim(), 10);
+  if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_PRIMARY_GRACE_MS;
+  return Math.min(60_000, parsed);
 }
 
 export interface RemoteExtraction {
@@ -117,6 +165,7 @@ export interface RemoteExtraction {
     task: Omit<RemoteTask, 'id' | 'createdAt'>,
     options?: {
       onProgress?: (progress: RemoteProgress) => void;
+      onClaimed?: (nodeId: string) => void;
       onTaskId?: (taskId: string) => void;
       signal?: AbortSignal;
     },
@@ -136,6 +185,7 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
     { claimedBy?: string; cancelled: boolean; settledAt: number }
   >();
   private readonly unclaimedTimeoutMs: number;
+  private readonly primaryGraceMs: number;
 
   constructor(
     private readonly logger: Logger,
@@ -143,11 +193,13 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
     private readonly taskTimeoutMs = 15 * 60_000,
     private readonly leaseMs = defaultLeaseMs(),
     unclaimedTimeoutMs?: number,
+    primaryGraceMs?: number,
   ) {
     this.unclaimedTimeoutMs = Math.min(
       taskTimeoutMs,
       unclaimedTimeoutMs ?? DEFAULT_UNCLAIMED_TIMEOUT_MS,
     );
+    this.primaryGraceMs = Math.max(0, primaryGraceMs ?? defaultPrimaryGraceMs());
   }
 
   getTask(taskId: string): RemoteTask | undefined {
@@ -179,6 +231,8 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
   ): NodeRecord {
     const known = this.nodes.get(nodeId);
     const transport = metadata?.transport ?? known?.transport;
+    const role = resolveNodeRole(metadata, known?.role);
+    const priority = metadata?.priority ?? known?.priority ?? 0;
     const appVersion = metadata?.appVersion ?? known?.appVersion;
     const ytdlpVersion = metadata?.ytdlpVersion ?? known?.ytdlpVersion;
     const ffmpegVersion = metadata?.ffmpegVersion ?? known?.ffmpegVersion;
@@ -188,6 +242,8 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
       capacity: Math.max(1, capacity),
       networkClass,
       features: [...features],
+      role,
+      priority,
       ...(transport ? { transport } : {}),
       ...(appVersion ? { appVersion } : {}),
       ...(ytdlpVersion ? { ytdlpVersion } : {}),
@@ -197,7 +253,9 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
     this.nodes.set(nodeId, record);
     if (
       known?.features.join() !== record.features.join() ||
-      known?.transport !== record.transport
+      known?.transport !== record.transport ||
+      known?.role !== record.role ||
+      known?.priority !== record.priority
     ) {
       this.logger.info(
         {
@@ -205,6 +263,8 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
           providers,
           capacity,
           networkClass,
+          role,
+          priority,
           features,
           ...(transport ? { transport } : {}),
           ...(appVersion ? { appVersion } : {}),
@@ -218,11 +278,69 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
   }
 
   private accepts(node: NodeRecord, task: RemoteTask): boolean {
-    if (node.providers.length && !node.providers.includes(task.providerId)) return false;
+    if (!nodeSupportsProvider(node.providers, task.providerId)) return false;
     if (task.networkClass && task.networkClass !== node.networkClass) return false;
     if (task.avoid?.includes(node.id)) return false;
     if (!requiredFeatures(task).every((feature) => node.features.includes(feature))) return false;
     return this.inFlightFor(node.id) < node.capacity;
+  }
+
+  private eligibleHealthyPrimaries(task: RemoteTask): NodeRecord[] {
+    const needed = requiredFeatures(task);
+    return this.live(task.networkClass).filter(
+      (node) =>
+        node.role === 'primary' &&
+        nodeSupportsProvider(node.providers, task.providerId) &&
+        !task.avoid?.includes(node.id) &&
+        needed.every((feature) => node.features.includes(feature)),
+    );
+  }
+
+  private hasEligibleHealthyPrimary(task: RemoteTask): boolean {
+    return this.eligibleHealthyPrimaries(task).length > 0;
+  }
+
+  private canClaimNow(node: NodeRecord, pending: Pending): boolean {
+    if (!this.accepts(node, pending.task)) return false;
+    if (node.role === 'primary') return true;
+    if (
+      pending.primaryGraceUntil !== undefined &&
+      Date.now() < pending.primaryGraceUntil &&
+      this.hasEligibleHealthyPrimary(pending.task)
+    ) {
+      return false;
+    }
+    return true;
+  }
+
+  private armPrimaryGrace(pending: Pending): void {
+    if (pending.primaryGraceTimer) {
+      clearTimeout(pending.primaryGraceTimer);
+      pending.primaryGraceTimer = undefined;
+    }
+    const primaries = this.eligibleHealthyPrimaries(pending.task);
+    if (this.primaryGraceMs > 0 && primaries.length > 0) {
+      const now = Date.now();
+      const maxRemainingMs = primaries.reduce(
+        (max, node) => Math.max(max, this.staleAfterMs - (now - node.seen)),
+        0,
+      );
+      const delayMs = Math.min(this.primaryGraceMs, Math.max(0, maxRemainingMs));
+      if (delayMs > 0) {
+        pending.primaryGraceUntil = now + delayMs;
+        pending.primaryGraceTimer = setTimeout(() => {
+          pending.primaryGraceTimer = undefined;
+          pending.primaryGraceUntil = undefined;
+          if (this.pending.get(pending.task.id) !== pending || pending.claimedBy !== undefined) {
+            return;
+          }
+          this.wakeWaiting();
+        }, delayMs);
+        pending.primaryGraceTimer.unref();
+        return;
+      }
+    }
+    pending.primaryGraceUntil = undefined;
   }
 
   private inFlightFor(nodeId: string): number {
@@ -244,7 +362,10 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
   ): Promise<RemoteTask | undefined> {
     const node = this.register(nodeId, providers, capacity, networkClass, features, metadata);
 
-    const ready = this.queue.findIndex((task) => this.accepts(node, task));
+    const ready = this.queue.findIndex((task) => {
+      const pending = this.pending.get(task.id);
+      return pending !== undefined && this.canClaimNow(node, pending);
+    });
     if (ready !== -1) {
       const [task] = this.queue.splice(ready, 1);
       this.markClaimed(task!, node.id);
@@ -380,6 +501,8 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
       networkClass: node.networkClass,
       capacity: node.capacity,
       features: node.features,
+      role: node.role,
+      priority: node.priority,
       ...(node.transport ? { transport: node.transport } : {}),
       ...(node.appVersion ? { appVersion: node.appVersion } : {}),
       ...(node.ytdlpVersion ? { ytdlpVersion: node.ytdlpVersion } : {}),
@@ -395,13 +518,16 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
       (node) =>
         !except.includes(node.id) &&
         node.features.includes(feature) &&
-        (providerId === undefined || !node.providers.length || node.providers.includes(providerId)),
+        (providerId === undefined || nodeSupportsProvider(node.providers, providerId)),
     );
   }
 
   availableProviders(networkClass?: NetworkClass): string[] {
+    const live = this.live(networkClass);
+    if (!live.length) return [];
     const providers = new Set<string>();
-    for (const node of this.live(networkClass)) {
+    for (const node of live) {
+      if (isWildcardProviders(node.providers)) return ['*'];
       for (const provider of node.providers) providers.add(provider);
     }
     return [...providers];
@@ -445,13 +571,15 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
     task: Omit<RemoteTask, 'id' | 'createdAt'>,
     options: {
       onProgress?: (progress: RemoteProgress) => void;
+      onClaimed?: (nodeId: string) => void;
       onTaskId?: (taskId: string) => void;
       signal?: AbortSignal;
     } = {},
   ): Promise<readonly RemoteFile[]> {
     const required = requiredFeatures(task);
     const nodes = this.live(task.networkClass).filter(
-      (node) => !node.providers.length || node.providers.includes(task.providerId),
+      (node) =>
+        nodeSupportsProvider(node.providers, task.providerId) && !task.avoid?.includes(node.id),
     );
     if (this.nodes.size > 0 && nodes.length === 0) {
       if (required.includes('instagram-session')) {
@@ -504,7 +632,7 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
     const needed = requiredFeatures(task);
     return this.live(task.networkClass).some(
       (node) =>
-        (!node.providers.length || node.providers.includes(task.providerId)) &&
+        nodeSupportsProvider(node.providers, task.providerId) &&
         !task.avoid?.includes(node.id) &&
         needed.every((feature) => node.features.includes(feature)),
     );
@@ -554,6 +682,7 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
           options.signal?.removeEventListener('abort', onAbort);
           clearTimeout(pending.timer);
           clearTimeout(pending.unclaimedTimer);
+          clearTimeout(pending.primaryGraceTimer);
           clearTimeout(pending.leaseTimer);
           this.pending.delete(id);
           this.sweepSettled();
@@ -562,7 +691,7 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
             cancelled: pending.cancelled || outcome.error?.code === 'CANCELLED',
             settledAt: Date.now(),
           });
-          this.wakeOne();
+          this.wakeWaiting();
           if (outcome.error) {
             this.emitCleanup(id);
             cleanupFiles(pending.files);
@@ -608,22 +737,29 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
 
         this.queue.push(full);
         this.armUnclaimed(pending);
-        this.wakeOne();
+        this.armPrimaryGrace(pending);
+        this.wakeWaiting();
       },
     );
   }
 
-  private wakeOne(): void {
-    for (const waiter of [...this.waiting]) {
-      const index = this.queue.findIndex((task) => this.accepts(waiter.node, task));
+  private wakeWaiting(): void {
+    if (!this.waiting.length || !this.queue.length) return;
+    const ordered = [...this.waiting].sort((a, b) => compareNodes(a.node, b.node));
+    for (const waiter of ordered) {
+      const waiterIndex = this.waiting.indexOf(waiter);
+      if (waiterIndex === -1) continue;
+      const index = this.queue.findIndex((task) => {
+        const pending = this.pending.get(task.id);
+        return pending !== undefined && this.canClaimNow(waiter.node, pending);
+      });
       if (index === -1) continue;
 
       const [task] = this.queue.splice(index, 1);
-      this.waiting.splice(this.waiting.indexOf(waiter), 1);
+      this.waiting.splice(waiterIndex, 1);
       clearTimeout(waiter.timer);
       this.markClaimed(task!, waiter.node.id);
       waiter.resolve(task);
-      return;
     }
   }
 
@@ -634,6 +770,11 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
         clearTimeout(pending.unclaimedTimer);
         pending.unclaimedTimer = undefined;
       }
+      if (pending.primaryGraceTimer) {
+        clearTimeout(pending.primaryGraceTimer);
+        pending.primaryGraceTimer = undefined;
+      }
+      pending.primaryGraceUntil = undefined;
       pending.claimedAt = Date.now();
       pending.claimedBy = nodeId;
       pending.onClaimed?.(nodeId);
@@ -681,7 +822,7 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
         (node) =>
           node.id !== silentNode &&
           !previous.avoid?.includes(node.id) &&
-          (!node.providers.length || node.providers.includes(previous.providerId)) &&
+          nodeSupportsProvider(node.providers, previous.providerId) &&
           needed.every((feature) => node.features.includes(feature)),
       );
     const avoid = hasAlternativeNode
@@ -713,8 +854,27 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
 
     this.queue.unshift(pending.task);
     this.armUnclaimed(pending);
-    this.wakeOne();
+    this.armPrimaryGrace(pending);
+    this.wakeWaiting();
   }
+}
+
+function hasAlternativeNode(
+  registry: RemoteExtraction,
+  providerId: string,
+  networkClass: NetworkClass | undefined,
+  tried: readonly string[],
+  required: readonly NodeFeature[] = [],
+): boolean {
+  const statuses = typeof registry.status === 'function' ? registry.status() : [];
+  return statuses.some(
+    (node) =>
+      node.healthy &&
+      !tried.includes(node.id) &&
+      (networkClass === undefined || node.networkClass === networkClass) &&
+      nodeSupportsProvider(node.providers, providerId) &&
+      required.every((feature) => (node.features ?? []).includes(feature)),
+  );
 }
 
 function cleanupFiles(files: readonly RemoteFile[]): void {
@@ -743,11 +903,39 @@ export function remoteBackend(
       return registry.availableProviders(networkClass);
     },
     isHealthy: () => registry.hasHealthyNode(networkClass),
-    resolve: (url, providerId, signal) =>
-      registry.dispatch(
-        { kind: 'resolve', url: url.toString(), providerId, networkClass },
-        signal ? { signal } : {},
-      ),
+    resolve: async (url, providerId, signal) => {
+      const tried: string[] = [];
+      for (;;) {
+        let claimedBy: string | undefined;
+        try {
+          return await registry.dispatch(
+            {
+              kind: 'resolve',
+              url: url.toString(),
+              providerId,
+              networkClass,
+              ...(tried.length ? { avoid: [...tried] } : {}),
+            },
+            { onClaimed: (nodeId) => (claimedBy = nodeId), ...(signal ? { signal } : {}) },
+          );
+        } catch (error) {
+          const failure = classifyFailure(error);
+          const code = SeraError.from(error).code;
+          if (
+            !claimedBy ||
+            isDefinitive(failure) ||
+            code === 'PROVIDER_AUTH_REQUIRED' ||
+            signal?.aborted
+          ) {
+            throw error;
+          }
+          tried.push(claimedBy);
+          if (!hasAlternativeNode(registry, providerId, networkClass, tried)) {
+            throw error;
+          }
+        }
+      }
+    },
   };
 }
 

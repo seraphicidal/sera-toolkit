@@ -63,6 +63,16 @@ describe('isPublicAddress', () => {
     expect(isPublicAddress('0:0:0:0:0:ffff:8.8.8.8')).toBe(true);
   });
 
+  it('validates embedded IPv4 in RFC 6052 NAT64 well-known prefix while blocking private targets', () => {
+    expect(isPublicAddress('64:ff9b::8.8.8.8')).toBe(true);
+    expect(isPublicAddress('64:ff9b::130.61.188.184')).toBe(true);
+    expect(isPublicAddress('64:ff9b::823d:bcb8')).toBe(true);
+    expect(isPublicAddress('64:ff9b::10.0.0.1')).toBe(false);
+    expect(isPublicAddress('64:ff9b::169.254.169.254')).toBe(false);
+    expect(isPublicAddress('64:ff9b::192.168.1.1')).toBe(false);
+    expect(isPublicAddress('64:ff9b:1::8.8.8.8')).toBe(false);
+  });
+
   it('ignores a zone index', () => {
     expect(isPublicAddress('fe80::1%eth0')).toBe(false);
   });

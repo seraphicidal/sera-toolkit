@@ -11,6 +11,7 @@ import { ConfigError, loadConfig, VERSION, type EngineConfig } from './config.js
 import { ffmpegVersion } from './convert/ffmpeg.js';
 import {
   ExtractionNodeRegistry,
+  isWildcardProviders,
   remoteBackends,
   sessionBackend,
   type RemoteExtraction,
@@ -116,7 +117,14 @@ export class SeraEngine {
       });
     await denylist.reload();
 
-    const extractionNodes = new ExtractionNodeRegistry(logger);
+    const extractionNodes = new ExtractionNodeRegistry(
+      logger,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      config.extractionNodes.primaryGraceMs,
+    );
 
     let remote: RemoteExtraction = extractionNodes;
     if (config.extractionNodes.enabled && config.apiUrl) {
@@ -211,6 +219,8 @@ export class SeraEngine {
         totalNodes: 0,
         healthyNodes: 0,
         residentialNodes: 0,
+        primaryNodes: 0,
+        backupNodes: 0,
         features: [],
         providers: [],
       };
@@ -220,18 +230,32 @@ export class SeraEngine {
     const features = new Set<string>();
     const providers = new Set<string>();
     let residentialNodes = 0;
+    let primaryNodes = 0;
+    let backupNodes = 0;
+    let hasWildcard = false;
     for (const node of healthy) {
       if (node.networkClass === 'residential') residentialNodes += 1;
+      if (node.role === 'backup') {
+        backupNodes += 1;
+      } else {
+        primaryNodes += 1;
+      }
       for (const feature of node.features ?? []) features.add(feature);
-      for (const provider of node.providers) providers.add(provider);
+      if (isWildcardProviders(node.providers)) {
+        hasWildcard = true;
+      } else {
+        for (const provider of node.providers) providers.add(provider);
+      }
     }
     return {
       enabled: true,
       totalNodes: nodes.length,
       healthyNodes: healthy.length,
       residentialNodes,
+      primaryNodes,
+      backupNodes,
       features: [...features].sort(),
-      providers: [...providers].sort(),
+      providers: hasWildcard ? ['*'] : [...providers].sort(),
     };
   }
 
@@ -299,7 +323,7 @@ export class SeraEngine {
           ? healthy
               .map(
                 (node) =>
-                  `${node.id} [${node.networkClass}] (${node.providers.join(',') || 'any'})`,
+                  `${node.id} [${node.role ?? 'primary'}/${node.networkClass}] (${node.providers.join(',') || 'any'})`,
               )
               .join(', ') || 'all nodes are stale'
           : 'none connected',

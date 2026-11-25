@@ -4,6 +4,7 @@ import dev.sera.node.model.ClaimRequest
 import dev.sera.node.model.ConversionSpec
 import dev.sera.node.model.FailedRequest
 import dev.sera.node.model.FetchPlan
+import dev.sera.node.model.NodeRole
 import dev.sera.node.model.ResolvedItem
 import dev.sera.node.model.ResolvedMedia
 import dev.sera.node.model.ResolvedPlan
@@ -92,8 +93,48 @@ class SeraNodeApiClientTest {
         assertEquals("Bearer tok_123", req.getHeader("Authorization"))
         val sentJson = req.body.readUtf8()
         assertTrue(sentJson.contains("\"networkClass\":\"residential\""))
+        assertTrue(sentJson.contains("\"role\":\"backup\""))
+        assertFalse(sentJson.contains("\"priority\""))
         assertTrue(sentJson.contains("\"transport\":\"cellular\""))
         assertTrue(sentJson.contains("instagram-session"))
+    }
+
+    @Test
+    fun claimSerializesDefaultBackupAndExplicitPrimaryRole() = runTest {
+        server.enqueue(MockResponse().setResponseCode(204))
+        server.enqueue(MockResponse().setResponseCode(204))
+
+        client.claim(
+            baseUrl = baseUrl,
+            token = "tok_123",
+            requestPayload = ClaimRequest(
+                nodeId = "phone-backup",
+                providers = listOf("youtube", "generic"),
+                capacity = 2,
+                features = listOf("trim"),
+            ),
+        )
+        val backupReq = server.takeRequest()
+        val backupBody = backupReq.body.readUtf8()
+        assertTrue(backupBody.contains("\"role\":\"backup\""))
+        assertFalse(backupBody.contains("\"priority\""))
+
+        client.claim(
+            baseUrl = baseUrl,
+            token = "tok_123",
+            requestPayload = ClaimRequest(
+                nodeId = "phone-primary",
+                providers = listOf("youtube", "generic"),
+                capacity = 2,
+                role = NodeRole.PRIMARY,
+                priority = 50,
+                features = listOf("trim"),
+            ),
+        )
+        val primaryReq = server.takeRequest()
+        val primaryBody = primaryReq.body.readUtf8()
+        assertTrue(primaryBody.contains("\"role\":\"primary\""))
+        assertTrue(primaryBody.contains("\"priority\":50"))
     }
 
     @Test

@@ -10,6 +10,7 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import dev.sera.node.extractor.ALL_OTHER_PROVIDER_IDS
+import dev.sera.node.model.NodeRole
 import dev.sera.node.model.NodeRuntimeConfig
 import dev.sera.node.model.ProviderHotConfig
 import dev.sera.node.model.SeraJson
@@ -35,6 +36,7 @@ data class NodeSettings(
     val apiBaseUrl: String = "",
     val nodeToken: String = "",
     val nodeId: String = "android-node",
+    val nodeRole: NodeRole = NodeRole.BACKUP,
     val enableYoutube: Boolean = true,
     val enableInstagram: Boolean = true,
     val enableAllProviders: Boolean = true,
@@ -78,6 +80,7 @@ data class NodeSettings(
             nodeId = nodeId.trim().ifEmpty { "android-node" }.take(64),
             providers = activeProviders(),
             networkClass = "residential",
+            role = nodeRole,
             instagramSessionId = instagramSessionId.trim().ifEmpty { null },
             youtubePlayerClients = youtubePlayerClients.trim().ifEmpty { null },
             youtubePotProviderUrl = youtubePotProviderUrl.trim().ifEmpty { null },
@@ -134,6 +137,7 @@ class NodePreferences(private val context: Context) {
         val API_BASE_URL = stringPreferencesKey("api_base_url")
         val NODE_TOKEN = stringPreferencesKey("node_token")
         val NODE_ID = stringPreferencesKey("node_id")
+        val NODE_ROLE = stringPreferencesKey("node_role")
         val ENABLE_YOUTUBE = booleanPreferencesKey("enable_youtube")
         val ENABLE_INSTAGRAM = booleanPreferencesKey("enable_instagram")
         val ENABLE_ALL_PROVIDERS = booleanPreferencesKey("enable_all_providers")
@@ -178,15 +182,26 @@ class NodePreferences(private val context: Context) {
         return parsed
     }
 
-    private fun decryptSecret(stored: String?): String {
-        if (stored.isNullOrEmpty()) return ""
-        decryptedSecretCache[stored]?.let { return it }
-        val decrypted = SecretCipher.decrypt(stored).trim()
-        if (decryptedSecretCache.size > 32) {
-            decryptedSecretCache.clear()
+    private fun decryptSecret(stored: String?): String =
+        resolveDecryptedSecret(stored, decryptedSecretCache)
+
+    companion object {
+        internal fun resolveDecryptedSecret(
+            stored: String?,
+            cache: MutableMap<String, String>,
+            decryptor: (String) -> String = SecretCipher::decrypt,
+        ): String {
+            if (stored.isNullOrEmpty()) return ""
+            cache[stored]?.let { return it }
+            val decrypted = decryptor(stored).trim()
+            if (decrypted.isNotEmpty()) {
+                if (cache.size > 32) {
+                    cache.clear()
+                }
+                cache[stored] = decrypted
+            }
+            return decrypted
         }
-        decryptedSecretCache[stored] = decrypted
-        return decrypted
     }
 
     private fun encryptSecret(plaintext: String): String {
@@ -201,6 +216,7 @@ class NodePreferences(private val context: Context) {
             apiBaseUrl = NodeSettings.normalizeBaseUrl(prefs[Keys.API_BASE_URL].orEmpty()),
             nodeToken = decryptSecret(prefs[Keys.NODE_TOKEN]),
             nodeId = prefs[Keys.NODE_ID]?.trim()?.ifEmpty { "android-node" }?.take(64) ?: "android-node",
+            nodeRole = NodeRole.fromStorage(prefs[Keys.NODE_ROLE]),
             enableYoutube = prefs[Keys.ENABLE_YOUTUBE] ?: true,
             enableInstagram = prefs[Keys.ENABLE_INSTAGRAM] ?: true,
             enableAllProviders = prefs[Keys.ENABLE_ALL_PROVIDERS] ?: true,
@@ -262,6 +278,7 @@ class NodePreferences(private val context: Context) {
         apiBaseUrl: String,
         nodeToken: String,
         nodeId: String,
+        nodeRole: NodeRole = NodeRole.BACKUP,
         enableYoutube: Boolean,
         enableInstagram: Boolean,
         enableAllProviders: Boolean = true,
@@ -284,6 +301,7 @@ class NodePreferences(private val context: Context) {
             prefs[Keys.API_BASE_URL] = NodeSettings.normalizeBaseUrl(apiBaseUrl)
             prefs[Keys.NODE_TOKEN] = encryptSecret(nodeToken)
             prefs[Keys.NODE_ID] = nodeId.trim().ifEmpty { "android-node" }.take(64)
+            prefs[Keys.NODE_ROLE] = nodeRole.wireValue
             prefs[Keys.ENABLE_YOUTUBE] = enableYoutube
             prefs[Keys.ENABLE_INSTAGRAM] = enableInstagram
             prefs[Keys.ENABLE_ALL_PROVIDERS] = enableAllProviders
@@ -309,6 +327,7 @@ class NodePreferences(private val context: Context) {
             parsed.apiBaseUrl?.let { prefs[Keys.API_BASE_URL] = NodeSettings.normalizeBaseUrl(it) }
             parsed.nodeToken?.takeIf { it.isNotBlank() }?.let { prefs[Keys.NODE_TOKEN] = encryptSecret(it) }
             parsed.nodeId?.let { prefs[Keys.NODE_ID] = it.trim().ifEmpty { "android-node" }.take(64) }
+            parsed.nodeRole?.let { prefs[Keys.NODE_ROLE] = it.wireValue }
             parsed.enableYoutube?.let { prefs[Keys.ENABLE_YOUTUBE] = it }
             parsed.enableInstagram?.let { prefs[Keys.ENABLE_INSTAGRAM] = it }
             parsed.enableAllProviders?.let { prefs[Keys.ENABLE_ALL_PROVIDERS] = it }

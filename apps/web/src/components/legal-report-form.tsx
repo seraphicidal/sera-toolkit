@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import Link from 'next/link';
 import type { LegalReportCategory, LegalReportResponse } from '@sera/contracts/types';
 import { AlertIcon, CheckIcon, SpinnerIcon } from '@/components/icons';
+import { createTimeoutSignal } from '@/lib/abort';
 import { cleanEmail } from '@/lib/contact';
 
 export interface LegalReportFormProps {
@@ -79,12 +80,13 @@ export function LegalReportForm({ authoritiesEmail, legalEmail }: LegalReportFor
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
+    const timeout = createTimeoutSignal(controller.signal, REQUEST_TIMEOUT_MS);
     setBusy(true);
     try {
       const response = await fetch('/api/legal/report', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]),
+        signal: timeout.signal,
         body: JSON.stringify({
           targetUrl: trimmedUrl,
           category,
@@ -115,6 +117,7 @@ export function LegalReportForm({ authoritiesEmail, legalEmail }: LegalReportFor
       if (controller.signal.aborted) return;
       setError('A network error occurred while submitting the report. Please try again.');
     } finally {
+      timeout.cleanup();
       if (!controller.signal.aborted) setBusy(false);
     }
   };

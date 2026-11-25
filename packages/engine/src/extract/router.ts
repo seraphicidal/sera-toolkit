@@ -51,6 +51,7 @@ export interface RouterDependencies {
   readonly logger: Logger;
   readonly fallbacks: () => readonly ExtractionBackend[];
   readonly capabilitiesOf: (providerId: string) => ProviderCapabilities | undefined;
+  readonly preferRemote?: boolean;
   readonly authenticated?: (providerId: string) => ExtractionBackend | undefined;
   readonly lastResort?: (
     url: URL,
@@ -89,14 +90,21 @@ export class ExtractionRouter {
       .filter(
         (backend) =>
           backend.isHealthy() &&
-          (backend.providers.length === 0 || backend.providers.includes(providerId)),
+          (backend.providers.length === 0 ||
+            backend.providers.includes('*') ||
+            backend.providers.includes('all') ||
+            backend.providers.includes(providerId)),
       )
       .sort((a, b) => NETWORK_RANK[a.networkClass] - NETWORK_RANK[b.networkClass]);
 
+    if (!remote.length) return [primary];
+
     const preferRemote =
-      !capabilities.cloudExtraction &&
-      primary.networkClass === 'datacenter' &&
-      remote.some((backend) => backend.networkClass !== 'datacenter');
+      this.deps.preferRemote === false
+        ? !capabilities.cloudExtraction &&
+          primary.networkClass === 'datacenter' &&
+          remote.some((backend) => backend.networkClass !== 'datacenter')
+        : true;
 
     return preferRemote ? [...remote, primary] : [primary, ...remote];
   }
@@ -122,7 +130,11 @@ export class ExtractionRouter {
       return true;
     }
     if (from.kind === 'remote') {
-      return failure === 'NETWORK_ERROR' || failure === 'UPSTREAM_TIMEOUT';
+      return (
+        failure === 'NETWORK_ERROR' ||
+        failure === 'UPSTREAM_TIMEOUT' ||
+        errorCode === 'PROVIDER_UNAVAILABLE'
+      );
     }
     return false;
   }

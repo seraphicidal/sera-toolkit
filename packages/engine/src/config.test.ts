@@ -60,4 +60,18 @@ describe('production secret and worker token hardening', () => {
     });
     expect(withExplicit.extractionNodes.workerToken).toBe('worker-secret-token');
   });
+
+  it('defaults extraction node routing to prefer nodes with 5000ms primary grace window', () => {
+    const defaults = loadConfig(base);
+    expect(defaults.extractionNodes.preferNodes).toBe(true);
+    expect(defaults.extractionNodes.primaryGraceMs).toBe(5_000);
+
+    const custom = loadConfig({
+      ...base,
+      SERA_EXTRACTION_PREFER_NODES: 'false',
+      SERA_EXTRACTION_PRIMARY_GRACE_MS: '1500',
+    });
+    expect(custom.extractionNodes.preferNodes).toBe(false);
+    expect(custom.extractionNodes.primaryGraceMs).toBe(1_500);
+  });
 });

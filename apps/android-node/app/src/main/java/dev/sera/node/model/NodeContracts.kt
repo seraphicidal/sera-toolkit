@@ -50,12 +50,31 @@ data class NetworkState(
 }
 
 @Serializable
+enum class NodeRole(val wireValue: String, val label: String) {
+    @SerialName("backup")
+    BACKUP("backup", "Backup"),
+
+    @SerialName("primary")
+    PRIMARY("primary", "Primary");
+
+    companion object {
+        fun fromWireValue(raw: String?): NodeRole? {
+            val normalized = raw?.trim()?.lowercase() ?: return null
+            return entries.firstOrNull { it.wireValue == normalized }
+        }
+
+        fun fromStorage(raw: String?): NodeRole = fromWireValue(raw) ?: BACKUP
+    }
+}
+
+@Serializable
 data class NodeRuntimeConfig(
     val apiBaseUrl: String,
     val nodeToken: String,
     val nodeId: String = "android-node",
     val providers: List<String> = ALL_PROVIDER_IDS,
     val networkClass: String = "residential",
+    val role: NodeRole = NodeRole.BACKUP,
     val instagramSessionId: String? = null,
     val youtubePlayerClients: String? = null,
     val youtubePotProviderUrl: String? = null,
@@ -74,6 +93,8 @@ data class ClaimRequest(
     val providers: List<String>,
     val capacity: Int,
     val networkClass: String = "residential",
+    val role: NodeRole = NodeRole.BACKUP,
+    val priority: Int? = null,
     val features: List<String>,
     val transport: String? = null,
     val appVersion: String? = null,

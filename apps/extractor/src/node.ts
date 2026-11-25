@@ -2,12 +2,14 @@ import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { Readable, Transform } from 'node:stream';
 import { safeExtractorArgSchema } from '@sera/contracts';
-import type { RemoteProgress } from '@sera/contracts/types';
+import type { NodeRole, RemoteProgress } from '@sera/contracts/types';
 import {
   hostMatchesAny,
+  isWildcardProviders,
   type JobRunner,
   type MediaResolver,
   newJobId,
+  nodeSupportsProvider,
   parseUserUrl,
   type ProviderRegistry,
   SeraError,
@@ -69,10 +71,40 @@ export function nodeProviders(
   config: Pick<EngineConfig, 'instagram'>,
 ): string[] {
   const list = [...providers];
-  if (list.length && config.instagram.configured && !list.includes('instagram')) {
+  if (
+    list.length &&
+    !isWildcardProviders(list) &&
+    config.instagram.configured &&
+    !list.includes('instagram')
+  ) {
     list.push('instagram');
   }
   return list;
+}
+
+export function parseNodeProviders(
+  raw: string | undefined,
+  allProviderIds: readonly string[],
+): string[] {
+  const entries = (raw ?? '')
+    .split(',')
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean);
+  if (entries.length === 0 || entries.includes('*') || entries.includes('all')) {
+    return [...allProviderIds];
+  }
+  return entries;
+}
+
+export function parseNodeRole(raw: string | undefined): NodeRole {
+  return raw?.trim().toLowerCase() === 'backup' ? 'backup' : 'primary';
+}
+
+export function parseNodePriority(raw: string | undefined): number | undefined {
+  if (!raw?.trim()) return undefined;
+  const parsed = Number.parseInt(raw.trim(), 10);
+  if (!Number.isFinite(parsed)) return undefined;
+  return Math.max(-1000, Math.min(1000, parsed));
 }
 
 export function taskSubtitles(task: Pick<RemoteTask, 'subtitles'>): RemoteTask['subtitles'] {
@@ -109,6 +141,8 @@ export interface NodeOptions {
   readonly nodeId: string;
   readonly networkClass: string;
   readonly providers: readonly string[];
+  readonly role?: NodeRole;
+  readonly priority?: number;
 }
 
 const IDLE_BACKOFF_MS = 2_000;
@@ -162,6 +196,8 @@ export class ExtractionNode {
   private readonly nodeId: string;
   private readonly networkClass: string;
   private readonly providers: string[];
+  private readonly role: NodeRole;
+  private readonly priority: number | undefined;
   private readonly features: NodeFeature[];
   private stopping = false;
   private claimAbort: AbortController | undefined;
@@ -181,6 +217,8 @@ export class ExtractionNode {
     this.nodeId = options.nodeId;
     this.networkClass = options.networkClass;
     this.providers = nodeProviders(options.providers, config);
+    this.role = options.role ?? 'primary';
+    this.priority = options.priority;
     this.features = nodeFeatures(config);
 
     if (!this.apiUrl || !this.token) {
@@ -203,6 +241,8 @@ export class ExtractionNode {
         node: this.nodeId,
         providers: this.providers,
         networkClass: this.networkClass,
+        role: this.role,
+        ...(this.priority !== undefined ? { priority: this.priority } : {}),
         features: this.features,
       },
       'extraction node started',
@@ -250,6 +290,8 @@ export class ExtractionNode {
           providers: this.providers,
           capacity: 1,
           networkClass: this.networkClass,
+          role: this.role,
+          ...(this.priority !== undefined ? { priority: this.priority } : {}),
           features: this.features,
         },
         CLAIM_TIMEOUT_MS,
@@ -275,7 +317,7 @@ export class ExtractionNode {
   }
 
   private accept(task: RemoteTask): URL {
-    if (this.providers.length && !this.providers.includes(task.providerId)) {
+    if (!nodeSupportsProvider(this.providers, task.providerId)) {
       throw seraError('UNSUPPORTED_SOURCE', {
         detail: `node: not configured for ${task.providerId}`,
       });

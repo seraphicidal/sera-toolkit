@@ -18,11 +18,13 @@ import dev.sera.node.ServiceLocator
 import dev.sera.node.data.ClaimOutcome
 import dev.sera.node.data.FatalAuthException
 import dev.sera.node.data.NodeSettings
+import dev.sera.node.data.SeraNodeApiClient
 import dev.sera.node.data.TaskCancelledException
 import dev.sera.node.data.UploadOffsetMismatchException
 import dev.sera.node.model.ClaimRequest
 import dev.sera.node.model.FailedRequest
 import dev.sera.node.model.NetworkTransport
+import dev.sera.node.model.NodeRole
 import dev.sera.node.model.ProducedFile
 import dev.sera.node.model.ProgressRequest
 import dev.sera.node.model.RemoteTask
@@ -50,6 +52,7 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.Call
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
@@ -262,6 +265,7 @@ class NodeForegroundService : Service() {
         prev.apiBaseUrl != next.apiBaseUrl ||
             prev.nodeToken != next.nodeToken ||
             prev.nodeId != next.nodeId ||
+            prev.nodeRole != next.nodeRole ||
             prev.enableYoutube != next.enableYoutube ||
             prev.enableInstagram != next.enableInstagram ||
             prev.enableAllProviders != next.enableAllProviders ||
@@ -364,6 +368,7 @@ class NodeForegroundService : Service() {
                     providers = activeProviders,
                     capacity = capacity,
                     networkClass = "residential",
+                    role = settings.nodeRole,
                     features = NodeServicePolicy.buildNodeFeatures(settings.instagramSessionId),
                     transport = netState.transport.wireValueOrNull(),
                     appVersion = BuildConfig.VERSION_NAME.take(64),
@@ -412,12 +417,17 @@ class NodeForegroundService : Service() {
                     logStore.debug("NET", "Claim poll interrupted; re-evaluating connection")
                 } catch (authError: FatalAuthException) {
                     authFailures += 1
-                    logStore.error("NODE", "Token rejected (${authError.statusCode}), failure $authFailures/${NodeServicePolicy.MAX_AUTH_FAILURES}")
+                    val authMessage = if (authError.statusCode == 403) {
+                        "Node ID \"${settings.nodeId}\" rejected (HTTP 403). Match Node ID to SERA_EXTRACTION_NODE_TOKENS."
+                    } else {
+                        "Authentication rejected (${authError.statusCode}). Verify Node Token."
+                    }
+                    logStore.error("NODE", "$authMessage (failure $authFailures/${NodeServicePolicy.MAX_AUTH_FAILURES})")
                     tracker.update {
                         it.copy(
                             serviceState = NodeServiceState.AUTH_ERROR,
                             authFailureCount = authFailures,
-                            lastError = "Authentication rejected (${authError.statusCode}). Verify Node Token.",
+                            lastError = authMessage,
                         )
                     }
                     refreshNotification(immediate = true)
@@ -432,11 +442,15 @@ class NodeForegroundService : Service() {
                 } catch (error: Exception) {
                     consecutiveErrors += 1
                     val backoffMs = NodeServicePolicy.computeRetryBackoffMs(consecutiveErrors)
-                    logStore.warn("NODE", "Claim error (${error.message}); retrying in ${backoffMs / 1000}s")
+                    val formattedError = SeraNodeApiClient.formatConnectionError(
+                        error,
+                        settings.apiBaseUrl.toHttpUrlOrNull(),
+                    )
+                    logStore.warn("NODE", "Claim error ($formattedError); retrying in ${backoffMs / 1000}s")
                     tracker.update {
                         it.copy(
                             serviceState = if (activeTasks.isNotEmpty()) NodeServiceState.RUNNING_TASK else NodeServiceState.RECONNECTING,
-                            lastError = error.message ?: "Connection error",
+                            lastError = formattedError,
                         )
                     }
                     refreshNotification()
@@ -874,9 +888,11 @@ class NodeForegroundService : Service() {
 
     private fun postNotificationNow() {
         val tracker = ServiceLocator.runtimeTracker()
-        val total = latestSettingsRef.get()?.completedTasksCount ?: 0L
+        val settings = latestSettingsRef.get()
+        val total = settings?.completedTasksCount ?: 0L
+        val role = settings?.nodeRole ?: NodeRole.BACKUP
         ServiceLocator.notificationManager(this)
-            .updateStatusNotification(tracker.snapshot.value, total, isPaused.get())
+            .updateStatusNotification(tracker.snapshot.value, total, isPaused.get(), role)
     }
 
     private fun signalLoopWake() {

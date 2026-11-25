@@ -1164,6 +1164,9 @@ export function registerExtractionUpdateRoutes(
       if (!auth) return reply;
 
       const manifest = await updates.getManifest();
+      if (!auth.isLegacy) {
+        void reply.header('x-sera-node-id', auth.nodeId);
+      }
       return reply
         .header('cache-control', 'private, no-store')
         .header('x-sera-manifest-hash', manifest.manifestHash)

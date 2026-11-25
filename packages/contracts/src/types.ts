@@ -376,6 +376,8 @@ export interface NodeAvailability {
   readonly totalNodes: number;
   readonly healthyNodes: number;
   readonly residentialNodes: number;
+  readonly primaryNodes?: number;
+  readonly backupNodes?: number;
   readonly features: readonly string[];
   readonly providers: readonly string[];
 }
@@ -433,6 +435,8 @@ export type NodeNetworkClass = 'datacenter' | 'residential' | 'unknown';
 
 export type NodeTransport = 'wifi' | 'cellular' | 'other';
 
+export type NodeRole = 'primary' | 'backup';
+
 export type NodeFeature = 'trim' | 'subtitles' | 'items' | 'instagram-session';
 
 export type RemoteTaskKind = 'resolve' | 'job';
@@ -472,6 +476,8 @@ export interface ExtractionNodeClaim {
   readonly networkClass: NodeNetworkClass;
   readonly features: readonly string[];
   readonly transport?: NodeTransport;
+  readonly role?: NodeRole;
+  readonly priority?: number;
   readonly appVersion?: string;
   readonly ytdlpVersion?: string;
   readonly ffmpegVersion?: string;
@@ -513,6 +519,8 @@ export interface NodeStatus {
   readonly capacity: number;
   readonly features?: readonly string[];
   readonly transport?: NodeTransport;
+  readonly role?: NodeRole;
+  readonly priority?: number;
   readonly appVersion?: string;
   readonly ytdlpVersion?: string;
   readonly ffmpegVersion?: string;

@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import type { NodeAvailability } from '@sera/contracts/types';
 import { ClearHistoryButton } from '@/components/clear-history-button';
 import { Wordmark } from '@/components/wordmark';
 import { formatLimitDuration, pluralize } from '@/lib/format';
@@ -16,6 +17,19 @@ function formatGigabytes(bytes: number): string {
   return gb >= 1
     ? `${gb % 1 === 0 ? gb : gb.toFixed(1)} GB`
     : `${Math.round(bytes / 1024 ** 2)} MB`;
+}
+
+function formatNodeAvailability(nodeAvailability: NodeAvailability): string {
+  if (nodeAvailability.healthyNodes <= 0) {
+    return 'Extraction nodes: no healthy residential nodes currently online — sources requiring a home connection may fail.';
+  }
+  const details: string[] = [];
+  if (nodeAvailability.primaryNodes !== undefined || nodeAvailability.backupNodes !== undefined) {
+    details.push(`${nodeAvailability.primaryNodes ?? 0} primary`);
+    details.push(`${nodeAvailability.backupNodes ?? 0} backup`);
+  }
+  details.push(pluralize(nodeAvailability.residentialNodes, 'residential node'));
+  return `Extraction nodes: ${pluralize(nodeAvailability.healthyNodes, 'healthy node')} online (${details.join(', ')}).`;
 }
 
 export default async function AboutPage() {
@@ -126,11 +140,7 @@ export default async function AboutPage() {
                       : 'inline-block size-2 shrink-0 rounded-full bg-[var(--color-warning)]'
                   }
                 />
-                <span>
-                  {nodeAvailability.healthyNodes > 0
-                    ? `Extraction nodes: ${pluralize(nodeAvailability.healthyNodes, 'healthy node')} online (${pluralize(nodeAvailability.residentialNodes, 'residential node')}).`
-                    : 'Extraction nodes: no healthy residential nodes currently online — sources requiring a home connection may fail.'}
-                </span>
+                <span>{formatNodeAvailability(nodeAvailability)}</span>
               </div>
             )}
             <p>

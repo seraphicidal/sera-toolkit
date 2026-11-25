@@ -122,6 +122,51 @@ describe('a worker reaching the node through the API', () => {
     expect(client.networkClasses()).toEqual(['residential']);
   });
 
+  it('propagates node role/priority and preserves wildcard provider lists', async () => {
+    nodes = [
+      {
+        id: 'pc',
+        providers: ['*'],
+        networkClass: 'residential',
+        capacity: 1,
+        role: 'primary',
+        priority: 10,
+        inFlight: 0,
+        lastSeenMs: 25,
+        healthy: true,
+      },
+      {
+        id: 'phone',
+        providers: ['youtube'],
+        networkClass: 'residential',
+        capacity: 2,
+        role: 'backup',
+        priority: 0,
+        inFlight: 0,
+        lastSeenMs: 50,
+        healthy: true,
+      },
+    ];
+    const client = await withStatus(clientFor());
+
+    expect(client.availableProviders('residential')).toEqual(['*']);
+    expect(client.status()).toMatchObject([
+      { id: 'pc', role: 'primary', priority: 10 },
+      { id: 'phone', role: 'backup', priority: 0 },
+    ]);
+    nodes = [
+      {
+        id: 'home',
+        providers: ['youtube'],
+        networkClass: 'residential',
+        capacity: 1,
+        inFlight: 0,
+        lastSeenMs: 100,
+        healthy: true,
+      },
+    ];
+  });
+
   it('offers the router a backend, which is the whole point', async () => {
     const client = await withStatus(clientFor());
     const backends = remoteBackends(client);

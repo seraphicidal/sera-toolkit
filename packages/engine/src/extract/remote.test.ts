@@ -530,3 +530,188 @@ describe('registry task inspection, cleanup hooks, and fail-fast', () => {
     expect(Date.now() - started).toBeLessThan(100);
   });
 });
+
+describe('primary over backup scheduling and failover', () => {
+  it('ranks primary strictly above backup even when backup called claim first, and higher priority wins within role', async () => {
+    const nodes = new ExtractionNodeRegistry(silentLogger(), 5000, 5000, 1000, 5000, 500);
+    const phoneBackup = nodes.claim('phone', ['*'], 1, 800, 'residential', [], {
+      role: 'backup',
+      priority: 100,
+    });
+    const pcStandard = nodes.claim('pc-2', ['*'], 1, 800, 'residential', [], {
+      role: 'primary',
+      priority: 0,
+    });
+    const pcFast = nodes.claim('pc-1', ['*'], 1, 800, 'residential', [], {
+      role: 'primary',
+      priority: 10,
+    });
+
+    const first = nodes.dispatch({ kind: 'resolve', url: media.url, providerId: 'generic' });
+    const firstTask = await pcFast;
+    expect(firstTask?.providerId).toBe('generic');
+    nodes.completeResolve(firstTask!.id, { ...media, provider: 'generic' });
+    await expect(first).resolves.toMatchObject({ provider: 'generic' });
+
+    const second = nodes.dispatch({ kind: 'resolve', url: media.url, providerId: 'direct' });
+    const secondTask = await pcStandard;
+    expect(secondTask?.providerId).toBe('direct');
+    nodes.completeResolve(secondTask!.id, { ...media, provider: 'direct' });
+    await expect(second).resolves.toMatchObject({ provider: 'direct' });
+
+    expect(await phoneBackup).toBeUndefined();
+  });
+
+  it('prevents backup from stealing tasks during a primary poll gap', async () => {
+    const nodes = new ExtractionNodeRegistry(silentLogger(), 5000, 5000, 1000, 5000, 500);
+    nodes.register('pc', ['*'], 1, 'residential', ['trim'], { role: 'primary' });
+
+    const phoneWaiting = nodes.claim('phone', ['*'], 1, 350, 'residential', ['trim'], {
+      role: 'backup',
+    });
+
+    const dispatched = nodes.dispatch({
+      kind: 'resolve',
+      url: 'https://example.com/article',
+      providerId: 'generic',
+    });
+
+    await wait(80);
+    const pcTask = await nodes.claim('pc', ['*'], 1, 500, 'residential', ['trim'], {
+      role: 'primary',
+    });
+    expect(pcTask).toBeDefined();
+    expect(pcTask!.providerId).toBe('generic');
+
+    nodes.completeResolve(pcTask!.id, { ...media, provider: 'generic' });
+    await expect(dispatched).resolves.toMatchObject({ provider: 'generic' });
+    expect(await phoneWaiting).toBeUndefined();
+  });
+
+  it('prevents an incoming backup claim from stealing a queued task during the primary grace window', async () => {
+    const nodes = new ExtractionNodeRegistry(silentLogger(), 5000, 5000, 1000, 5000, 400);
+    nodes.register('pc', ['*'], 1, 'residential', [], { role: 'primary' });
+
+    const dispatched = nodes.dispatch({
+      kind: 'resolve',
+      url: media.url,
+      providerId: 'youtube',
+    });
+
+    const phoneClaim = nodes.claim('phone', ['*'], 1, 250, 'residential', [], { role: 'backup' });
+    await wait(60);
+
+    const pcTask = await nodes.claim('pc', ['*'], 1, 500, 'residential', [], { role: 'primary' });
+    expect(pcTask?.providerId).toBe('youtube');
+    nodes.completeResolve(pcTask!.id, media);
+    await expect(dispatched).resolves.toMatchObject({ title: 'A video' });
+    expect(await phoneClaim).toBeUndefined();
+  });
+
+  it('hands off to backup after primary grace window expires when primary does not return', async () => {
+    const nodes = new ExtractionNodeRegistry(silentLogger(), 5000, 5000, 1000, 5000, 120);
+    nodes.register('pc', ['*'], 1, 'residential', [], { role: 'primary' });
+
+    const phoneWaiting = nodes.claim('phone', ['*'], 1, 1000, 'residential', [], {
+      role: 'backup',
+    });
+    const started = Date.now();
+    const dispatched = nodes.dispatch({
+      kind: 'resolve',
+      url: media.url,
+      providerId: 'youtube',
+    });
+
+    const task = await phoneWaiting;
+    const elapsed = Date.now() - started;
+    expect(task).toBeDefined();
+    expect(elapsed).toBeGreaterThanOrEqual(90);
+
+    nodes.completeResolve(task!.id, media);
+    await expect(dispatched).resolves.toMatchObject({ title: 'A video' });
+  });
+
+  it('dispatches immediately to backup without grace delay when primary is offline or stale', async () => {
+    const nodes = new ExtractionNodeRegistry(silentLogger(), 60, 5000, 1000, 5000, 5000);
+    nodes.register('pc', ['*'], 1, 'residential', [], { role: 'primary' });
+    await wait(80);
+
+    const phoneWaiting = nodes.claim('phone', ['*'], 1, 1000, 'residential', [], {
+      role: 'backup',
+    });
+    const started = Date.now();
+    const dispatched = nodes.dispatch({
+      kind: 'resolve',
+      url: media.url,
+      providerId: 'youtube',
+    });
+
+    const task = await phoneWaiting;
+    expect(task).toBeDefined();
+    expect(Date.now() - started).toBeLessThan(200);
+
+    nodes.completeResolve(task!.id, media);
+    await expect(dispatched).resolves.toMatchObject({ title: 'A video' });
+  });
+
+  it('fails over from primary to backup immediately via remoteBackend when primary fails with a transient error', async () => {
+    const nodes = new ExtractionNodeRegistry(silentLogger(), 5000, 5000, 1000, 5000, 5000);
+    nodes.register('pc', ['*'], 1, 'residential', [], { role: 'primary' });
+    nodes.register('phone', ['*'], 1, 'residential', [], { role: 'backup' });
+
+    const backend = remoteBackend(nodes, 'residential');
+    const resolving = backend.resolve(new URL(media.url), 'youtube');
+
+    const pcTask = await nodes.claim('pc', ['*'], 1, 500, 'residential', [], { role: 'primary' });
+    expect(pcTask).toBeDefined();
+
+    const phoneWaiting = nodes.claim('phone', ['*'], 1, 1000, 'residential', [], {
+      role: 'backup',
+    });
+    const failAt = Date.now();
+    nodes.fail(pcTask!.id, seraError('NETWORK_ERROR', { detail: 'pc upstream drop' }));
+
+    const phoneTask = await phoneWaiting;
+    expect(phoneTask).toBeDefined();
+    expect(phoneTask!.avoid).toEqual(['pc']);
+    expect(Date.now() - failAt).toBeLessThan(250);
+
+    nodes.completeResolve(phoneTask!.id, media);
+    await expect(resolving).resolves.toMatchObject({ title: 'A video' });
+  });
+
+  it('does not fail over to backup when primary returns a definitive error', async () => {
+    const nodes = new ExtractionNodeRegistry(silentLogger(), 5000, 5000, 1000, 5000, 500);
+    nodes.register('pc', ['*'], 1, 'residential', [], { role: 'primary' });
+    const phoneWaiting = nodes.claim('phone', ['*'], 1, 200, 'residential', [], {
+      role: 'backup',
+    });
+
+    const resolving = remoteBackend(nodes, 'residential').resolve(new URL(media.url), 'youtube');
+    const pcTask = await nodes.claim('pc', ['*'], 1, 500, 'residential', [], { role: 'primary' });
+    nodes.fail(pcTask!.id, seraError('PRIVATE_CONTENT'));
+
+    await expect(resolving).rejects.toMatchObject({ code: 'PRIVATE_CONTENT' });
+    expect(await phoneWaiting).toBeUndefined();
+  });
+
+  it('preserves wildcard provider availability when mixed with restricted nodes and infers mobile role when omitted', () => {
+    const nodes = new ExtractionNodeRegistry(silentLogger(), 5000, 5000);
+    nodes.register('pc', ['*'], 1, 'residential', []);
+    nodes.register('old-android', ['youtube'], 1, 'residential', [], {
+      transport: 'cellular',
+      appVersion: '1.1.0',
+    });
+    nodes.register('explicit-primary-phone', ['youtube'], 1, 'residential', [], {
+      transport: 'wifi',
+      appVersion: '1.2.0',
+      role: 'primary',
+    });
+
+    expect(nodes.availableProviders('residential')).toEqual(['*']);
+    const byId = new Map(nodes.status().map((n) => [n.id, n]));
+    expect(byId.get('pc')?.role).toBe('primary');
+    expect(byId.get('old-android')?.role).toBe('backup');
+    expect(byId.get('explicit-primary-phone')?.role).toBe('primary');
+  });
+});

@@ -1,9 +1,12 @@
 package dev.sera.node.data
 
+import dev.sera.node.model.NodeRole
+
 data class ParsedEnvConfig(
     val apiBaseUrl: String? = null,
     val nodeToken: String? = null,
     val nodeId: String? = null,
+    val nodeRole: NodeRole? = null,
     val enableYoutube: Boolean? = null,
     val enableInstagram: Boolean? = null,
     val enableAllProviders: Boolean? = null,
@@ -83,6 +86,11 @@ object EnvConfigParser {
         val nodeId = (explicitNodeId ?: matchedPair?.first)
             ?.also { imported += "Node ID" }
 
+        val rawNodeRole = values["SERA_EXTRACTION_NODE_ROLE"]?.trim()?.takeIf { it.isNotEmpty() }
+            ?: values["SERA_NODE_ROLE"]?.trim()?.takeIf { it.isNotEmpty() }
+        val nodeRole = NodeRole.fromWireValue(rawNodeRole)
+            ?.also { imported += "Node Role" }
+
         var enableYoutube: Boolean? = null
         var enableInstagram: Boolean? = null
         var enableAllProviders: Boolean? = null
@@ -142,6 +150,7 @@ object EnvConfigParser {
             apiBaseUrl = apiBaseUrl,
             nodeToken = nodeToken,
             nodeId = nodeId,
+            nodeRole = nodeRole,
             enableYoutube = enableYoutube,
             enableInstagram = enableInstagram,
             enableAllProviders = enableAllProviders,

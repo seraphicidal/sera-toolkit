@@ -29,7 +29,6 @@ export class MastodonProvider extends YtdlpProvider {
     image: true,
     carousel: true,
     gif: true,
-    residentialFallback: false,
   });
 
   private static readonly STATUS_PATH = /^\/(@[^/]+\/\d+|users\/[^/]+\/statuses\/\d+)\/?$/;

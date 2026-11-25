@@ -158,10 +158,15 @@ export {
 export { classifyFailure, isEgressProblem, type FailureClass } from './extract/failure.js';
 export {
   ExtractionNodeRegistry,
+  isWildcardProviders,
+  nodeSupportsProvider,
   remoteBackend,
   requiredFeatures,
+  resolveNodeRole,
   sessionBackend,
   type NodeFeature,
+  type NodeMetadata,
+  type NodeRole,
   type NodeStatus,
   type RemoteProgress,
   type RemoteTask,

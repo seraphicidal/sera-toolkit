@@ -53,7 +53,8 @@ if [ ! -f "$ENV_FILE" ]; then
 SERA_API_URL=https://your-sera-domain.example
 SERA_EXTRACTION_NODE_TOKEN=
 SERA_NODE_ID=phone
-SERA_NODE_PROVIDERS=youtube
+SERA_NODE_PROVIDERS=*
+SERA_NODE_ROLE=backup
 SERA_NODE_NETWORK_CLASS=residential
 EOF
 fi

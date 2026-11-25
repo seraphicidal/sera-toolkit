@@ -78,6 +78,7 @@ import dev.sera.node.data.NodeSettings
 import dev.sera.node.extractor.ALL_OTHER_PROVIDER_IDS
 import dev.sera.node.model.NetworkState
 import dev.sera.node.model.NetworkTransport
+import dev.sera.node.model.NodeRole
 import dev.sera.node.service.NodeRuntimeSnapshot
 import dev.sera.node.service.NodeServiceState
 import dev.sera.node.ui.theme.LocalSeraPalette
@@ -555,6 +556,63 @@ private fun NodeControlCard(
                 }
             }
 
+            val isBackupRole = settings.nodeRole == NodeRole.BACKUP
+            Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = if (isBackupRole) palette.sunken else palette.accentWash,
+                border = BorderStroke(
+                    1.dp,
+                    if (isBackupRole) palette.line else palette.accent.copy(alpha = 0.3f),
+                ),
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(999.dp),
+                            color = if (isBackupRole) palette.warningWash else palette.accent,
+                            border = if (isBackupRole) {
+                                BorderStroke(1.dp, palette.warning.copy(alpha = 0.35f))
+                            } else {
+                                null
+                            },
+                        ) {
+                            Text(
+                                text = if (isBackupRole) "Backup Node" else "Primary Node",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (isBackupRole) palette.warning else palette.accentInk,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                            )
+                        }
+                        Text(
+                            text = if (isBackupRole) "Failover Standby" else "Immediate Priority",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = palette.ink,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Text(
+                        text = if (isBackupRole) {
+                            "Handles tasks automatically when your PC primary node is offline or unavailable."
+                        } else {
+                            "Claims tasks immediately alongside any other primary nodes."
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = palette.inkMuted,
+                    )
+                }
+            }
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -796,12 +854,20 @@ private fun ActiveTasksCard(
             }
 
             if (snapshot.activeTasks.isEmpty()) {
+                val emptyTasksLabel = if (
+                    settings.nodeRole == NodeRole.BACKUP &&
+                    snapshot.serviceState == NodeServiceState.IDLE_POLLING
+                ) {
+                    "Standing by as backup node — ready if PC node is offline"
+                } else {
+                    "No active extraction tasks"
+                }
                 Surface(
                     shape = RoundedCornerShape(10.dp),
                     color = palette.sunken,
                 ) {
                     Text(
-                        text = "No active extraction tasks",
+                        text = emptyTasksLabel,
                         style = MaterialTheme.typography.bodyMedium,
                         color = palette.inkMuted,
                         modifier = Modifier

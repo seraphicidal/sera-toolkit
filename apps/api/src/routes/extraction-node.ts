@@ -374,6 +374,8 @@ export function registerExtractionNodeRoutes(
         networkClass,
         features,
         transport,
+        role,
+        priority,
         appVersion,
         ytdlpVersion,
         ffmpegVersion,
@@ -393,6 +395,8 @@ export function registerExtractionNodeRoutes(
           features,
           {
             ...(transport ? { transport } : {}),
+            ...(role ? { role } : {}),
+            ...(priority !== undefined ? { priority } : {}),
             ...(appVersion ? { appVersion } : {}),
             ...(ytdlpVersion ? { ytdlpVersion } : {}),
             ...(ffmpegVersion ? { ffmpegVersion } : {}),
@@ -1034,7 +1038,10 @@ export function registerExtractionNodeRoutes(
     );
 
     logger.info(
-      { claimHoldMs: config.extractionNodes.claimHoldMs },
+      {
+        claimHoldMs: config.extractionNodes.claimHoldMs,
+        primaryGraceMs: config.extractionNodes.primaryGraceMs,
+      },
       'extraction node endpoints mounted',
     );
   });

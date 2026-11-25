@@ -4,6 +4,8 @@
     @kotlinx.serialization.SerialName <fields>;
 }
 -keep,includedescriptorclasses class dev.sera.node.model.** { *; }
+-keep,includedescriptorclasses @kotlinx.serialization.Serializable class dev.sera.node.** { *; }
+-keep,includedescriptorclasses class dev.sera.node.**$$serializer { *; }
 -keepclassmembers class dev.sera.node.** {
     *** Companion;
 }

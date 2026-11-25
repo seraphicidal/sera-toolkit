@@ -6,7 +6,14 @@ import type { FastifyInstance } from 'fastify';
 import type { MediaInfo, ServiceInfo } from '@sera/contracts/types';
 import { loadConfig, seraError, SeraEngine, type ResolvedMedia } from '@sera/engine';
 import { buildServer } from '../apps/api/src/server.js';
-import { nodeFeatures, nodeProviders, taskSelections } from '../apps/extractor/src/node.js';
+import {
+  nodeFeatures,
+  nodeProviders,
+  parseNodePriority,
+  parseNodeProviders,
+  parseNodeRole,
+  taskSelections,
+} from '../apps/extractor/src/node.js';
 
 const TOKEN = 'instagram-node-token-0123456789';
 const POST = 'https://www.instagram.com/p/DcOX3hWFiey/';
@@ -113,6 +120,20 @@ describe('with one', () => {
 
     const visitor = app.inject({ method: 'POST', url: '/api/media/info', payload: { url: POST } });
 
+    const initialLaptop = await claim('laptop', ['trim', 'subtitles']);
+    expect(initialLaptop.statusCode).toBe(200);
+    const initialTask = initialLaptop.json<{ id: string; providerId: string }>();
+    expect(initialTask.providerId).toBe('instagram');
+    await app.inject({
+      method: 'POST',
+      url: `/internal/extraction/${initialTask.id}/failed`,
+      headers: auth,
+      payload: {
+        code: 'PROVIDER_AUTH_REQUIRED',
+        detail: 'instagram: no video in post',
+      },
+    });
+
     expect((await claim('laptop', ['trim', 'subtitles'])).statusCode).toBe(204);
 
     let task: { id: string; providerId: string; requires?: string[] } | undefined;
@@ -151,6 +172,19 @@ describe('a node', () => {
     expect(nodeProviders(['youtube'], without)).toEqual(['youtube']);
     expect(nodeProviders(['youtube'], withSession)).toEqual(['youtube', 'instagram']);
     expect(nodeProviders([], withSession)).toEqual([]);
+    expect(nodeProviders(['*'], withSession)).toEqual(['*']);
+
+    const all = ['youtube', 'instagram', 'generic', 'direct'];
+    expect(parseNodeProviders(undefined, all)).toEqual(all);
+    expect(parseNodeProviders('', all)).toEqual(all);
+    expect(parseNodeProviders('*', all)).toEqual(all);
+    expect(parseNodeProviders('all', all)).toEqual(all);
+    expect(parseNodeProviders('youtube,twitter', all)).toEqual(['youtube', 'twitter']);
+    expect(parseNodeRole(undefined)).toBe('primary');
+    expect(parseNodeRole('primary')).toBe('primary');
+    expect(parseNodeRole('backup')).toBe('backup');
+    expect(parseNodePriority('25')).toBe(25);
+    expect(parseNodePriority(undefined)).toBeUndefined();
   });
 
   it('downloads the slide that was picked, not the one in the same position', () => {

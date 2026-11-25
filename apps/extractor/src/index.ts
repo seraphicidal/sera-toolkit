@@ -6,7 +6,7 @@ import {
   ProviderRegistry,
   WorkspaceManager,
 } from '@sera/engine';
-import { ExtractionNode } from './node.js';
+import { ExtractionNode, parseNodePriority, parseNodeProviders, parseNodeRole } from './node.js';
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -23,16 +23,19 @@ async function main(): Promise<void> {
   const stopReaper = workspaces.startReaper(config.reapIntervalSeconds);
   const runner = new JobRunner({ config, logger, resolver, workspaces });
 
+  const priority = parseNodePriority(process.env.SERA_NODE_PRIORITY);
   const node = new ExtractionNode(
     {
       apiUrl: process.env.SERA_API_URL ?? '',
       token: process.env.SERA_EXTRACTION_NODE_TOKEN ?? '',
       nodeId: process.env.SERA_NODE_ID ?? 'residential',
       networkClass: process.env.SERA_NODE_NETWORK_CLASS ?? 'residential',
-      providers: (process.env.SERA_NODE_PROVIDERS ?? '')
-        .split(',')
-        .map((entry) => entry.trim())
-        .filter(Boolean),
+      providers: parseNodeProviders(
+        process.env.SERA_NODE_PROVIDERS ?? process.env.SERA_EXTRACTION_NODE_PROVIDERS,
+        registry.list().map((provider) => provider.id),
+      ),
+      role: parseNodeRole(process.env.SERA_NODE_ROLE ?? process.env.SERA_EXTRACTION_NODE_ROLE),
+      ...(priority !== undefined ? { priority } : {}),
     },
     logger,
     config,

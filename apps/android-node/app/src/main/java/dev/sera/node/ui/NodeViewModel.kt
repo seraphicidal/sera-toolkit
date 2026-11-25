@@ -21,6 +21,7 @@ import dev.sera.node.data.NodeSettings
 import dev.sera.node.data.ParsedEnvConfig
 import dev.sera.node.data.ThemePreference
 import dev.sera.node.model.NetworkState
+import dev.sera.node.model.NodeRole
 import dev.sera.node.service.NodeForegroundService
 import dev.sera.node.service.NodeRuntimeSnapshot
 import dev.sera.node.updater.UpdateState
@@ -187,9 +188,10 @@ class NodeViewModel(application: Application) : AndroidViewModel(application) {
         _connectionTestState.value = ConnectionTestUiState.Idle
     }
 
-    fun testConnection(rawBaseUrl: String, rawToken: String) {
+    fun testConnection(rawBaseUrl: String, rawToken: String, rawNodeId: String = "") {
         val normalizedUrl = NodeSettings.normalizeBaseUrl(rawBaseUrl)
         val trimmedToken = rawToken.trim()
+        val trimmedNodeId = rawNodeId.trim().ifEmpty { null }
         if (normalizedUrl.isBlank() || normalizedUrl.toHttpUrlOrNull() == null) {
             _connectionTestState.value = ConnectionTestUiState.Error("Enter a valid Server URL before testing")
             return
@@ -201,7 +203,7 @@ class NodeViewModel(application: Application) : AndroidViewModel(application) {
         connectionTestJob?.cancel()
         _connectionTestState.value = ConnectionTestUiState.Testing
         connectionTestJob = viewModelScope.launch {
-            val result = apiClient.testConnection(normalizedUrl, trimmedToken)
+            val result = apiClient.testConnection(normalizedUrl, trimmedToken, trimmedNodeId)
             when (result) {
                 is ConnectionTestResult.Success -> {
                     _connectionTestState.value = ConnectionTestUiState.Success(
@@ -234,6 +236,7 @@ class NodeViewModel(application: Application) : AndroidViewModel(application) {
         apiBaseUrl: String,
         nodeToken: String,
         nodeId: String,
+        nodeRole: NodeRole,
         enableYoutube: Boolean,
         enableInstagram: Boolean,
         enableAllProviders: Boolean,
@@ -257,6 +260,7 @@ class NodeViewModel(application: Application) : AndroidViewModel(application) {
                 apiBaseUrl = apiBaseUrl,
                 nodeToken = nodeToken,
                 nodeId = nodeId,
+                nodeRole = nodeRole,
                 enableYoutube = enableYoutube,
                 enableInstagram = enableInstagram,
                 enableAllProviders = enableAllProviders,

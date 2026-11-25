@@ -254,12 +254,17 @@ describe('WS1 hardening regressions', () => {
     });
     try {
       engine.extractionNodes.register('home', ['youtube'], 1, 'residential', ['trim']);
+      engine.extractionNodes.register('phone', ['youtube'], 1, 'residential', ['trim'], {
+        role: 'backup',
+      });
       const info = engine.serviceInfo();
       expect(info.nodeAvailability).toEqual({
         enabled: true,
-        totalNodes: 1,
-        healthyNodes: 1,
-        residentialNodes: 1,
+        totalNodes: 2,
+        healthyNodes: 2,
+        residentialNodes: 2,
+        primaryNodes: 1,
+        backupNodes: 1,
         features: ['trim'],
         providers: ['youtube'],
       });

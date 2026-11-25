@@ -10,6 +10,7 @@ import androidx.core.app.NotificationCompat
 import dev.sera.node.MainActivity
 import dev.sera.node.R
 import dev.sera.node.model.NetworkTransport
+import dev.sera.node.model.NodeRole
 
 class NodeNotificationManager(private val context: Context) {
     private val appContext = context.applicationContext
@@ -47,6 +48,7 @@ class NodeNotificationManager(private val context: Context) {
         snapshot: NodeRuntimeSnapshot,
         totalCompleted: Long,
         isPaused: Boolean,
+        nodeRole: NodeRole = NodeRole.BACKUP,
     ): Notification {
         ensureChannels()
 
@@ -66,13 +68,14 @@ class NodeNotificationManager(private val context: Context) {
             NetworkTransport.NONE -> "Offline"
         }
 
+        val rolePrefix = if (nodeRole == NodeRole.BACKUP) "SERA Backup Node" else "SERA Node"
         val title = when (snapshot.serviceState) {
-            NodeServiceState.RUNNING_TASK -> "SERA Node • $transportLabel • Working"
-            NodeServiceState.PAUSED -> "SERA Node • Paused"
-            NodeServiceState.AUTH_ERROR -> "SERA Node • Auth Error"
-            NodeServiceState.WAITING_CHARGING -> "SERA Node • Waiting for Charger"
-            NodeServiceState.WAITING_NETWORK -> "SERA Node • Waiting for Network"
-            else -> "SERA Node • $transportLabel"
+            NodeServiceState.RUNNING_TASK -> "$rolePrefix • $transportLabel • Working"
+            NodeServiceState.PAUSED -> "$rolePrefix • Paused"
+            NodeServiceState.AUTH_ERROR -> "$rolePrefix • Auth Error"
+            NodeServiceState.WAITING_CHARGING -> "$rolePrefix • Waiting for Charger"
+            NodeServiceState.WAITING_NETWORK -> "$rolePrefix • Waiting for Network"
+            else -> "$rolePrefix • $transportLabel"
         }
 
         val active = snapshot.activeTasks.firstOrNull()
@@ -96,6 +99,7 @@ class NodeNotificationManager(private val context: Context) {
                 "Waiting for allowed connection • $totalCompleted done"
             snapshot.serviceState == NodeServiceState.UNCONFIGURED ->
                 "Open app to configure Server URL and Token"
+            nodeRole == NodeRole.BACKUP -> "Backup standby • $totalCompleted completed"
             else -> "Idle polling • $totalCompleted completed"
         }
 
@@ -147,8 +151,9 @@ class NodeNotificationManager(private val context: Context) {
         snapshot: NodeRuntimeSnapshot,
         totalCompleted: Long,
         isPaused: Boolean,
+        nodeRole: NodeRole = NodeRole.BACKUP,
     ) {
-        val notification = buildStatusNotification(snapshot, totalCompleted, isPaused)
+        val notification = buildStatusNotification(snapshot, totalCompleted, isPaused, nodeRole)
         runCatching { manager.notify(STATUS_NOTIFICATION_ID, notification) }
     }
 

@@ -153,7 +153,23 @@ EOF
   chmod 600 .env
   echo "domain: ${DOMAIN}"
 else
-  echo ".env already exists; leaving it alone"
+  echo ".env already exists; checking required secrets"
+  ensure_env_var() {
+    local key="$1" bytes="$2" current value tmp
+    current=$(sed -n "s/^${key}=//p" .env | tail -n 1 | tr -d '"'"'"' \r')
+    if [ -n "$current" ]; then
+      return 0
+    fi
+    value=$(openssl rand -hex "$bytes")
+    tmp=$(mktemp .env.tmp.XXXXXX)
+    chmod 600 "$tmp"
+    grep -Ev "^${key}=" .env >"$tmp" || true
+    printf '%s=%s\n' "$key" "$value" >>"$tmp"
+    mv -f "$tmp" .env
+    echo "generated missing ${key} in .env"
+  }
+  ensure_env_var SERA_REDIS_PASSWORD 24
+  ensure_env_var SERA_EXTRACTION_WORKER_TOKEN 32
 fi
 
 read_env_var() {

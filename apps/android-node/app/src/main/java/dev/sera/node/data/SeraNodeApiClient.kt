@@ -36,7 +36,13 @@ import okio.BufferedSink
 import java.io.File
 import java.io.FileInputStream
 import java.io.IOException
+import java.net.ConnectException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
+import javax.net.ssl.SSLException
+import javax.net.ssl.SSLHandshakeException
+import javax.net.ssl.SSLPeerUnverifiedException
 import kotlin.coroutines.resumeWithException
 
 class FatalAuthException(val statusCode: Int) :
@@ -153,6 +159,7 @@ class SeraNodeApiClient(
     suspend fun testConnection(
         baseUrl: String,
         token: String,
+        expectedNodeId: String? = null,
     ): ConnectionTestResult {
         val url = buildEndpointUrl(baseUrl, "/internal/extraction/updates/manifest")
         val parsedUrl = url.toHttpUrlOrNull()
@@ -172,11 +179,34 @@ class SeraNodeApiClient(
                 response.use { res ->
                     val latencyMs = ((System.nanoTime() - startedNs) / 1_000_000L).coerceAtLeast(0L)
                     when (res.code) {
-                        401, 403 -> ConnectionTestResult.AuthRejected(
-                            statusCode = res.code,
-                            message = "Authentication rejected (HTTP ${res.code})",
+                        401 -> ConnectionTestResult.AuthRejected(
+                            statusCode = 401,
+                            message = "Authentication rejected (HTTP 401). Verify your Node Token.",
+                        )
+                        403 -> ConnectionTestResult.AuthRejected(
+                            statusCode = 403,
+                            message = "Access forbidden (HTTP 403). Verify Node Token and Node ID match SERA_EXTRACTION_NODE_TOKENS.",
+                        )
+                        404 -> ConnectionTestResult.Failure(
+                            "Endpoint not found (HTTP 404). Check that Server URL points to your SERA API.",
+                        )
+                        502, 503, 504 -> ConnectionTestResult.Failure(
+                            "Server unavailable behind proxy (HTTP ${res.code}). Check that SERA API is running.",
                         )
                         in 200..299 -> {
+                            val cleanExpectedId = expectedNodeId?.trim()?.takeIf { it.isNotEmpty() }
+                            val serverNodeId = res.header("X-Sera-Node-Id")?.trim()?.takeIf { it.isNotEmpty() }
+                            if (
+                                cleanExpectedId != null &&
+                                serverNodeId != null &&
+                                !serverNodeId.equals("legacy", ignoreCase = true) &&
+                                serverNodeId != cleanExpectedId
+                            ) {
+                                return@use ConnectionTestResult.AuthRejected(
+                                    statusCode = 403,
+                                    message = "Node ID \"$cleanExpectedId\" does not match token identity \"$serverNodeId\".",
+                                )
+                            }
                             val raw = res.body?.string().orEmpty()
                             val manifest = runCatching {
                                 SeraJson.decodeFromString<NodeUpdateManifest>(raw)
@@ -195,7 +225,7 @@ class SeraNodeApiClient(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (err: Throwable) {
-            ConnectionTestResult.Failure(err.message?.take(200) ?: "Connection failed")
+            ConnectionTestResult.Failure(formatConnectionError(err, parsedUrl))
         }
     }
 
@@ -759,6 +789,29 @@ class SeraNodeApiClient(
             val normalizedBase = NodeSettings.normalizeBaseUrl(baseUrl)
             val normalizedPath = if (path.startsWith("/")) path else "/$path"
             return "$normalizedBase$normalizedPath"
+        }
+
+        fun formatConnectionError(err: Throwable, targetUrl: HttpUrl? = null): String {
+            val host = targetUrl?.host?.takeIf { it.isNotBlank() }
+            val hostSuffix = if (host != null) " for $host" else ""
+            val message = err.message.orEmpty()
+            return when {
+                err is UnknownHostException ->
+                    "DNS lookup failed$hostSuffix. Check Server URL, Wi-Fi/Mobile Data, or Private DNS."
+                err is SSLPeerUnverifiedException || err is SSLHandshakeException || err is SSLException -> {
+                    val detail = message.take(120).ifBlank { "TLS handshake failed" }
+                    "TLS/SSL error$hostSuffix ($detail). Use the HTTPS domain URL instead of a raw IP."
+                }
+                err is SocketTimeoutException ->
+                    "Connection timed out$hostSuffix. Check server reachability and network."
+                err is ConnectException -> {
+                    val detail = message.take(100).ifBlank { "connection refused" }
+                    "Could not connect$hostSuffix ($detail)."
+                }
+                message.contains("CLEARTEXT", ignoreCase = true) ->
+                    "Cleartext HTTP blocked$hostSuffix. Use https:// for remote servers."
+                else -> message.take(200).ifBlank { "Connection failed" }
+            }
         }
 
         fun parseChecksumLine(checksumText: String, assetName: String): String? {

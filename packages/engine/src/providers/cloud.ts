@@ -268,7 +268,6 @@ export class GoogleDriveProvider implements MediaProvider {
     image: true,
     audio: true,
     gif: true,
-    residentialFallback: false,
   });
 
   canHandle(url: URL, host: string): boolean {
@@ -339,7 +338,6 @@ export class DropboxProvider implements MediaProvider {
     image: true,
     audio: true,
     gif: true,
-    residentialFallback: false,
   });
 
   canHandle(url: URL, host: string): boolean {
@@ -390,7 +388,6 @@ export class MediaFireProvider implements MediaProvider {
     image: true,
     audio: true,
     gif: true,
-    residentialFallback: false,
   });
 
   canHandle(url: URL, host: string): boolean {
@@ -453,7 +450,6 @@ export class MegaProvider extends YtdlpProvider {
     image: true,
     audio: true,
     gif: true,
-    residentialFallback: false,
   });
 
   override canHandle(url: URL, host: string): boolean {

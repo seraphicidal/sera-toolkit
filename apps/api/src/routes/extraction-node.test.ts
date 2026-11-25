@@ -1667,3 +1667,271 @@ describe('WS2 security hardening and upload lifecycle fixes', () => {
     expect(existsSync(join(dataDir, `remote-${nodeTask.id}`))).toBe(false);
   });
 });
+
+describe('PC primary vs phone backup routing, all-websites node default, and connectivity hardening', () => {
+  it('propagates role and priority on /claim and exposes primaryNodes/backupNodes in /api/info', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'sera-role-routing-'));
+    const roleEngine = await SeraEngine.create({
+      config: loadConfig({
+        NODE_ENV: 'test',
+        LOG_LEVEL: 'silent',
+        SERA_SECRET: 'role-routing-secret',
+        SERA_DATA_DIR: dir,
+        SERA_EXTRACTION_NODE_TOKENS: 'pc:tok-pc-123456,phone:tok-phone-123456',
+        SERA_EXTRACTION_CLAIM_HOLD_SECONDS: '1',
+        SERA_EXTRACTION_PRIMARY_GRACE_MS: '400',
+      }),
+    });
+    const roleApp = await buildServer(roleEngine);
+    await roleApp.ready();
+
+    try {
+      const pcHeaders = { authorization: 'Bearer tok-pc-123456' };
+      const phoneHeaders = { authorization: 'Bearer tok-phone-123456' };
+
+      const phoneManifest = await roleApp.inject({
+        method: 'GET',
+        url: '/internal/extraction/updates/manifest',
+        headers: phoneHeaders,
+      });
+      expect(phoneManifest.statusCode).toBe(200);
+      expect(phoneManifest.headers['x-sera-node-id']).toBe('phone');
+
+      const pcRegister = await roleApp.inject({
+        method: 'POST',
+        url: '/internal/extraction/claim',
+        headers: pcHeaders,
+        payload: {
+          nodeId: 'pc',
+          providers: ['*'],
+          capacity: 1,
+          networkClass: 'residential',
+          role: 'primary',
+          priority: 10,
+          features: ['trim', 'subtitles', 'items'],
+        },
+      });
+      expect(pcRegister.statusCode).toBe(204);
+
+      const phoneRegister = await roleApp.inject({
+        method: 'POST',
+        url: '/internal/extraction/claim',
+        headers: phoneHeaders,
+        payload: {
+          nodeId: 'phone',
+          providers: ['*'],
+          capacity: 2,
+          networkClass: 'residential',
+          transport: 'cellular',
+          role: 'backup',
+          priority: 0,
+          features: ['trim', 'subtitles', 'items'],
+        },
+      });
+      expect(phoneRegister.statusCode).toBe(204);
+
+      const info = (await roleApp.inject({ method: 'GET', url: '/api/info' })).json<{
+        nodeAvailability?: {
+          primaryNodes?: number;
+          backupNodes?: number;
+          healthyNodes: number;
+          providers: string[];
+        };
+      }>();
+      expect(info.nodeAvailability).toMatchObject({
+        healthyNodes: 2,
+        primaryNodes: 1,
+        backupNodes: 1,
+        providers: ['*'],
+      });
+
+      const phoneWaiting = roleApp.inject({
+        method: 'POST',
+        url: '/internal/extraction/claim',
+        headers: phoneHeaders,
+        payload: {
+          nodeId: 'phone',
+          providers: ['*'],
+          capacity: 2,
+          networkClass: 'residential',
+          transport: 'cellular',
+          role: 'backup',
+          features: ['trim', 'subtitles', 'items'],
+        },
+      });
+
+      const genericResolve = roleApp.inject({
+        method: 'POST',
+        url: '/api/media/info',
+        payload: { url: 'https://example.com/blog/video-post' },
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 60));
+
+      const pcClaim = await roleApp.inject({
+        method: 'POST',
+        url: '/internal/extraction/claim',
+        headers: pcHeaders,
+        payload: {
+          nodeId: 'pc',
+          providers: ['*'],
+          capacity: 1,
+          networkClass: 'residential',
+          role: 'primary',
+          priority: 10,
+          features: ['trim', 'subtitles', 'items'],
+        },
+      });
+      expect(pcClaim.statusCode).toBe(200);
+      const task = pcClaim.json<{ id: string; providerId: string }>();
+      expect(task.providerId).toBe('generic');
+
+      const resolvedSubmit = await roleApp.inject({
+        method: 'POST',
+        url: `/internal/extraction/${task.id}/resolved`,
+        headers: pcHeaders,
+        payload: {
+          media: {
+            provider: 'generic',
+            providerLabel: 'Web page',
+            url: 'https://example.com/blog/video-post',
+            type: 'single',
+            title: 'Generic page from PC',
+            items: [
+              {
+                index: 0,
+                kind: 'video',
+                plans: [
+                  {
+                    kind: 'video',
+                    container: 'mp4',
+                    label: 'Original',
+                    requiresConversion: false,
+                    recommended: true,
+                    fetch: { via: 'direct', url: 'https://cdn.example.com/video.mp4' },
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      });
+      expect(resolvedSubmit.statusCode).toBe(200);
+
+      const visitorRes = await genericResolve;
+      expect(visitorRes.statusCode).toBe(200);
+      expect(visitorRes.json<{ title: string }>().title).toBe('Generic page from PC');
+
+      const phoneRes = await phoneWaiting;
+      expect(phoneRes.statusCode).toBe(204);
+
+      const failoverResolve = roleApp.inject({
+        method: 'POST',
+        url: '/api/media/info',
+        payload: { url: 'https://example.com/direct-clip.mp4' },
+      });
+
+      const pcFailClaim = await roleApp.inject({
+        method: 'POST',
+        url: '/internal/extraction/claim',
+        headers: pcHeaders,
+        payload: {
+          nodeId: 'pc',
+          providers: ['*'],
+          capacity: 1,
+          networkClass: 'residential',
+          role: 'primary',
+          features: ['trim', 'subtitles', 'items'],
+        },
+      });
+      expect(pcFailClaim.statusCode).toBe(200);
+      const failedTask = pcFailClaim.json<{ id: string; providerId: string }>();
+      expect(failedTask.providerId).toBe('direct');
+
+      const phoneTakeoverPromise = roleApp.inject({
+        method: 'POST',
+        url: '/internal/extraction/claim',
+        headers: phoneHeaders,
+        payload: {
+          nodeId: 'phone',
+          providers: ['*'],
+          capacity: 2,
+          networkClass: 'residential',
+          transport: 'cellular',
+          role: 'backup',
+          features: ['trim', 'subtitles', 'items'],
+        },
+      });
+
+      await roleApp.inject({
+        method: 'POST',
+        url: `/internal/extraction/${failedTask.id}/failed`,
+        headers: pcHeaders,
+        payload: { code: 'NETWORK_ERROR', detail: 'pc network dropped' },
+      });
+
+      const phoneTakeover = await phoneTakeoverPromise;
+      expect(phoneTakeover.statusCode).toBe(200);
+      const backupTask = phoneTakeover.json<{ id: string; providerId: string; avoid?: string[] }>();
+      expect(backupTask.providerId).toBe('direct');
+      expect(backupTask.avoid).toContain('pc');
+
+      await roleApp.inject({
+        method: 'POST',
+        url: `/internal/extraction/${backupTask.id}/resolved`,
+        headers: phoneHeaders,
+        payload: {
+          media: {
+            provider: 'direct',
+            providerLabel: 'Direct file',
+            url: 'https://example.com/direct-clip.mp4',
+            type: 'single',
+            title: 'Direct clip from phone backup',
+            items: [
+              {
+                index: 0,
+                kind: 'video',
+                plans: [
+                  {
+                    kind: 'video',
+                    container: 'mp4',
+                    label: 'Original',
+                    requiresConversion: false,
+                    recommended: true,
+                    fetch: { via: 'direct', url: 'https://example.com/direct-clip.mp4' },
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      });
+
+      const failoverVisitor = await failoverResolve;
+      expect(failoverVisitor.statusCode).toBe(200);
+      expect(failoverVisitor.json<{ title: string }>().title).toBe('Direct clip from phone backup');
+    } finally {
+      await roleApp.close();
+      await roleEngine.close();
+      await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+    }
+  });
+
+  it('disables broken HTTP/3 Alt-Svc in Caddyfile and removes UDP 443 mapping in Oracle compose', async () => {
+    const caddyfile = await readFile(join(process.cwd(), 'deploy', 'Caddyfile'), 'utf8');
+    const oracleCompose = await readFile(
+      join(process.cwd(), 'deploy', 'docker-compose.oracle.yml'),
+      'utf8',
+    );
+    const autoUpdate = await readFile(join(process.cwd(), 'deploy', 'auto-update.sh'), 'utf8');
+
+    expect(caddyfile).toContain('protocols h1 h2');
+    expect(caddyfile).toContain('Alt-Svc "clear"');
+    expect(oracleCompose).not.toContain('443:443/udp');
+    expect(oracleCompose).toContain('SERA_EXTRACTION_PRIMARY_GRACE_MS');
+    expect(oracleCompose).toContain('SERA_EXTRACTION_PREFER_NODES');
+    expect(autoUpdate).toContain('SERA_REDIS_PASSWORD');
+    expect(autoUpdate).toContain('SERA_EXTRACTION_WORKER_TOKEN');
+    expect(autoUpdate).toContain('caddy reload');
+  });
+});

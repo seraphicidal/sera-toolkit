@@ -25,7 +25,7 @@ import { trimMedia } from '../convert/trim.js';
 import { seraError, SeraError } from '../errors.js';
 import { downloadDirect } from '../extract/direct-download.js';
 import { download as ytdlpDownload, downloadSubtitles } from '../extract/ytdlp.js';
-import { classifyFailure } from '../extract/failure.js';
+import { classifyFailure, isDefinitive } from '../extract/failure.js';
 import { logSafeUrl, type Logger } from '../logging.js';
 import {
   importExpired,
@@ -45,7 +45,11 @@ import {
 } from '../util/sniff.js';
 import { hostMatchesAny } from '../security/url.js';
 import type { MediaResolver } from '../resolver.js';
-import type { RemoteExtraction } from '../extract/remote.js';
+import {
+  nodeSupportsProvider,
+  requiredFeatures,
+  type RemoteExtraction,
+} from '../extract/remote.js';
 import type { NetworkClass } from '../extract/router.js';
 import { mimeTypeFor, type Workspace, type WorkspaceManager } from '../storage/workspace.js';
 import {
@@ -175,46 +179,93 @@ export class JobRunner {
       );
       let files: readonly { name: string; mimeType: string; path: string }[] = [];
       const remoteTaskIds = new Set<string>();
+      const jobItems = matched.map(({ item }) => ({
+        index: item.index,
+        ...(item.sourceId ? { sourceId: item.sourceId } : {}),
+      }));
+      const neededFeatures = requiredFeatures({
+        ...(needsInstagramSession ? { requires: ['instagram-session'] as const } : {}),
+        ...(spec.trim ? { trim: spec.trim } : {}),
+        ...(spec.subtitles ? { subtitles: spec.subtitles } : {}),
+        items: jobItems,
+      });
+      const triedNodes: string[] = [];
       try {
-        files = await this.deps.remote.dispatchJob(
-          {
-            kind: 'job',
-            url: spec.url,
-            providerId: spec.provider,
-            ...(networkClass ? { networkClass } : {}),
-            ...(needsInstagramSession ? { requires: ['instagram-session'] } : {}),
-            planKeys: matched.map(({ plan }) => planKey(plan)),
-            items: matched.map(({ item }) => ({
-              index: item.index,
-              ...(item.sourceId ? { sourceId: item.sourceId } : {}),
-            })),
-            ...(spec.filename ? { filename: spec.filename } : {}),
-            ...(spec.trim ? { trim: spec.trim } : {}),
-            ...(spec.subtitles ? { subtitles: spec.subtitles } : {}),
-          },
-          {
-            onTaskId: (taskId) => {
-              remoteTaskIds.add(taskId);
-            },
-            onProgress: (progress) =>
-              report({
-                state: 'downloading',
-                step: progress.step,
-                progress: {
-                  percent: Math.min(99, progress.percent),
-                  ...(progress.bytesDownloaded !== undefined
-                    ? { bytesDownloaded: progress.bytesDownloaded }
-                    : {}),
-                  ...(progress.bytesTotal !== undefined ? { bytesTotal: progress.bytesTotal } : {}),
-                  ...(progress.speedBytesPerSecond !== undefined
-                    ? { speedBytesPerSecond: progress.speedBytesPerSecond }
-                    : {}),
-                  ...(progress.etaSeconds !== undefined ? { etaSeconds: progress.etaSeconds } : {}),
+        for (;;) {
+          let claimedBy: string | undefined;
+          try {
+            files = await this.deps.remote.dispatchJob(
+              {
+                kind: 'job',
+                url: spec.url,
+                providerId: spec.provider,
+                ...(networkClass ? { networkClass } : {}),
+                ...(needsInstagramSession ? { requires: ['instagram-session'] } : {}),
+                ...(triedNodes.length ? { avoid: [...triedNodes] } : {}),
+                planKeys: matched.map(({ plan }) => planKey(plan)),
+                items: jobItems,
+                ...(spec.filename ? { filename: spec.filename } : {}),
+                ...(spec.trim ? { trim: spec.trim } : {}),
+                ...(spec.subtitles ? { subtitles: spec.subtitles } : {}),
+              },
+              {
+                onClaimed: (nodeId) => {
+                  claimedBy = nodeId;
                 },
-              }),
-            ...(signal ? { signal } : {}),
-          },
-        );
+                onTaskId: (taskId) => {
+                  remoteTaskIds.add(taskId);
+                },
+                onProgress: (progress) =>
+                  report({
+                    state: 'downloading',
+                    step: progress.step,
+                    progress: {
+                      percent: Math.min(99, progress.percent),
+                      ...(progress.bytesDownloaded !== undefined
+                        ? { bytesDownloaded: progress.bytesDownloaded }
+                        : {}),
+                      ...(progress.bytesTotal !== undefined
+                        ? { bytesTotal: progress.bytesTotal }
+                        : {}),
+                      ...(progress.speedBytesPerSecond !== undefined
+                        ? { speedBytesPerSecond: progress.speedBytesPerSecond }
+                        : {}),
+                      ...(progress.etaSeconds !== undefined
+                        ? { etaSeconds: progress.etaSeconds }
+                        : {}),
+                    },
+                  }),
+                ...(signal ? { signal } : {}),
+              },
+            );
+            break;
+          } catch (error) {
+            const failure = classifyFailure(error);
+            const code = SeraError.from(error).code;
+            if (
+              !claimedBy ||
+              isDefinitive(failure) ||
+              code === 'TOO_LARGE' ||
+              code === 'TOO_LONG' ||
+              code === 'PROVIDER_AUTH_REQUIRED' ||
+              signal?.aborted
+            ) {
+              throw error;
+            }
+            triedNodes.push(claimedBy);
+            const statuses =
+              typeof this.deps.remote.status === 'function' ? this.deps.remote.status() : [];
+            const hasAlternative = statuses.some(
+              (node) =>
+                node.healthy &&
+                !triedNodes.includes(node.id) &&
+                (networkClass === undefined || node.networkClass === networkClass) &&
+                nodeSupportsProvider(node.providers, spec.provider) &&
+                neededFeatures.every((feature) => (node.features ?? []).includes(feature)),
+            );
+            if (!hasAlternative) throw error;
+          }
+        }
 
         if (!files.length) {
           throw seraError('MEDIA_UNAVAILABLE', { detail: 'remote task produced no files' });
@@ -1634,7 +1685,7 @@ function remoteNetworkClassFor(
   const sessionNodes = statuses.filter(
     (node) =>
       node.healthy &&
-      (!node.providers.length || node.providers.includes(providerId)) &&
+      nodeSupportsProvider(node.providers, providerId) &&
       (node.features ?? []).includes('instagram-session'),
   );
   if (!sessionNodes.length) return 'residential';

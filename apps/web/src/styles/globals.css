@@ -37,7 +37,19 @@
 
 @custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
 
+:root,
+:root[data-theme='light'] {
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+  }
+}
+
 :root[data-theme='dark'] {
+  color-scheme: dark;
   --color-canvas: oklch(0.155 0.004 265);
   --color-surface: oklch(0.195 0.005 265);
   --color-sunken: oklch(0.235 0.006 265);

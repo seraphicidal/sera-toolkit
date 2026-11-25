@@ -26,7 +26,6 @@ export class GenericProvider implements MediaProvider {
   readonly capabilities: ProviderCapabilities = declare({
     image: true,
     carousel: true,
-    residentialFallback: false,
   });
 
   private readonly delegate = new (class extends YtdlpProvider {

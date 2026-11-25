@@ -519,11 +519,22 @@ describe('provider capabilities', () => {
     }
   });
 
-  it('keeps an unconstrained URL off a connection that is not ours', () => {
-    for (const id of ['generic', 'direct', 'mastodon']) {
-      expect(capabilitiesOf(id)?.residentialFallback, id).toBe(false);
+  it('allows extraction node routing across all registered providers including generic and direct', () => {
+    for (const id of [
+      'generic',
+      'direct',
+      'mastodon',
+      'gdrive',
+      'dropbox',
+      'mediafire',
+      'mega',
+      'youtube',
+    ]) {
+      expect(capabilitiesOf(id)?.residentialFallback, id).toBe(true);
     }
-    expect(capabilitiesOf('youtube')?.residentialFallback).toBe(true);
+    for (const provider of registry.list()) {
+      expect(provider.capabilities.residentialFallback, provider.id).toBe(true);
+    }
   });
 
   it('says where a datacentre has already been measured as refused', () => {

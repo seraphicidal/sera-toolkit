@@ -28,6 +28,24 @@ if [ -z "$domain" ]; then
   exit 1
 fi
 
+ensure_env_var() {
+  local key="$1" bytes="$2" current value tmp
+  current=$(sed -n "s/^${key}=//p" "$DIR/.env" | tail -n 1 | tr -d '"'"'"' \r')
+  if [ -n "$current" ]; then
+    return 0
+  fi
+  value=$(openssl rand -hex "$bytes")
+  tmp=$(mktemp "$DIR/.env.tmp.XXXXXX")
+  chmod 600 "$tmp"
+  grep -Ev "^${key}=" "$DIR/.env" >"$tmp" || true
+  printf '%s=%s\n' "$key" "$value" >>"$tmp"
+  mv -f "$tmp" "$DIR/.env"
+  log "generated missing ${key} in .env"
+}
+
+ensure_env_var SERA_REDIS_PASSWORD 24
+ensure_env_var SERA_EXTRACTION_WORKER_TOKEN 32
+
 escape_curl_cfg() {
   local v="$1"
   v="${v//$'\r'/}"
@@ -166,6 +184,7 @@ fi
 
 log "deploying $(git rev-parse --short HEAD)"
 sera up -d --remove-orphans
+sera exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1 || true
 if wait_healthy; then
   rm -f "$REFUSED"
   docker image prune -f >/dev/null
@@ -178,6 +197,7 @@ log "not healthy within ${HEALTH_TIMEOUT_SECONDS}s; rolling back to ${old_rev:0:
 echo "$new_rev $pending_digests" >"$REFUSED"
 restore
 sera up -d --remove-orphans
+sera exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1 || true
 if wait_healthy; then
   log "rolled back; healthy again"
   status failed "rolled-back $(git -C "$DIR" rev-parse --short "$new_rev")"

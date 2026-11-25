@@ -2,13 +2,15 @@ import { MESSAGES, seraError, type SeraError } from '../errors.js';
 import type { Logger } from '../logging.js';
 import type { ResolvedMedia } from '../providers/types.js';
 import { readBoundedJson } from '../security/http.js';
-import type {
-  NodeFeature,
-  NodeStatus,
-  RemoteExtraction,
-  RemoteFile,
-  RemoteProgress,
-  RemoteTask,
+import {
+  isWildcardProviders,
+  nodeSupportsProvider,
+  type NodeFeature,
+  type NodeStatus,
+  type RemoteExtraction,
+  type RemoteFile,
+  type RemoteProgress,
+  type RemoteTask,
 } from './remote.js';
 import type { NetworkClass } from './router.js';
 
@@ -80,8 +82,11 @@ export class RemoteOverHttp implements RemoteExtraction {
   }
 
   availableProviders(networkClass?: NetworkClass): string[] {
+    const live = this.live(networkClass);
+    if (!live.length) return [];
     const providers = new Set<string>();
-    for (const node of this.live(networkClass)) {
+    for (const node of live) {
+      if (isWildcardProviders(node.providers)) return ['*'];
       for (const provider of node.providers) providers.add(provider);
     }
     return [...providers];
@@ -97,7 +102,7 @@ export class RemoteOverHttp implements RemoteExtraction {
         node.healthy &&
         !except.includes(node.id) &&
         (node.features ?? []).includes(feature) &&
-        (providerId === undefined || !node.providers.length || node.providers.includes(providerId)),
+        (providerId === undefined || nodeSupportsProvider(node.providers, providerId)),
     );
   }
 
@@ -125,6 +130,7 @@ export class RemoteOverHttp implements RemoteExtraction {
     task: Omit<RemoteTask, 'id' | 'createdAt'>,
     options: {
       onProgress?: (progress: RemoteProgress) => void;
+      onClaimed?: (nodeId: string) => void;
       onTaskId?: (taskId: string) => void;
       signal?: AbortSignal;
     } = {},

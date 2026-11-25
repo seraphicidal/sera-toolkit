@@ -24,7 +24,6 @@ export class DirectFileProvider implements MediaProvider {
   readonly capabilities: ProviderCapabilities = declare({
     image: true,
     gif: true,
-    residentialFallback: false,
   });
 
   canHandle(url: URL): boolean {

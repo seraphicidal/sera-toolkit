@@ -96,6 +96,22 @@ function unwrapWords(words: number[]): string | undefined {
   return undefined;
 }
 
+function unwrapNat64Words(words: number[]): string | undefined {
+  if (
+    words[0] === 0x0064 &&
+    words[1] === 0xff9b &&
+    words[2] === 0 &&
+    words[3] === 0 &&
+    words[4] === 0 &&
+    words[5] === 0
+  ) {
+    const high = words[6]!;
+    const low = words[7]!;
+    return `${high >> 8}.${high & 0xff}.${low >> 8}.${low & 0xff}`;
+  }
+  return undefined;
+}
+
 export function unwrapIpv4Mapped(address: string): string | undefined {
   const words = parseIpv6Words(address);
   return words ? unwrapWords(words) : undefined;
@@ -107,7 +123,7 @@ export function isPublicAddress(address: string): boolean {
   if (isIPv6(trimmed)) {
     const words = parseIpv6Words(trimmed);
     if (!words) return false;
-    const mapped = unwrapWords(words);
+    const mapped = unwrapWords(words) ?? unwrapNat64Words(words);
     if (mapped) return isIPv4(mapped) && !blocked.check(mapped, 'ipv4');
     if ((words[0]! & 0xff00) === 0) return false;
     return !blocked.check(trimmed, 'ipv6');

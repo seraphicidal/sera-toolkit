@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useId, useReducer, useRef, useState } from 'react';
+import { createTimeoutSignal } from '@/lib/abort';
 import { cx } from '@/lib/format';
 import {
   describeHealth,
@@ -25,15 +26,18 @@ const DOT: Record<HealthLight, string> = {
 };
 
 async function observe(signal: AbortSignal) {
+  const timeout = createTimeoutSignal(signal, REQUEST_TIMEOUT_MS);
   try {
     const response = await fetch('/health', {
       cache: 'no-store',
-      signal: AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]),
+      signal: timeout.signal,
     });
     const body: unknown = await response.json();
     return isHealthReport(body) ? { ok: true as const, report: body } : { ok: false as const };
   } catch {
     return { ok: false as const };
+  } finally {
+    timeout.cleanup();
   }
 }
 

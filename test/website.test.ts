@@ -28,8 +28,14 @@ describe('Website Legal Pages Content & Compliance', () => {
   const downloaderPath = fileURLToPath(
     new URL('../apps/web/src/components/downloader.tsx', import.meta.url),
   );
+  const itemPickerPath = fileURLToPath(
+    new URL('../apps/web/src/components/item-picker.tsx', import.meta.url),
+  );
   const importClientPath = fileURLToPath(
     new URL('../apps/web/src/components/import-client.tsx', import.meta.url),
+  );
+  const healthIndicatorPath = fileURLToPath(
+    new URL('../apps/web/src/components/health-indicator.tsx', import.meta.url),
   );
   const apiRoutePath = fileURLToPath(
     new URL('../apps/web/src/app/api/[...path]/route.ts', import.meta.url),
@@ -105,6 +111,8 @@ describe('Website Legal Pages Content & Compliance', () => {
     expect(content).toContain('6 releases');
     expect(content).toContain('7,071 lines changed');
     expect(content).toContain('nodeAvailability');
+    expect(content).toContain('primaryNodes');
+    expect(content).toContain('backupNodes');
   });
 
   it('verifies Global Navigation footer includes all mandatory legal routes and validated nonce', () => {
@@ -124,9 +132,23 @@ describe('Website Legal Pages Content & Compliance', () => {
     expect(css).toContain('--color-surface');
     expect(css).toContain('--color-ink');
     expect(css).toContain('--color-ink-muted');
+    expect(css).toContain('color-scheme: light');
+    expect(css).toContain('color-scheme: dark');
+    expect(css).toContain('prefers-color-scheme: dark');
     expect(css).toContain('forced-colors: active');
     expect(existsSync(errorBoundaryPath)).toBe(true);
     expect(existsSync(notFoundPath)).toBe(true);
+  });
+
+  it('verifies item picker removes numeric range bar and gates filter on larger collections', () => {
+    const picker = readFileSync(itemPickerPath, 'utf8');
+    expect(picker).not.toContain('Select Range');
+    expect(picker).not.toContain('Range start index');
+    expect(picker).not.toContain('Range end index');
+    expect(picker).not.toContain('type="number"');
+    expect(picker).toContain('Select All');
+    expect(picker).toContain('selectItemRange');
+    expect(picker).toContain('FILTER_THRESHOLD = 6');
   });
 
   it('verifies web hardening regressions (API route allowlist, mobile trim inputMode, no dead postMessage)', () => {
@@ -144,5 +166,14 @@ describe('Website Legal Pages Content & Compliance', () => {
     const importClient = readFileSync(importClientPath, 'utf8');
     expect(importClient).not.toContain('openImportChannel');
     expect(importClient).not.toContain('window.opener');
+
+    const healthIndicator = readFileSync(healthIndicatorPath, 'utf8');
+    const reportForm = readFileSync(reportFormPath, 'utf8');
+    expect(healthIndicator).toContain('createTimeoutSignal');
+    expect(healthIndicator).not.toContain('AbortSignal.any');
+    expect(healthIndicator).not.toContain('AbortSignal.timeout');
+    expect(reportForm).toContain('createTimeoutSignal');
+    expect(reportForm).not.toContain('AbortSignal.any');
+    expect(reportForm).not.toContain('AbortSignal.timeout');
   });
 });

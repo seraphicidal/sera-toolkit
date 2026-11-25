@@ -182,6 +182,7 @@ export class MediaResolver {
       logger: this.logger,
       fallbacks: deps.remoteBackends ?? (() => []),
       capabilitiesOf: (providerId) => this.registry.get(providerId)?.capabilities,
+      preferRemote: deps.config.extractionNodes.preferNodes,
       authenticated: (providerId) => {
         const feature = this.registry.get(providerId)?.nodeSession;
         return feature ? deps.sessionBackend?.(feature, providerId) : undefined;

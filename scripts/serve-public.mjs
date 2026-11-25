@@ -3,14 +3,29 @@
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { networkInterfaces } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const LOCAL_ONLY = process.argv.includes('--local');
+const LAN = process.argv.includes('--lan');
 
 const API_PORT = 4000;
 const WEB_PORT = 3200;
+const WEB_HOST = process.env.SERA_WEB_HOST?.trim() || (LAN ? '0.0.0.0' : '127.0.0.1');
+
+function lanIpv4Addresses() {
+  const addresses = [];
+  for (const entries of Object.values(networkInterfaces())) {
+    for (const entry of entries ?? []) {
+      if (entry.family === 'IPv4' && !entry.internal) {
+        addresses.push(entry.address);
+      }
+    }
+  }
+  return addresses;
+}
 
 function loadOrCreateSecret() {
   const path = join(ROOT, '.env.production.local');
@@ -174,7 +189,12 @@ supervise(
   '32',
 );
 
-console.log('[sera] starting production web on 127.0.0.1:' + WEB_PORT);
+console.log(`[sera] starting production web on ${WEB_HOST}:${WEB_PORT}`);
+if (WEB_HOST === '0.0.0.0') {
+  for (const ip of lanIpv4Addresses()) {
+    console.log(`[sera] phone / LAN URL: http://${ip}:${WEB_PORT}`);
+  }
+}
 supervise(
   'web',
   process.execPath,
@@ -182,7 +202,7 @@ supervise(
   () => ({
     ...env,
     PORT: String(WEB_PORT),
-    HOSTNAME: '127.0.0.1',
+    HOSTNAME: WEB_HOST,
     SERA_API_URL: `http://127.0.0.1:${API_PORT}`,
   }),
   '35',
