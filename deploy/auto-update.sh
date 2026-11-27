@@ -183,20 +183,23 @@ if [ "$before" = "$after" ] && [ "$old_rev" = "$new_rev" ]; then
 fi
 
 log "deploying $(git rev-parse --short HEAD)"
-sera up -d --remove-orphans
-sera exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1 || true
-if wait_healthy; then
-  rm -f "$REFUSED"
-  docker image prune -f >/dev/null
-  log "healthy"
-  status ok "$(git rev-parse --short HEAD) $(docker exec "$(sera ps -q api)" yt-dlp --version 2>/dev/null || true)"
-  exit 0
+if sera up -d --remove-orphans; then
+  sera exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1 || true
+  if wait_healthy; then
+    rm -f "$REFUSED"
+    docker image prune -f >/dev/null
+    log "healthy"
+    status ok "$(git rev-parse --short HEAD) $(docker exec "$(sera ps -q api)" yt-dlp --version 2>/dev/null || true)"
+    exit 0
+  fi
+  log "not healthy within ${HEALTH_TIMEOUT_SECONDS}s; rolling back to ${old_rev:0:7}"
+else
+  log "compose failed to start the stack; rolling back to ${old_rev:0:7}"
 fi
 
-log "not healthy within ${HEALTH_TIMEOUT_SECONDS}s; rolling back to ${old_rev:0:7}"
 echo "$new_rev $pending_digests" >"$REFUSED"
 restore
-sera up -d --remove-orphans
+sera up -d --remove-orphans || log "compose failed to start the rolled-back stack"
 sera exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1 || true
 if wait_healthy; then
   log "rolled back; healthy again"

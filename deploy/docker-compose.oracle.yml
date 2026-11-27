@@ -259,7 +259,7 @@ services:
     image: redis:7.4-alpine
     restart: unless-stopped
     command:
-      - su-exec
+      - gosu
       - redis
       - sh
       - -ec
@@ -281,7 +281,7 @@ services:
       - internal-net
     read_only: true
     tmpfs:
-      - /tmp:noexec,nosuid,nodev,size=16m
+      - /tmp:noexec,nosuid,nodev,size=16m,mode=1777
     security_opt:
       - no-new-privileges:true
     cap_drop:
