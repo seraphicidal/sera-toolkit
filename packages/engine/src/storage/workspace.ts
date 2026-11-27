@@ -42,6 +42,7 @@ const SCRATCH_DIR = 'work';
 export class WorkspaceManager {
   private readonly activeJobs = new Set<string>();
   private readonly activeDownloads = new Map<string, number>();
+  private readonly activeLeaseOps = new Map<string, Promise<void>>();
 
   constructor(
     private readonly rootDir: string,
@@ -49,45 +50,69 @@ export class WorkspaceManager {
     private readonly logger: Logger,
   ) {}
 
+  private enqueueActiveLeaseOp(jobId: string, op: () => Promise<void>): Promise<void> {
+    const previous = this.activeLeaseOps.get(jobId) ?? Promise.resolve();
+    const next = previous
+      .catch(() => undefined)
+      .then(op)
+      .catch(() => undefined);
+    const tracked = next.finally(() => {
+      if (this.activeLeaseOps.get(jobId) === tracked) {
+        this.activeLeaseOps.delete(jobId);
+      }
+    });
+    this.activeLeaseOps.set(jobId, tracked);
+    return tracked;
+  }
+
   markActive(jobId: string): void {
     this.activeJobs.add(jobId);
-    void writeFile(join(this.jobDir(jobId), ACTIVE_LEASE_NAME), String(process.pid)).catch(
-      () => undefined,
+    const leasePath = join(this.jobDir(jobId), ACTIVE_LEASE_NAME);
+    void this.enqueueActiveLeaseOp(jobId, () =>
+      writeFile(leasePath, String(process.pid)).catch(() => undefined),
     );
   }
 
   markInactive(jobId: string): void {
     this.activeJobs.delete(jobId);
-    void unlink(join(this.jobDir(jobId), ACTIVE_LEASE_NAME)).catch(() => undefined);
+    const leasePath = join(this.jobDir(jobId), ACTIVE_LEASE_NAME);
+    void this.enqueueActiveLeaseOp(jobId, () => unlink(leasePath).catch(() => undefined));
   }
 
   acquireDownload(jobId: string): () => void {
     this.activeDownloads.set(jobId, (this.activeDownloads.get(jobId) ?? 0) + 1);
     let leasePath: string | undefined;
+    let leaseOp: Promise<void> = Promise.resolve();
     try {
       leasePath = join(
         this.jobDir(jobId),
         `${DOWNLOAD_LEASE_PREFIX}${String(process.pid)}-${randomBytes(6).toString('hex')}`,
       );
-      void writeFile(leasePath, String(process.pid)).catch(() => undefined);
+      const target = leasePath;
+      leaseOp = writeFile(target, String(process.pid)).catch(() => undefined);
     } catch {
       leasePath = undefined;
     }
+    let released = false;
     const refreshTimer = leasePath
       ? setInterval(() => {
-          const now = new Date();
-          void utimes(leasePath!, now, now).catch(() => undefined);
+          const target = leasePath!;
+          leaseOp = leaseOp.then(() => {
+            if (released) return;
+            const now = new Date();
+            return utimes(target, now, now).catch(() => undefined);
+          });
         }, DOWNLOAD_LEASE_REFRESH_MS)
       : undefined;
     refreshTimer?.unref();
 
-    let released = false;
     return () => {
       if (released) return;
       released = true;
       if (refreshTimer) clearInterval(refreshTimer);
       if (leasePath) {
-        void unlink(leasePath).catch(() => undefined);
+        const target = leasePath;
+        leaseOp = leaseOp.then(() => unlink(target).catch(() => undefined));
       }
       const next = (this.activeDownloads.get(jobId) ?? 1) - 1;
       if (next <= 0) this.activeDownloads.delete(jobId);
@@ -115,7 +140,11 @@ export class WorkspaceManager {
     await mkdir(scratch, { recursive: true });
     await mkdir(output, { recursive: true });
     if (this.activeJobs.has(jobId)) {
-      await writeFile(join(base, ACTIVE_LEASE_NAME), String(process.pid)).catch(() => undefined);
+      await this.enqueueActiveLeaseOp(jobId, () =>
+        this.activeJobs.has(jobId)
+          ? writeFile(join(base, ACTIVE_LEASE_NAME), String(process.pid)).catch(() => undefined)
+          : Promise.resolve(),
+      );
     }
     return new Workspace(jobId, base, scratch, output);
   }
@@ -150,6 +179,7 @@ export class WorkspaceManager {
 
   async destroy(jobId: string): Promise<void> {
     this.activeJobs.delete(jobId);
+    await (this.activeLeaseOps.get(jobId) ?? Promise.resolve());
     await rm(this.jobDir(jobId), { recursive: true, force: true }).catch(() => undefined);
   }
 

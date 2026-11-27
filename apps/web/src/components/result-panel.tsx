@@ -44,6 +44,7 @@ export function ResultPanel({
   job,
   onReset,
   onDownloadAgain,
+  downloadAgainLabel = 'Analyze again',
   hasNextInBatch = false,
   batchNextLabel,
   onNextInBatch,
@@ -51,6 +52,7 @@ export function ResultPanel({
   readonly job: Job;
   readonly onReset: () => void;
   readonly onDownloadAgain?: () => void;
+  readonly downloadAgainLabel?: string;
   readonly hasNextInBatch?: boolean;
   readonly batchNextLabel?: string;
   readonly onNextInBatch?: () => void;
@@ -173,6 +175,15 @@ export function ResultPanel({
   const previewKind = !result.isArchive ? mediaKindFromFilename(result.filename) : undefined;
   const safeMainUrl =
     !expired && isSafeDownloadPath(result.downloadPath) ? result.downloadPath : undefined;
+  const isMultiIndividual = !result.isArchive && Boolean(result.files && result.files.length > 1);
+  const totalBytes =
+    isMultiIndividual && result.files
+      ? result.files.reduce((sum, file) => sum + file.sizeBytes, 0)
+      : result.sizeBytes;
+  const headerName =
+    isMultiIndividual && result.files
+      ? `${pluralize(result.files.length, 'file')} · ${result.filename}`
+      : result.filename;
 
   return (
     <section
@@ -195,11 +206,11 @@ export function ResultPanel({
               {expired ? 'Download expired' : 'Ready'}
             </h2>
             <p className="flex items-center gap-1.5 text-[0.8125rem] text-[var(--color-ink-muted)]">
-              <span className="truncate" title={result.filename}>
-                {result.filename}
+              <span className="truncate" title={headerName}>
+                {headerName}
               </span>
               <span className="tabular shrink-0 text-[var(--color-ink-faint)]">
-                · {formatBytes(result.sizeBytes)}
+                · {formatBytes(totalBytes)}
               </span>
             </p>
           </div>
@@ -269,7 +280,7 @@ export function ResultPanel({
               onClick={onDownloadAgain}
               className="flex h-11 w-full cursor-pointer items-center justify-center gap-2 rounded-[var(--radius-input)] bg-[var(--color-accent)] text-[0.9375rem] font-medium text-[var(--color-accent-ink)] transition-colors hover:bg-[var(--color-accent-hover)]"
             >
-              Analyze again
+              {downloadAgainLabel}
             </button>
           )}
         </div>
@@ -282,7 +293,11 @@ export function ResultPanel({
               className="flex h-12 min-w-[11rem] flex-1 items-center justify-center gap-2 rounded-[var(--radius-input)] bg-[var(--color-accent)] px-4 text-[0.9375rem] font-medium text-[var(--color-accent-ink)] transition-colors hover:bg-[var(--color-accent-hover)]"
             >
               <DownloadIcon size={17} />
-              {result.isArchive ? 'Download ZIP' : 'Download'}
+              {result.isArchive
+                ? 'Download ZIP'
+                : isMultiIndividual
+                  ? 'Download 1st file'
+                  : 'Download'}
             </a>
           ) : (
             <button
@@ -325,7 +340,7 @@ export function ResultPanel({
       )}
 
       {!expired && result.files && result.files.length > 1 && (
-        <details className="group mt-3">
+        <details open={!result.isArchive} className="group mt-3">
           <summary className="flex min-h-9 cursor-pointer list-none items-center gap-1.5 text-[0.8125rem] text-[var(--color-ink-muted)] transition-colors hover:text-[var(--color-ink)]">
             <span className="transition-transform group-open:rotate-90">›</span>
             {pluralize(result.files.length, 'file')} individually

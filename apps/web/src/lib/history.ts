@@ -1,3 +1,8 @@
+export interface HistoryEntryFile {
+  readonly name: string;
+  readonly downloadPath: string;
+}
+
 export interface HistoryEntry {
   readonly jobId: string;
   readonly title: string;
@@ -7,6 +12,9 @@ export interface HistoryEntry {
   readonly downloadPath: string;
   readonly savedAt: string;
   readonly expiresAt: string;
+  readonly fileCount?: number;
+  readonly isArchive?: boolean;
+  readonly files?: readonly HistoryEntryFile[];
 }
 
 export const HISTORY_KEY = 'sera-history';
@@ -23,16 +31,46 @@ export function browserStore(): Store | undefined {
   }
 }
 
+function isSafeApiPath(value: unknown): value is string {
+  return typeof value === 'string' && value.startsWith('/api/') && !value.startsWith('//');
+}
+
+function isEntryFile(value: unknown): value is HistoryEntryFile {
+  if (!value || typeof value !== 'object') return false;
+  const file = value as Record<string, unknown>;
+  return typeof file.name === 'string' && file.name.length > 0 && isSafeApiPath(file.downloadPath);
+}
+
 function isEntry(value: unknown): value is HistoryEntry {
   if (!value || typeof value !== 'object') return false;
   const entry = value as Record<string, unknown>;
-  return (
-    ['jobId', 'title', 'source', 'url', 'filename', 'downloadPath', 'savedAt', 'expiresAt'].every(
+  if (
+    !['jobId', 'title', 'source', 'url', 'filename', 'downloadPath', 'savedAt', 'expiresAt'].every(
       (key) => typeof entry[key] === 'string',
-    ) &&
-    (entry.downloadPath as string).startsWith('/api/') &&
-    /^https?:\/\//i.test(entry.url as string)
-  );
+    ) ||
+    !isSafeApiPath(entry.downloadPath) ||
+    !/^https?:\/\//i.test(entry.url as string)
+  ) {
+    return false;
+  }
+  if (
+    entry.fileCount !== undefined &&
+    (typeof entry.fileCount !== 'number' ||
+      !Number.isInteger(entry.fileCount) ||
+      entry.fileCount < 1)
+  ) {
+    return false;
+  }
+  if (entry.isArchive !== undefined && typeof entry.isArchive !== 'boolean') {
+    return false;
+  }
+  if (
+    entry.files !== undefined &&
+    (!Array.isArray(entry.files) || !entry.files.every(isEntryFile))
+  ) {
+    return false;
+  }
+  return true;
 }
 
 export function readHistory(store: Store | undefined = browserStore()): HistoryEntry[] {

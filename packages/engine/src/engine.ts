@@ -139,7 +139,9 @@ export class SeraEngine {
         );
       }
       if (remoteToken) {
-        remote = new RemoteOverHttp(config.apiUrl, remoteToken, logger);
+        const httpRemote = new RemoteOverHttp(config.apiUrl, remoteToken, logger);
+        await httpRemote.waitForInitialRefresh();
+        remote = httpRemote;
       }
     }
     const resolver = new MediaResolver({

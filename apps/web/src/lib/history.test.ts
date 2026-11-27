@@ -97,6 +97,39 @@ describe('the history', () => {
     });
     expect(readHistory(store).map((e) => e.jobId)).toEqual(['job4']);
   });
+
+  it('preserves multi-file metadata and drops entries with unsafe individual file paths', () => {
+    const store = memoryStore();
+    addToHistory(
+      entry(1, {
+        fileCount: 2,
+        isArchive: false,
+        files: [
+          { name: 'clip-1.mp4', downloadPath: '/api/jobs/job1/files/clip-1.mp4' },
+          { name: 'clip-2.mp4', downloadPath: '/api/jobs/job1/files/clip-2.mp4' },
+        ],
+      }),
+      store,
+    );
+    const saved = readHistory(store);
+    expect(saved).toHaveLength(1);
+    expect(saved[0]?.fileCount).toBe(2);
+    expect(saved[0]?.isArchive).toBe(false);
+    expect(saved[0]?.files).toHaveLength(2);
+
+    const poisoned = memoryStore({
+      [HISTORY_KEY]: JSON.stringify([
+        entry(2, {
+          fileCount: 2,
+          isArchive: false,
+          files: [{ name: 'bad.mp4', downloadPath: 'https://evil.example/bad.mp4' }],
+        }),
+        entry(3, { fileCount: 0 }),
+        entry(4),
+      ]),
+    });
+    expect(readHistory(poisoned).map((e) => e.jobId)).toEqual(['job4']);
+  });
 });
 
 describe('isExpired', () => {

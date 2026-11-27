@@ -8,6 +8,7 @@ import dev.sera.node.data.UploadOffsetMismatchException
 import dev.sera.node.model.NetworkState
 import kotlinx.coroutines.CancellationException
 import java.io.IOException
+import kotlin.math.max
 import kotlin.math.min
 
 object NodeServicePolicy {
@@ -17,9 +18,30 @@ object NodeServicePolicy {
     const val MAX_ERROR_BACKOFF_MS = 60_000L
     const val AUTH_BACKOFF_MS = 30_000L
     const val MAX_AUTH_FAILURES = 3
-    const val PROGRESS_HEARTBEAT_MS = 1_000L
-    const val PROGRESS_THROTTLE_MS = 250L
+    const val PROGRESS_HEARTBEAT_MS = 2_000L
+    const val PROGRESS_THROTTLE_MS = 1_000L
+    const val PROGRESS_PER_TASK_BUDGET_MS = 250L
+    const val PROGRESS_429_BASE_BACKOFF_MS = 2_000L
+    const val PROGRESS_429_MAX_BACKOFF_MS = 15_000L
     const val MAX_UPLOAD_RETRIES = 4
+
+    fun effectiveProgressThrottleMs(activeTaskCount: Int): Long {
+        val scaled = activeTaskCount.coerceAtLeast(1).toLong() * PROGRESS_PER_TASK_BUDGET_MS
+        return max(PROGRESS_THROTTLE_MS, scaled)
+    }
+
+    fun computeProgressRateLimitBackoffMs(
+        previousBackoffMs: Long,
+        retryAfterSeconds: Long? = null,
+    ): Long {
+        if (retryAfterSeconds != null && retryAfterSeconds > 0L) {
+            return (retryAfterSeconds * 1_000L).coerceIn(PROGRESS_429_BASE_BACKOFF_MS, PROGRESS_429_MAX_BACKOFF_MS)
+        }
+        val next = if (previousBackoffMs <= 0L) PROGRESS_429_BASE_BACKOFF_MS else previousBackoffMs * 2L
+        return min(next, PROGRESS_429_MAX_BACKOFF_MS)
+    }
+
+    fun shouldStopOnStickyRestart(serviceEnabled: Boolean): Boolean = !serviceEnabled
 
     fun buildNodeFeatures(instagramSessionId: String?): List<String> {
         val features = mutableListOf("trim", "subtitles", "items")

@@ -77,11 +77,19 @@ export const ItemPicker = memo(function ItemPicker({
     [info.items, onSelectAll, onSelectIds, onToggle],
   );
 
+  const isFiltered = showFilter && visibleItems.length !== info.items.length;
+
   const handleSelectAllVisible = (): void => {
-    const next = selectItemsUpToMax(visibleItems, maxItems);
+    const base = isFiltered ? selectedIdsRef.current : undefined;
+    const next = selectItemsUpToMax(visibleItems, maxItems, base);
     applySelection(next);
-    if (maxItems !== undefined && visibleItems.length > maxItems) {
-      setCapNotice(`Selected the first ${maxItems} items (server limit per download).`);
+    const allVisibleSelected = visibleItems.every((item) => next.has(item.id));
+    if (maxItems !== undefined && !allVisibleSelected) {
+      setCapNotice(
+        isFiltered
+          ? `Selection limit reached (${maxItems} items max per download).`
+          : `Selected the first ${maxItems} items (server limit per download).`,
+      );
     } else {
       setCapNotice(undefined);
     }
@@ -128,6 +136,7 @@ export const ItemPicker = memo(function ItemPicker({
   const noneSelected = selectedIds.size === 0;
   const atCap = maxItems !== undefined && selectedIds.size >= maxItems;
   const cappedPlaylist = maxItems !== undefined && info.items.length > maxItems;
+  const cappedVisible = maxItems !== undefined && visibleItems.length > maxItems;
 
   return (
     <fieldset data-item-picker="true" className="flex flex-col gap-3">
@@ -147,7 +156,11 @@ export const ItemPicker = memo(function ItemPicker({
             onClick={handleSelectAllVisible}
             className="min-h-9 cursor-pointer rounded-md px-2.5 py-1 text-[0.8125rem] font-medium text-[var(--color-accent)] transition-colors hover:bg-[var(--color-sunken)]"
           >
-            {cappedPlaylist ? `Select first ${maxItems}` : 'Select All'}
+            {cappedVisible
+              ? `Select first ${maxItems}`
+              : isFiltered
+                ? 'Select matches'
+                : 'Select All'}
           </button>
 
           <button

@@ -55,6 +55,10 @@ export abstract class YtdlpProvider implements MediaProvider {
     return [];
   }
 
+  protected probeExtractorArgs(url: URL, context: ProviderContext): readonly string[] {
+    return this.extractorArgs(url, context);
+  }
+
   protected useExtractors(_url: URL, _context: ProviderContext): string | undefined {
     return undefined;
   }
@@ -99,7 +103,7 @@ export abstract class YtdlpProvider implements MediaProvider {
     const useExtractors = this.useExtractors(url, context);
     const info = await context.probe(url.toString(), {
       playlist: this.wantsPlaylist(url),
-      extractorArgs: this.extractorArgs(url, context),
+      extractorArgs: this.probeExtractorArgs(url, context),
       timeoutMs: context.config.resolveTimeoutMsFor(this.id),
       maxEntries: context.config.maxItemsPerJob,
       ...(useExtractors ? { useExtractors } : {}),

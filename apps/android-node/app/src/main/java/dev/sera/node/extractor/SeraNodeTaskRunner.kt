@@ -20,6 +20,7 @@ import dev.sera.node.model.planKey
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -201,7 +202,8 @@ class SeraNodeTaskRunner(
             }
         }
 
-        val isCancelled: () -> Boolean = { localCancelled.get() }
+        val taskJob = currentCoroutineContext()[Job]
+        val isCancelled: () -> Boolean = { localCancelled.get() || taskJob?.isActive == false }
 
         return try {
             if (!isValidTaskId(task.id)) {
@@ -345,7 +347,13 @@ class SeraNodeTaskRunner(
                 sera.code == SeraErrorCode.UNSUPPORTED_SOURCE
             ) {
                 try {
-                    genericExtractor.resolve(canonical, execContext)
+                    val fallback = genericExtractor.resolve(canonical, execContext)
+                    fallback.copy(
+                        media = fallback.media.copy(
+                            provider = extractor.id,
+                            providerLabel = extractor.label,
+                        ),
+                    )
                 } catch (fallbackError: Throwable) {
                     if (fallbackError is CancellationException) throw fallbackError
                     val refusal = SeraException.from(fallbackError)
@@ -584,6 +592,7 @@ class SeraNodeTaskRunner(
             val subFile = fetchSubtitles(
                 resolved = resolved,
                 item = item,
+                plan = plan,
                 scratchDir = scratchDir,
                 index = index,
                 subtitles = subtitles,
@@ -646,6 +655,7 @@ class SeraNodeTaskRunner(
             subtitleFile = fetchSubtitles(
                 resolved = resolved,
                 item = item,
+                plan = usedPlan,
                 scratchDir = scratchDir,
                 index = index,
                 subtitles = subtitles,
@@ -756,7 +766,7 @@ class SeraNodeTaskRunner(
             coroutineScope {
                 val pumpJob = launch {
                     while (isActive) {
-                        delay(250L)
+                        delay(500L)
                         val p = resultRef.get() ?: continue
                         val frac = if (p.bytesTotal != null && p.bytesTotal > 0L) {
                             (p.bytesDownloaded.toDouble() / p.bytesTotal.toDouble()).coerceIn(0.0, 1.0) * DOWNLOAD_SHARE
@@ -814,6 +824,17 @@ class SeraNodeTaskRunner(
         } else {
             emptyList()
         }
+        val baseExtractorArgs = fetchPlan.extractorArgs.orEmpty()
+        val localPotArg = if (resolved.provider == "youtube") {
+            YoutubeExtractor.potExtractorArg(config, hotConfig)
+        } else {
+            null
+        }
+        val effectiveExtractorArgs = if (localPotArg != null && localPotArg !in baseExtractorArgs) {
+            baseExtractorArgs + localPotArg
+        } else {
+            baseExtractorArgs
+        }
 
         suspend fun runDownload(
             infoPath: File?,
@@ -832,7 +853,7 @@ class SeraNodeTaskRunner(
             coroutineScope {
                 val pumpJob = launch {
                     while (isActive) {
-                        delay(250L)
+                        delay(500L)
                         val p = latestProgressRef.get() ?: continue
                         val frac = (p.percent / 100.0) * DOWNLOAD_SHARE
                         onFraction(
@@ -854,7 +875,7 @@ class SeraNodeTaskRunner(
                             outputTemplate = "media.%(ext)s",
                             timeoutMs = timeoutMs,
                             maxFilesizeBytes = config.maxFilesizeBytes,
-                            extractorArgs = fetchPlan.extractorArgs.orEmpty(),
+                            extractorArgs = effectiveExtractorArgs,
                             extraArgs = youtubeExtra,
                             remoteComponents = youtubeRemoteComponents,
                             useExtractors = fetchPlan.useExtractors,
@@ -862,7 +883,7 @@ class SeraNodeTaskRunner(
                             remuxContainer = fetchPlan.remux,
                             audioFormat = fetchPlan.audio?.format,
                             audioQuality = fetchPlan.audio?.quality,
-                            playlistItem = if (resolved.items.size > 1) item.index + 1 else null,
+                            playlistItem = resolvePlaylistItem(resolved, item, fetchPlan),
                             expectedTotalBytes = plan.filesizeBytes,
                             subtitles = embedSubtitles?.let { YtdlpSubtitleFilter(it.lang, it.auto) },
                             sections = sections,
@@ -1012,7 +1033,7 @@ class SeraNodeTaskRunner(
         coroutineScope {
             val pumpJob = launch {
                 while (isActive) {
-                    delay(250L)
+                    delay(500L)
                     val pct = lastPctRef.get()
                     if (pct > 0.0) {
                         onFraction(
@@ -1106,6 +1127,7 @@ class SeraNodeTaskRunner(
     private suspend fun fetchSubtitles(
         resolved: ResolvedMedia,
         item: ResolvedItem,
+        plan: ResolvedPlan,
         scratchDir: File,
         index: Int,
         subtitles: RemoteSubtitleSpec,
@@ -1115,23 +1137,39 @@ class SeraNodeTaskRunner(
     ): File {
         val subDir = File(scratchDir, "subs-$index")
         withContext(Dispatchers.IO) { subDir.mkdirs() }
+        val fetchPlan = plan.fetch as? FetchPlan.Ytdlp
+            ?: item.plans.firstNotNullOfOrNull { it.fetch as? FetchPlan.Ytdlp }
+        val targetUrl = fetchPlan?.target ?: resolved.url
         val youtubeExtra = if (resolved.provider == "youtube") hotConfig?.youtube?.extraArgs.orEmpty() else emptyList()
         val youtubeRemoteComponents = if (resolved.provider == "youtube") {
             hotConfig?.youtube?.remoteComponents.orEmpty().map { it.trim() }.filter { it.isNotEmpty() }
         } else {
             emptyList()
         }
+        val baseExtractorArgs = fetchPlan?.extractorArgs.orEmpty()
+        val localPotArg = if (resolved.provider == "youtube") {
+            YoutubeExtractor.potExtractorArg(config, hotConfig)
+        } else {
+            null
+        }
+        val effectiveExtractorArgs = if (localPotArg != null && localPotArg !in baseExtractorArgs) {
+            baseExtractorArgs + localPotArg
+        } else {
+            baseExtractorArgs
+        }
         return executor.downloadSubtitles(
             YtdlpSubtitleOptions(
-                url = resolved.url,
+                url = targetUrl,
                 workdir = subDir,
                 lang = subtitles.lang,
                 auto = subtitles.auto,
                 format = if (subtitles.format == "vtt") "vtt" else "srt",
                 timeoutMs = min(config.jobTimeoutSeconds.toLong() * 1000L, 120_000L),
-                playlistItem = if (resolved.items.size > 1) item.index + 1 else null,
+                playlistItem = resolvePlaylistItem(resolved, item, fetchPlan),
+                extractorArgs = effectiveExtractorArgs,
                 extraArgs = youtubeExtra,
                 remoteComponents = youtubeRemoteComponents,
+                useExtractors = fetchPlan?.useExtractors,
                 allowPrivateAddresses = config.allowPrivateAddresses,
                 isCancelled = isCancelled,
             ),
@@ -1257,12 +1295,22 @@ fun taskSelections(task: RemoteTask, itemCount: Int): List<TaskSelection> {
     }
 }
 
+internal fun resolvePlaylistItem(
+    resolved: ResolvedMedia,
+    item: ResolvedItem,
+    fetchPlan: FetchPlan.Ytdlp?,
+): Int? {
+    if (!fetchPlan?.target.isNullOrBlank()) return null
+    return if (resolved.items.size > 1 || item.index > 0) item.index + 1 else null
+}
+
 fun matchSelection(resolved: ResolvedMedia, selection: TaskSelection): MatchedSelection {
     val item = (if (!selection.sourceId.isNullOrEmpty()) {
         resolved.items.firstOrNull { it.sourceId == selection.sourceId }
     } else {
         null
-    }) ?: resolved.items.getOrNull(selection.itemIndex)
+    }) ?: resolved.items.firstOrNull { it.index == selection.itemIndex }
+        ?: resolved.items.getOrNull(selection.itemIndex)
 
     if (item == null) {
         throw seraError(
@@ -1564,7 +1612,10 @@ fun sanitizeResolvedMedia(media: ResolvedMedia): ResolvedMedia {
         val sanitizedPlans = item.plans.map { plan ->
             val sanitizedFetch = when (val fetch = plan.fetch) {
                 is FetchPlan.Ytdlp -> fetch.copy(
-                    extractorArgs = fetch.extractorArgs?.map { it.trim().take(200) }?.filter { it.isNotEmpty() },
+                    extractorArgs = fetch.extractorArgs
+                        ?.map { it.trim().take(200) }
+                        ?.filter { it.isNotEmpty() && !YtdlpCommandBuilder.isForbiddenWireExtractorArg(it) }
+                        ?.ifEmpty { null },
                     useExtractors = fetch.useExtractors?.trim()?.take(128)?.ifEmpty { null },
                 )
                 is FetchPlan.Direct -> fetch
@@ -1575,7 +1626,7 @@ fun sanitizeResolvedMedia(media: ResolvedMedia): ResolvedMedia {
                 width = plan.width?.takeIf { it > 0 },
                 height = plan.height?.takeIf { it > 0 },
                 fps = plan.fps?.takeIf { it.isFinite() && it > 0.0 },
-                audioBitrateKbps = plan.audioBitrateKbps?.takeIf { it.isFinite() && it >= 0.0 },
+                audioBitrateKbps = plan.audioBitrateKbps?.takeIf { it.isFinite() && it > 0.0 },
                 videoCodec = plan.videoCodec?.trim()?.take(32)?.ifEmpty { null },
                 audioCodec = plan.audioCodec?.trim()?.take(32)?.ifEmpty { null },
                 filesizeBytes = plan.filesizeBytes?.takeIf { it >= 0L },

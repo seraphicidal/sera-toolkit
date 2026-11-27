@@ -385,6 +385,7 @@ export class JobRunner {
           const path = await this.fetchSubtitles({
             resolved,
             item,
+            plan,
             workspace,
             index,
             subtitles: spec.subtitles,
@@ -446,6 +447,7 @@ export class JobRunner {
           subtitlePath = await this.fetchSubtitles({
             resolved,
             item,
+            plan: used,
             workspace,
             index,
             subtitles: spec.subtitles,
@@ -708,6 +710,13 @@ export class JobRunner {
       ? await this.deps.resolver.egressProxy(target, config.proxyFor(args.resolved.provider))
       : config.proxyFor(args.resolved.provider);
 
+    const usePlaylistItem = !fetchPlan.target && (args.resolved.items.length > 1 || item.index > 0);
+    const effectiveExtractorArgs = localExtractorArgs(
+      args.resolved.provider,
+      fetchPlan.extractorArgs,
+      config,
+    );
+
     const runDownload = async (
       infoPath?: string,
       sections?: { start: number; end?: number; forceKeyframes: boolean },
@@ -737,9 +746,9 @@ export class JobRunner {
               ...(fetchPlan.audio.quality ? { audioQuality: fetchPlan.audio.quality } : {}),
             }
           : {}),
-        ...(args.resolved.items.length > 1 ? { playlistItem: item.index + 1 } : {}),
+        ...(usePlaylistItem ? { playlistItem: item.index + 1 } : {}),
         ...(plan.filesizeBytes ? { expectedTotalBytes: plan.filesizeBytes } : {}),
-        ...(fetchPlan.extractorArgs ? { extractorArgs: fetchPlan.extractorArgs } : {}),
+        ...(effectiveExtractorArgs.length ? { extractorArgs: effectiveExtractorArgs } : {}),
         ...(args.embedSubtitles
           ? { subtitles: { lang: args.embedSubtitles.lang, auto: args.embedSubtitles.auto } }
           : {}),
@@ -974,6 +983,7 @@ export class JobRunner {
   private async fetchSubtitles(args: {
     resolved: ResolvedMedia;
     item: ResolvedItem;
+    plan?: DownloadPlan;
     workspace: Workspace;
     index: number;
     subtitles: JobSubtitles;
@@ -982,20 +992,43 @@ export class JobRunner {
     const { config } = this.deps;
     const workdir = join(args.workspace.scratchDir, `subs-${args.index}`);
     await mkdir(workdir, { recursive: true });
+    const ytdlpFetch =
+      args.plan?.fetch.via === 'ytdlp'
+        ? args.plan.fetch
+        : args.item.plans.find((candidate) => candidate.fetch.via === 'ytdlp')?.fetch;
+    const fetchTarget = ytdlpFetch?.via === 'ytdlp' ? ytdlpFetch.target : undefined;
+    const target = fetchTarget ?? args.resolved.url;
+    if (
+      fetchTarget &&
+      (this.deps.resolver as Partial<{ isBlocked: (target: string | URL) => boolean }>).isBlocked?.(
+        fetchTarget,
+      ) === true
+    ) {
+      throw seraError('UNSUPPORTED_SOURCE', { detail: 'This URL has been blocked' });
+    }
+    const usePlaylistItem = !fetchTarget && (args.resolved.items.length > 1 || args.item.index > 0);
+    const effectiveExtractorArgs = localExtractorArgs(
+      args.resolved.provider,
+      ytdlpFetch?.via === 'ytdlp' ? ytdlpFetch.extractorArgs : undefined,
+      config,
+    );
+    const useExtractors = ytdlpFetch?.via === 'ytdlp' ? ytdlpFetch.useExtractors : undefined;
     const upstreamProxy = config.proxyFor(args.resolved.provider);
     const proxy = this.deps.resolver.egressProxy
-      ? await this.deps.resolver.egressProxy(args.resolved.url, upstreamProxy)
+      ? await this.deps.resolver.egressProxy(target, upstreamProxy)
       : upstreamProxy;
     return downloadSubtitles({
       binary: config.ytdlpPath,
       ffmpegPath: config.ffmpegPath,
       timeoutMs: Math.min(config.jobTimeoutSeconds * 1000, 120_000),
-      url: args.resolved.url,
+      url: target,
       workdir,
       lang: args.subtitles.lang,
       auto: args.subtitles.auto,
       format: args.subtitles.format === 'vtt' ? 'vtt' : 'srt',
-      ...(args.resolved.items.length > 1 ? { playlistItem: args.item.index + 1 } : {}),
+      ...(usePlaylistItem ? { playlistItem: args.item.index + 1 } : {}),
+      ...(effectiveExtractorArgs.length ? { extractorArgs: effectiveExtractorArgs } : {}),
+      ...(useExtractors ? { useExtractors } : {}),
       ...(proxy ? { proxy } : {}),
       ...(args.signal ? { signal: args.signal } : {}),
     });
@@ -1317,11 +1350,28 @@ interface MatchedSelection {
   readonly plan: DownloadPlan;
 }
 
+function localExtractorArgs(
+  provider: string,
+  planArgs: readonly string[] | undefined,
+  config: EngineConfig,
+): readonly string[] {
+  const args = planArgs ? [...planArgs] : [];
+  if (provider === 'youtube' && config.youtube.potProviderUrl) {
+    const potArg = `youtubepot-bgutilhttp:base_url=${config.youtube.potProviderUrl}`;
+    if (!args.some((arg) => arg.toLowerCase().startsWith('youtubepot-bgutilhttp:base_url='))) {
+      args.push(potArg);
+    }
+  }
+  return args;
+}
+
 export function matchSelection(resolved: ResolvedMedia, selection: JobSelection): MatchedSelection {
   const item =
     (selection.sourceId
       ? resolved.items.find((candidate) => candidate.sourceId === selection.sourceId)
-      : undefined) ?? resolved.items[selection.itemIndex];
+      : undefined) ??
+    resolved.items.find((candidate) => candidate.index === selection.itemIndex) ??
+    resolved.items[selection.itemIndex];
 
   if (!item) {
     throw seraError('EXPIRED', {

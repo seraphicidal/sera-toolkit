@@ -1933,5 +1933,70 @@ describe('PC primary vs phone backup routing, all-websites node default, and con
     expect(autoUpdate).toContain('SERA_REDIS_PASSWORD');
     expect(autoUpdate).toContain('SERA_EXTRACTION_WORKER_TOKEN');
     expect(autoUpdate).toContain('caddy reload');
+    expect(oracleCompose).toContain('- gosu');
+    expect(oracleCompose).not.toContain('- su-exec');
+  });
+
+  it('wakes dispatch long-poll immediately when claimedBy changes for callers passing seenClaimedBy', async () => {
+    const wakeLaptopToken = 'wake-laptop-token-0123456789';
+    const wakeWorkerToken = 'wake-worker-token-0123456789';
+    const dir = await mkdtemp(join(tmpdir(), 'sera-claim-wake-'));
+    const wakeEngine = await SeraEngine.create({
+      config: loadConfig({
+        NODE_ENV: 'test',
+        LOG_LEVEL: 'silent',
+        SERA_SECRET: 'wake-secret',
+        SERA_DATA_DIR: dir,
+        SERA_EXTRACTION_NODE_TOKENS: `laptop:${wakeLaptopToken}`,
+        SERA_EXTRACTION_WORKER_TOKEN: wakeWorkerToken,
+        SERA_EXTRACTION_CLAIM_HOLD_SECONDS: '1',
+      }),
+    });
+    const wakeApp = await buildServer(wakeEngine);
+    await wakeApp.ready();
+
+    try {
+      const dispatch = await wakeApp.inject({
+        method: 'POST',
+        url: '/internal/extraction/dispatch',
+        headers: { authorization: `Bearer ${wakeWorkerToken}` },
+        payload: {
+          kind: 'resolve',
+          url: 'https://www.youtube.com/watch?v=wake1',
+          providerId: 'youtube',
+        },
+      });
+      const { taskId } = dispatch.json<{ taskId: string }>();
+
+      const started = Date.now();
+      const pollPromise = wakeApp.inject({
+        method: 'GET',
+        url: `/internal/extraction/dispatch/${taskId}?wait=5&seenClaimedBy=`,
+        headers: { authorization: `Bearer ${wakeWorkerToken}` },
+      });
+      await new Promise((r) => setTimeout(r, 30));
+      const claimed = await wakeApp.inject({
+        method: 'POST',
+        url: '/internal/extraction/claim',
+        headers: { authorization: `Bearer ${wakeLaptopToken}` },
+        payload: { nodeId: 'laptop', providers: ['youtube'], capacity: 1 },
+      });
+      expect(claimed.statusCode).toBe(200);
+
+      const polled = await pollPromise;
+      expect(polled.statusCode).toBe(200);
+      expect(Date.now() - started).toBeLessThan(1500);
+      expect(polled.json()).toMatchObject({ state: 'pending', claimedBy: 'laptop' });
+
+      await wakeApp.inject({
+        method: 'DELETE',
+        url: `/internal/extraction/dispatch/${taskId}`,
+        headers: { authorization: `Bearer ${wakeWorkerToken}` },
+      });
+    } finally {
+      await wakeApp.close();
+      await wakeEngine.close();
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

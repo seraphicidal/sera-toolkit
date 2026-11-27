@@ -81,11 +81,12 @@ export class YouTubeProvider extends YtdlpProvider {
   }
 
   protected override extractorArgs(_url: URL, context: ProviderContext): readonly string[] {
-    const args: string[] = [];
-
     const clients = context.config.youtube.playerClients;
-    if (clients) args.push(`youtube:player_client=${clients}`);
+    return clients ? [`youtube:player_client=${clients}`] : [];
+  }
 
+  protected override probeExtractorArgs(url: URL, context: ProviderContext): readonly string[] {
+    const args = [...this.extractorArgs(url, context)];
     const provider = context.config.youtube.potProviderUrl;
     if (provider) {
       args.push(`youtubepot-bgutilhttp:base_url=${provider}`);

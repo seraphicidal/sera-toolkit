@@ -51,6 +51,11 @@ abstract class YtdlpBaseExtractor(
         context: ExtractionExecutionContext,
     ): List<String> = emptyList()
 
+    protected open fun localOnlyExtractorArgs(
+        url: HttpUrl,
+        context: ExtractionExecutionContext,
+    ): List<String> = emptyList()
+
     protected open fun extraYtdlpArgs(
         url: HttpUrl,
         context: ExtractionExecutionContext,
@@ -128,7 +133,7 @@ abstract class YtdlpBaseExtractor(
             url.toString(),
             YtdlpProbeOptions(
                 playlist = wantsPlaylist(url),
-                extractorArgs = extractorArgs(url, context),
+                extractorArgs = extractorArgs(url, context) + localOnlyExtractorArgs(url, context),
                 extraArgs = extraYtdlpArgs(url, context),
                 remoteComponents = remoteComponents(url, context),
                 useExtractors = useExtractors(url, context),

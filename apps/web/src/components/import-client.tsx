@@ -126,7 +126,15 @@ export function ImportClient() {
         <p className="text-[0.8125rem] text-[var(--color-ink-faint)]">
           From <span className="text-[var(--color-ink-muted)]">{sourceLabel(info.url)}</span>
         </p>
-        <Downloader initialInfo={info} />
+        <Downloader
+          initialInfo={info}
+          onResetImport={() => {
+            setInfo(undefined);
+            setSavedRequest(undefined);
+            setError(undefined);
+            setPhase('idle');
+          }}
+        />
       </div>
     );
   }

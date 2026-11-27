@@ -44,6 +44,14 @@ describe('resolveSafeApiPath', () => {
       ok: true,
       path: '/api/jobs/abc123/files/video%201.mp4',
     });
+    expect(resolveSafeApiPath(['jobs', 'abc123', 'files', '100% Real.mp4'], 'GET')).toEqual({
+      ok: true,
+      path: '/api/jobs/abc123/files/100%25%20Real.mp4',
+    });
+    expect(resolveSafeApiPath(['jobs', 'abc123', 'files', '50% Off (1).mp4'], 'GET')).toEqual({
+      ok: true,
+      path: '/api/jobs/abc123/files/50%25%20Off%20(1).mp4',
+    });
     expect(resolveSafeApiPath(['legal', 'report'], 'POST')).toEqual({
       ok: true,
       path: '/api/legal/report',
@@ -70,6 +78,18 @@ describe('resolveSafeApiPath', () => {
     expect(resolveSafeApiPath(['admin', 'denylist'], 'POST')).toEqual({ ok: false, status: 404 });
     expect(resolveSafeApiPath(['jobs', 'abc/def'], 'GET')).toEqual({ ok: false, status: 404 });
     expect(resolveSafeApiPath(['jobs', 'abc\\def'], 'GET')).toEqual({ ok: false, status: 404 });
+    expect(resolveSafeApiPath(['jobs', 'abc123', 'files', '100% %2f bad.mp4'], 'GET')).toEqual({
+      ok: false,
+      status: 404,
+    });
+    expect(resolveSafeApiPath(['jobs', 'abc123', 'files', 'a%5cb.mp4'], 'GET')).toEqual({
+      ok: false,
+      status: 404,
+    });
+    expect(resolveSafeApiPath(['jobs', 'abc123', 'files', 'a%00b.mp4'], 'GET')).toEqual({
+      ok: false,
+      status: 404,
+    });
   });
 
   it('rejects disallowed HTTP methods on valid routes with 405', () => {

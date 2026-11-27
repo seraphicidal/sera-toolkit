@@ -45,6 +45,28 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
     color-scheme: dark;
+    --color-canvas: oklch(0.155 0.004 265);
+    --color-surface: oklch(0.195 0.005 265);
+    --color-sunken: oklch(0.235 0.006 265);
+    --color-line: oklch(0.29 0.007 265);
+    --color-line-strong: oklch(0.4 0.008 265);
+
+    --color-ink: oklch(0.96 0.003 265);
+    --color-ink-muted: oklch(0.78 0.008 265);
+    --color-ink-faint: oklch(0.7 0.008 265);
+
+    --color-accent: oklch(0.7 0.16 268);
+    --color-accent-hover: oklch(0.77 0.16 268);
+    --color-accent-ink: oklch(0.16 0.02 268);
+    --color-accent-wash: oklch(0.26 0.05 268);
+
+    --color-danger: oklch(0.7 0.17 25);
+    --color-danger-wash: oklch(0.27 0.06 25);
+    --color-success: oklch(0.72 0.15 155);
+    --color-warning: oklch(0.8 0.14 80);
+
+    --shadow-lift: 0 1px 2px oklch(0 0 0 / 0.4), 0 12px 32px -16px oklch(0 0 0 / 0.7);
+    --shadow-focus: 0 0 0 3px oklch(0.7 0.16 268 / 0.34);
   }
 }
 

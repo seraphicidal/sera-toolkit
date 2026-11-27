@@ -25,6 +25,9 @@ val YTDLP_POSTPROCESS_TEMPLATE = listOf(
     "%(progress.postprocessor)s",
 ).joinToString(PROGRESS_SEP)
 
+private val SAFE_WIRE_EXTRACTOR_ARG = Regex("^[a-z0-9][a-z0-9_-]{0,31}:[A-Za-z0-9_.,;+=-]{1,180}$")
+private val FORBIDDEN_WIRE_EXTRACTOR_ARG = Regex("(?:^|[:;])(?:base_url|proxy|cookies?|file|path|exec)=", RegexOption.IGNORE_CASE)
+
 private val ALLOWED_BOOLEAN_EXTRA_FLAGS = setOf(
     "--no-remote-components",
     "--force-ipv4",
@@ -38,22 +41,26 @@ private val ALLOWED_BOOLEAN_EXTRA_FLAGS = setOf(
     "--hls-prefer-native",
     "--hls-use-mpegts",
     "--prefer-free-formats",
+    "--no-prefer-free-formats",
 )
 
-private val ALLOWED_VALUE_EXTRA_FLAGS: Map<String, Regex> = mapOf(
-    "--remote-components" to Regex("^[a-z0-9_.:,-]{1,128}$", RegexOption.IGNORE_CASE),
-    "--impersonate" to Regex("^[A-Za-z0-9_.:,-]{1,64}$"),
-    "--sleep-requests" to Regex("^\\d{1,3}(?:\\.\\d{1,3})?$"),
-    "--sleep-interval" to Regex("^\\d{1,3}(?:\\.\\d{1,3})?$"),
-    "--max-sleep-interval" to Regex("^\\d{1,3}(?:\\.\\d{1,3})?$"),
-    "--sleep-subtitles" to Regex("^\\d{1,3}(?:\\.\\d{1,3})?$"),
-    "--retries" to Regex("^\\d{1,2}$"),
-    "--fragment-retries" to Regex("^\\d{1,2}$"),
-    "--extractor-retries" to Regex("^\\d{1,2}$"),
-    "--socket-timeout" to Regex("^\\d{1,3}$"),
-    "--concurrent-fragments" to Regex("^[1-8]$"),
-    "--geo-bypass-country" to Regex("^[A-Z]{2}$", RegexOption.IGNORE_CASE),
-    "--compat-options" to Regex("^[a-z0-9_,-]{1,64}$", RegexOption.IGNORE_CASE),
+private val ALLOWED_VALUE_EXTRA_FLAGS: Map<String, (String) -> Boolean> = mapOf(
+    "--remote-components" to { v -> Regex("^[a-z0-9_.:,-]{1,128}$", RegexOption.IGNORE_CASE).matches(v) },
+    "--impersonate" to { v -> Regex("^[A-Za-z0-9_.:,-]{1,64}$").matches(v) },
+    "--sleep-requests" to { v -> Regex("^\\d{1,3}(?:\\.\\d{1,3})?$").matches(v) },
+    "--sleep-interval" to { v -> Regex("^\\d{1,3}(?:\\.\\d{1,3})?$").matches(v) },
+    "--max-sleep-interval" to { v -> Regex("^\\d{1,3}(?:\\.\\d{1,3})?$").matches(v) },
+    "--sleep-subtitles" to { v -> Regex("^\\d{1,3}(?:\\.\\d{1,3})?$").matches(v) },
+    "--retries" to { v -> Regex("^\\d{1,2}$").matches(v) },
+    "--fragment-retries" to { v -> Regex("^\\d{1,2}$").matches(v) },
+    "--extractor-retries" to { v -> Regex("^\\d{1,2}$").matches(v) },
+    "--socket-timeout" to { v -> Regex("^\\d{1,3}$").matches(v) },
+    "--concurrent-fragments" to { v -> Regex("^(?:[1-9]|1[0-6])$").matches(v) },
+    "--throttled-rate" to { v -> Regex("^\\d{1,6}[KMG]?$").matches(v) },
+    "--geo-bypass-country" to { v -> Regex("^[A-Z]{2}$", RegexOption.IGNORE_CASE).matches(v) },
+    "--compat-options" to { v -> Regex("^[a-z0-9_,-]{1,64}$", RegexOption.IGNORE_CASE).matches(v) },
+    "--format-sort" to { v -> Regex("^[A-Za-z0-9][A-Za-z0-9_.:,+~-]{0,127}$").matches(v) },
+    "--extractor-args" to { v -> YtdlpCommandBuilder.isSafeWireExtractorArg(v) },
 )
 
 private val VALID_REMOTE_COMPONENT = Regex("^[a-z0-9_.:-]{1,64}$", RegexOption.IGNORE_CASE)
@@ -265,6 +272,15 @@ object YtdlpCommandBuilder {
     fun subtitleArgs(track: YtdlpSubtitleFilter): List<String> =
         listOf(if (track.auto) "--write-auto-subs" else "--write-subs", "--sub-langs", track.lang)
 
+    fun isForbiddenWireExtractorArg(raw: String): Boolean =
+        FORBIDDEN_WIRE_EXTRACTOR_ARG.containsMatchIn(raw.trim())
+
+    fun isSafeWireExtractorArg(raw: String): Boolean {
+        val trimmed = raw.trim()
+        if (trimmed.length !in 3..200) return false
+        return SAFE_WIRE_EXTRACTOR_ARG.matches(trimmed) && !FORBIDDEN_WIRE_EXTRACTOR_ARG.containsMatchIn(trimmed)
+    }
+
     fun filterSafeExtraArgs(raw: List<String>): List<String> {
         val out = ArrayList<String>(raw.size)
         var i = 0
@@ -282,8 +298,8 @@ object YtdlpCommandBuilder {
                 continue
             }
 
-            val valuePattern = ALLOWED_VALUE_EXTRA_FLAGS[flagName]
-            if (valuePattern != null) {
+            val valueValidator = ALLOWED_VALUE_EXTRA_FLAGS[flagName]
+            if (valueValidator != null) {
                 val value = if (inlineValue != null) {
                     inlineValue
                 } else if (i < raw.size) {
@@ -297,7 +313,7 @@ object YtdlpCommandBuilder {
                 } else {
                     null
                 }
-                if (value != null && !value.startsWith("-") && valuePattern.matches(value)) {
+                if (value != null && !value.startsWith("-") && valueValidator(value)) {
                     out.add(flagName)
                     out.add(value)
                 }

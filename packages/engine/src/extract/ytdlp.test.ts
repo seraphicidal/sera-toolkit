@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { HINTS, MESSAGES } from '../errors.js';
-import { assertNotDrmProtected, classifyYtdlpFailure } from './ytdlp.js';
+import { assertNotDrmProtected, classifyYtdlpFailure, ytdlpNoProxy } from './ytdlp.js';
 import { num, str } from './ytdlp-types.js';
 
 describe('classifyYtdlpFailure', () => {
@@ -147,5 +147,16 @@ describe('field coercion', () => {
     expect(num(Infinity)).toBeUndefined();
     expect(num('abc')).toBeUndefined();
     expect(num(null)).toBeUndefined();
+  });
+
+  it('derives NO_PROXY host bypasses for configured YouTube PO token URLs', () => {
+    const noProxy = ytdlpNoProxy({
+      extractorArgs: [
+        'youtube:player_client=web',
+        'youtubepot-bgutilhttp:base_url=http://potoken:4416',
+      ],
+    });
+    expect(noProxy).toBeDefined();
+    expect(noProxy!.split(',')).toContain('potoken');
   });
 });

@@ -10,6 +10,11 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
+data class SecretDecryptResult(
+    val value: String,
+    val failed: Boolean,
+)
+
 object SecretCipher {
     private const val PREFIX = "enc:v1:"
     private const val ANDROID_KEYSTORE = "AndroidKeyStore"
@@ -21,18 +26,41 @@ object SecretCipher {
     private val lock = Any()
     private val secureRandom = SecureRandom()
 
-    @Volatile
-    private var fallbackKey: SecretKey? = null
-
     fun isEncrypted(stored: String): Boolean = stored.startsWith(PREFIX)
+
+    fun isKeyStoreAvailable(): Boolean = isAndroidKeyStoreAvailable()
 
     fun encrypt(plaintext: String): String {
         if (plaintext.isEmpty()) return ""
         if (plaintext.startsWith(PREFIX)) return plaintext
         val key = getOrCreateKey() ?: return plaintext
+        return encryptWithKey(plaintext, key, useKeystoreIv = true)
+    }
+
+    fun decrypt(stored: String): String = decryptWithStatus(stored).value
+
+    fun decryptWithStatus(stored: String): SecretDecryptResult {
+        if (stored.isEmpty()) return SecretDecryptResult("", failed = false)
+        if (!stored.startsWith(PREFIX)) return SecretDecryptResult(stored, failed = false)
+        if (!isAndroidKeyStoreAvailable()) return SecretDecryptResult("", failed = true)
+        for (attempt in 1..2) {
+            val key = getOrCreateKey() ?: continue
+            val result = decryptWithKey(stored, key)
+            if (!result.failed) return result
+        }
+        return SecretDecryptResult("", failed = true)
+    }
+
+    internal fun encryptWithKey(
+        plaintext: String,
+        key: SecretKey,
+        useKeystoreIv: Boolean = false,
+    ): String {
+        if (plaintext.isEmpty()) return ""
+        if (plaintext.startsWith(PREFIX)) return plaintext
         return try {
             val cipher = Cipher.getInstance(TRANSFORMATION)
-            val iv = if (isAndroidKeyStoreAvailable()) {
+            val iv = if (useKeystoreIv) {
                 cipher.init(Cipher.ENCRYPT_MODE, key)
                 cipher.iv
             } else {
@@ -50,30 +78,24 @@ object SecretCipher {
         }
     }
 
-    fun decrypt(stored: String): String {
-        if (stored.isEmpty()) return ""
-        if (!stored.startsWith(PREFIX)) return stored
+    internal fun decryptWithKey(stored: String, key: SecretKey): SecretDecryptResult {
+        if (stored.isEmpty()) return SecretDecryptResult("", failed = false)
+        if (!stored.startsWith(PREFIX)) return SecretDecryptResult(stored, failed = false)
         val payload = try {
             Base64.getDecoder().decode(stored.removePrefix(PREFIX))
         } catch (_: Exception) {
-            return ""
+            return SecretDecryptResult("", failed = true)
         }
-        if (payload.size <= IV_LENGTH_BYTES) return ""
+        if (payload.size <= IV_LENGTH_BYTES) return SecretDecryptResult("", failed = true)
         val iv = payload.copyOfRange(0, IV_LENGTH_BYTES)
         val ciphertext = payload.copyOfRange(IV_LENGTH_BYTES, payload.size)
-        val maxAttempts = if (isAndroidKeyStoreAvailable()) 2 else 1
-        for (attempt in 1..maxAttempts) {
-            val key = getOrCreateKey() ?: continue
-            val decrypted = try {
-                val cipher = Cipher.getInstance(TRANSFORMATION)
-                cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(TAG_LENGTH_BITS, iv))
-                String(cipher.doFinal(ciphertext), Charsets.UTF_8)
-            } catch (_: Exception) {
-                null
-            }
-            if (decrypted != null) return decrypted
+        return try {
+            val cipher = Cipher.getInstance(TRANSFORMATION)
+            cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(TAG_LENGTH_BITS, iv))
+            SecretDecryptResult(String(cipher.doFinal(ciphertext), Charsets.UTF_8), failed = false)
+        } catch (_: Exception) {
+            SecretDecryptResult("", failed = true)
         }
-        return ""
     }
 
     private fun isAndroidKeyStoreAvailable(): Boolean {
@@ -85,32 +107,27 @@ object SecretCipher {
 
     private fun getOrCreateKey(): SecretKey? {
         return synchronized(lock) {
-            if (isAndroidKeyStoreAvailable()) {
-                return@synchronized runCatching {
-                    val ks = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
-                    val existing = ks.getKey(KEY_ALIAS, null) as? SecretKey
-                    if (existing != null) {
-                        existing
-                    } else {
-                        val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
-                        val spec = KeyGenParameterSpec.Builder(
-                            KEY_ALIAS,
-                            KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
-                        )
-                            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-                            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                            .setKeySize(256)
-                            .build()
-                        generator.init(spec)
-                        generator.generateKey()
-                    }
-                }.getOrNull()
+            if (!isAndroidKeyStoreAvailable()) {
+                return@synchronized null
             }
-
-            fallbackKey ?: runCatching {
-                val generator = KeyGenerator.getInstance("AES")
-                generator.init(256, secureRandom)
-                generator.generateKey().also { fallbackKey = it }
+            runCatching {
+                val ks = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+                val existing = ks.getKey(KEY_ALIAS, null) as? SecretKey
+                if (existing != null) {
+                    existing
+                } else {
+                    val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
+                    val spec = KeyGenParameterSpec.Builder(
+                        KEY_ALIAS,
+                        KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
+                    )
+                        .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                        .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                        .setKeySize(256)
+                        .build()
+                    generator.init(spec)
+                    generator.generateKey()
+                }
             }.getOrNull()
         }
     }

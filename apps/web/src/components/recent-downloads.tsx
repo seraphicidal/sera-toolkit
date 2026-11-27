@@ -1,7 +1,7 @@
 'use client';
 
 import { memo, useEffect, useRef, useState } from 'react';
-import { isSafeDownloadPath } from '@/lib/format';
+import { isSafeDownloadPath, pluralize } from '@/lib/format';
 import { ClearHistoryButton } from './clear-history-button';
 import {
   HISTORY_EVENT,
@@ -107,36 +107,66 @@ export const RecentDownloads = memo(function RecentDownloads({
         {entries.map((entry) => {
           const expired = isExpired(entry, now);
           const canDownload = !expired && isSafeDownloadPath(entry.downloadPath);
+          const individualFiles =
+            !expired && !entry.isArchive && entry.files && entry.files.length > 1
+              ? entry.files.filter((file) => isSafeDownloadPath(file.downloadPath))
+              : undefined;
           return (
-            <li key={entry.jobId} className="flex items-center gap-3 px-3.5 py-2.5">
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-[0.875rem]" title={entry.title}>
-                  {entry.title}
-                </p>
-                <p className="text-xs text-[var(--color-ink-faint)]">
-                  {entry.source} · {timeAgo(entry.savedAt, now)}
-                  {expired && ' · expired'}
-                </p>
+            <li key={entry.jobId} className="flex flex-col gap-2 px-3.5 py-2.5">
+              <div className="flex items-center gap-3">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-[0.875rem]" title={entry.title}>
+                    {entry.title}
+                  </p>
+                  <p className="text-xs text-[var(--color-ink-faint)]">
+                    {entry.source} · {timeAgo(entry.savedAt, now)}
+                    {entry.fileCount && entry.fileCount > 1
+                      ? ` · ${pluralize(entry.fileCount, 'file')}`
+                      : ''}
+                    {expired && ' · expired'}
+                  </p>
+                </div>
+                {canDownload ? (
+                  <a
+                    href={entry.downloadPath}
+                    download={entry.filename}
+                    aria-label={`Download ${entry.filename}`}
+                    className="inline-flex min-h-9 shrink-0 items-center rounded-lg bg-[var(--color-accent)] px-3 py-1.5 text-xs font-medium text-[var(--color-accent-ink)] transition-colors hover:bg-[var(--color-accent-hover)]"
+                  >
+                    {individualFiles ? '1st file' : 'Download'}
+                  </a>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => onAgain(entry.url)}
+                    disabled={disabled}
+                    aria-label={`Download again: ${entry.title}`}
+                    className="inline-flex min-h-9 shrink-0 cursor-pointer items-center rounded-lg border border-[var(--color-line)] px-3 py-1.5 text-xs font-medium transition-colors hover:bg-[var(--color-sunken)] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Download again
+                  </button>
+                )}
               </div>
-              {canDownload ? (
-                <a
-                  href={entry.downloadPath}
-                  download={entry.filename}
-                  aria-label={`Download ${entry.filename}`}
-                  className="inline-flex min-h-9 shrink-0 items-center rounded-lg bg-[var(--color-accent)] px-3 py-1.5 text-xs font-medium text-[var(--color-accent-ink)] transition-colors hover:bg-[var(--color-accent-hover)]"
-                >
-                  Download
-                </a>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => onAgain(entry.url)}
-                  disabled={disabled}
-                  aria-label={`Download again: ${entry.title}`}
-                  className="inline-flex min-h-9 shrink-0 cursor-pointer items-center rounded-lg border border-[var(--color-line)] px-3 py-1.5 text-xs font-medium transition-colors hover:bg-[var(--color-sunken)] disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Download again
-                </button>
+              {individualFiles && individualFiles.length > 1 && (
+                <details className="group">
+                  <summary className="flex cursor-pointer list-none items-center gap-1 text-xs text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]">
+                    <span className="transition-transform group-open:rotate-90">›</span>
+                    All {pluralize(individualFiles.length, 'file')}
+                  </summary>
+                  <ul className="mt-1.5 flex flex-col gap-1 border-l border-[var(--color-line)] pl-3">
+                    {individualFiles.map((file) => (
+                      <li key={file.downloadPath}>
+                        <a
+                          href={file.downloadPath}
+                          download={file.name}
+                          className="block truncate py-0.5 text-xs text-[var(--color-ink-muted)] transition-colors hover:text-[var(--color-accent)]"
+                        >
+                          {file.name}
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                </details>
               )}
             </li>
           );

@@ -208,7 +208,7 @@ log "Starting the stack"
 log "Waiting for the API to report healthy"
 for _ in $(seq 1 60); do
   if "${COMPOSE[@]}" exec -T api \
-      node -e "fetch('http://127.0.0.1:4000/health').then(r=>r.json()).then(j=>process.exit(j.status==='ok'?0:1)).catch(()=>process.exit(1))" \
+      node -e "fetch('http://127.0.0.1:4000/health').then(async r=>({ok:r.ok,j:await r.json()})).then(({ok,j})=>process.exit(ok&&(j.status==='ok'||j.status==='degraded')?0:1)).catch(()=>process.exit(1))" \
       >/dev/null 2>&1; then
     break
   fi

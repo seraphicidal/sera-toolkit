@@ -79,7 +79,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 private val GITHUB_REPO_PATTERN = Regex("^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
 
 @Immutable
-private data class EditableSettingsSnapshot(
+internal data class EditableSettingsSnapshot(
     val apiBaseUrl: String,
     val nodeToken: String,
     val nodeId: String,
@@ -102,6 +102,19 @@ private data class EditableSettingsSnapshot(
     val githubReleasesRepo: String,
     val themePreference: ThemePreference,
 ) {
+    fun normalized(): EditableSettingsSnapshot = copy(
+        apiBaseUrl = NodeSettings.normalizeBaseUrl(apiBaseUrl),
+        nodeToken = nodeToken.trim(),
+        nodeId = nodeId.trim().ifEmpty { "android-node" }.take(64),
+        instagramSessionId = instagramSessionId.trim(),
+        youtubePlayerClients = youtubePlayerClients.trim(),
+        youtubePotProviderUrl = NodeSettings.normalizePotProviderUrl(youtubePotProviderUrl),
+        redditClientId = redditClientId.trim(),
+        redditClientSecret = redditClientSecret.trim(),
+        preferredCapacity = preferredCapacity.coerceIn(1, 8),
+        githubReleasesRepo = githubReleasesRepo.trim().ifEmpty { NodeSettings.DEFAULT_GITHUB_REPO },
+    )
+
     companion object {
         fun from(settings: NodeSettings): EditableSettingsSnapshot = EditableSettingsSnapshot(
             apiBaseUrl = settings.apiBaseUrl,
@@ -224,6 +237,7 @@ fun SettingsScreen(
 
     var hasInitialized by rememberSaveable { mutableStateOf(false) }
     var syncedBaseline by remember { mutableStateOf(persistedSnapshot) }
+    var pendingSaveSync by remember { mutableStateOf(false) }
 
     val currentDraft = EditableSettingsSnapshot(
         apiBaseUrl = apiBaseUrl,
@@ -275,9 +289,10 @@ fun SettingsScreen(
 
     LaunchedEffect(persistedSnapshot) {
         val wasClean = currentDraft == syncedBaseline
-        if (!hasInitialized || wasClean) {
+        if (!hasInitialized || wasClean || pendingSaveSync) {
             applySnapshotToForm(persistedSnapshot)
             hasInitialized = true
+            pendingSaveSync = false
         }
         syncedBaseline = persistedSnapshot
     }
@@ -353,6 +368,7 @@ fun SettingsScreen(
                 parsed.allowWifi?.let { allowWifi = it }
                 parsed.onlyWhileCharging?.let { onlyWhileCharging = it }
                 parsed.githubReleasesRepo?.let { githubReleasesRepo = it }
+                pendingSaveSync = parsed.importedFields.isNotEmpty()
                 onResetConnectionTest()
                 showImportDialog = false
             },
@@ -754,28 +770,32 @@ fun SettingsScreen(
                 }
                 Button(
                     onClick = {
+                        val normalizedDraft = currentDraft.normalized()
+                        applySnapshotToForm(normalizedDraft)
+                        syncedBaseline = normalizedDraft
+                        pendingSaveSync = normalizedDraft != persistedSnapshot
                         onSave(
-                            apiBaseUrl,
-                            nodeToken,
-                            nodeId,
-                            nodeRole,
-                            enableYoutube,
-                            enableInstagram,
-                            enableAllProviders,
-                            instagramSessionId,
-                            youtubePlayerClients,
-                            youtubePotProviderUrl,
-                            redditClientId,
-                            redditClientSecret,
-                            allowCellular,
-                            allowWifi,
-                            onlyWhileCharging,
-                            autoStartOnBoot,
-                            autoUpdateApp,
-                            autoUpdateTools,
-                            preferredCapacity,
-                            githubReleasesRepo,
-                            themePreference,
+                            normalizedDraft.apiBaseUrl,
+                            normalizedDraft.nodeToken,
+                            normalizedDraft.nodeId,
+                            normalizedDraft.nodeRole,
+                            normalizedDraft.enableYoutube,
+                            normalizedDraft.enableInstagram,
+                            normalizedDraft.enableAllProviders,
+                            normalizedDraft.instagramSessionId,
+                            normalizedDraft.youtubePlayerClients,
+                            normalizedDraft.youtubePotProviderUrl,
+                            normalizedDraft.redditClientId,
+                            normalizedDraft.redditClientSecret,
+                            normalizedDraft.allowCellular,
+                            normalizedDraft.allowWifi,
+                            normalizedDraft.onlyWhileCharging,
+                            normalizedDraft.autoStartOnBoot,
+                            normalizedDraft.autoUpdateApp,
+                            normalizedDraft.autoUpdateTools,
+                            normalizedDraft.preferredCapacity,
+                            normalizedDraft.githubReleasesRepo,
+                            normalizedDraft.themePreference,
                         )
                     },
                     enabled = !hasBlockingErrors,

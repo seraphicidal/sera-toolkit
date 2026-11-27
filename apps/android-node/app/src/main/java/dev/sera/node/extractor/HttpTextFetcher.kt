@@ -3,7 +3,6 @@ package dev.sera.node.extractor
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
@@ -91,27 +90,27 @@ class OkHttpFetcher(
             allowUrl = { true },
             isCancelled = isCancelled,
         )
-        val cancelHandle = currentCoroutineContext()[Job]?.invokeOnCompletion { cause ->
-            if (cause != null) opened.call.cancel()
-        }
-        try {
-            opened.response.use { response ->
-                if (response.code >= 400) {
-                    throw seraError(
-                        if (response.code == 404) SeraErrorCode.MEDIA_UNAVAILABLE else SeraErrorCode.NETWORK_ERROR,
-                        detail = "GET ${response.code}",
+        withImmediateCancelHook(
+            onCancel = { opened.call.cancel() },
+            isCancelled = isCancelled,
+        ) {
+            withContext(Dispatchers.IO) {
+                opened.response.use { response ->
+                    if (response.code >= 400) {
+                        throw seraError(
+                            if (response.code == 404) SeraErrorCode.MEDIA_UNAVAILABLE else SeraErrorCode.NETWORK_ERROR,
+                            detail = "GET ${response.code}",
+                        )
+                    }
+                    val bodyText = readBoundedText(response, maxBytes, isCancelled)
+                    HttpTextResponse(
+                        body = bodyText,
+                        url = opened.finalUrl.toString(),
+                        status = response.code,
+                        headers = extractHeaders(response),
                     )
                 }
-                val bodyText = readBoundedText(response, maxBytes, isCancelled)
-                HttpTextResponse(
-                    body = bodyText,
-                    url = opened.finalUrl.toString(),
-                    status = response.code,
-                    headers = extractHeaders(response),
-                )
             }
-        } finally {
-            cancelHandle?.dispose()
         }
     }
 
@@ -162,21 +161,21 @@ class OkHttpFetcher(
         for ((k, v) in headers) reqBuilder.header(k, v)
         val call = client.newCall(reqBuilder.build())
         val response = executeCall(call, isCancelled)
-        val cancelHandle = currentCoroutineContext()[Job]?.invokeOnCompletion { cause ->
-            if (cause != null) call.cancel()
-        }
-        try {
-            response.use { resp ->
-                val bodyText = readBoundedText(resp, maxBytes, isCancelled)
-                HttpTextResponse(
-                    body = bodyText,
-                    url = url.toString(),
-                    status = resp.code,
-                    headers = extractHeaders(resp),
-                )
+        withImmediateCancelHook(
+            onCancel = { call.cancel() },
+            isCancelled = isCancelled,
+        ) {
+            withContext(Dispatchers.IO) {
+                response.use { resp ->
+                    val bodyText = readBoundedText(resp, maxBytes, isCancelled)
+                    HttpTextResponse(
+                        body = bodyText,
+                        url = url.toString(),
+                        status = resp.code,
+                        headers = extractHeaders(resp),
+                    )
+                }
             }
-        } finally {
-            cancelHandle?.dispose()
         }
     }
 
@@ -198,21 +197,21 @@ class OkHttpFetcher(
         for ((k, v) in headers) reqBuilder.header(k, v)
         val call = client.newCall(reqBuilder.build())
         val response = executeCall(call, isCancelled)
-        val cancelHandle = currentCoroutineContext()[Job]?.invokeOnCompletion { cause ->
-            if (cause != null) call.cancel()
-        }
-        try {
-            response.use { resp ->
-                val bodyText = readBoundedText(resp, maxBytes, isCancelled)
-                HttpTextResponse(
-                    body = bodyText,
-                    url = url.toString(),
-                    status = resp.code,
-                    headers = extractHeaders(resp),
-                )
+        withImmediateCancelHook(
+            onCancel = { call.cancel() },
+            isCancelled = isCancelled,
+        ) {
+            withContext(Dispatchers.IO) {
+                response.use { resp ->
+                    val bodyText = readBoundedText(resp, maxBytes, isCancelled)
+                    HttpTextResponse(
+                        body = bodyText,
+                        url = url.toString(),
+                        status = resp.code,
+                        headers = extractHeaders(resp),
+                    )
+                }
             }
-        } finally {
-            cancelHandle?.dispose()
         }
     }
 
@@ -240,87 +239,90 @@ class OkHttpFetcher(
             isCancelled = isCancelled,
         )
 
-        val cancelHandle = currentCoroutineContext()[Job]?.invokeOnCompletion { cause ->
-            if (cause != null) opened.call.cancel()
-        }
-
         try {
-            opened.response.use { response ->
-                if (response.code >= 400) {
-                    throw seraError(
-                        if (response.code == 404) SeraErrorCode.MEDIA_UNAVAILABLE else SeraErrorCode.NETWORK_ERROR,
-                        detail = "GET ${response.code}",
-                    )
-                }
-                val body = response.body
-                    ?: throw seraError(SeraErrorCode.MEDIA_UNAVAILABLE, detail = "server returned an empty body")
-                val declared = body.contentLength().takeIf { it > 0L }
-                if (declared != null && declared > maxBytes) {
-                    throw seraError(SeraErrorCode.TOO_LARGE, detail = "content-length $declared > $maxBytes")
-                }
+            withImmediateCancelHook(
+                onCancel = { opened.call.cancel() },
+                isCancelled = isCancelled,
+            ) {
+                withContext(Dispatchers.IO) {
+                    opened.response.use { response ->
+                        if (response.code >= 400) {
+                            throw seraError(
+                                if (response.code == 404) SeraErrorCode.MEDIA_UNAVAILABLE else SeraErrorCode.NETWORK_ERROR,
+                                detail = "GET ${response.code}",
+                            )
+                        }
+                        val body = response.body
+                            ?: throw seraError(SeraErrorCode.MEDIA_UNAVAILABLE, detail = "server returned an empty body")
+                        val declared = body.contentLength().takeIf { it > 0L }
+                        if (declared != null && declared > maxBytes) {
+                            throw seraError(SeraErrorCode.TOO_LARGE, detail = "content-length $declared > $maxBytes")
+                        }
 
-                destination.parentFile?.mkdirs()
-                var received = 0L
-                val startedAt = System.currentTimeMillis()
-                var lastReport = 0L
-                val buffer = ByteArray(64 * 1024)
+                        destination.parentFile?.mkdirs()
+                        var received = 0L
+                        val startedAt = System.currentTimeMillis()
+                        var lastReport = 0L
+                        val buffer = ByteArray(64 * 1024)
 
-                body.byteStream().use { input ->
-                    FileOutputStream(destination).use { output ->
-                        while (true) {
-                            if (isCancelled() || !currentCoroutineContext().isActive) {
-                                opened.call.cancel()
-                                throw seraError(SeraErrorCode.CANCELLED)
-                            }
-                            val read = input.read(buffer)
-                            if (read < 0) break
-                            received += read
-                            if (received > maxBytes) {
-                                opened.call.cancel()
-                                throw seraError(SeraErrorCode.TOO_LARGE, detail = "body exceeded $maxBytes bytes")
-                            }
-                            output.write(buffer, 0, read)
-                            val now = System.currentTimeMillis()
-                            if (now - lastReport >= 250L) {
-                                lastReport = now
-                                val elapsed = (now - startedAt) / 1000.0
-                                val speed = if (elapsed > 0.0) received / elapsed else null
-                                val eta = if (speed != null && speed > 0.0 && declared != null) {
-                                    max(0.0, (declared - received) / speed)
-                                } else {
-                                    null
+                        body.byteStream().use { input ->
+                            FileOutputStream(destination).use { output ->
+                                while (true) {
+                                    if (isCancelled() || !currentCoroutineContext().isActive) {
+                                        opened.call.cancel()
+                                        throw seraError(SeraErrorCode.CANCELLED)
+                                    }
+                                    val read = input.read(buffer)
+                                    if (read < 0) break
+                                    received += read
+                                    if (received > maxBytes) {
+                                        opened.call.cancel()
+                                        throw seraError(SeraErrorCode.TOO_LARGE, detail = "body exceeded $maxBytes bytes")
+                                    }
+                                    output.write(buffer, 0, read)
+                                    val now = System.currentTimeMillis()
+                                    if (now - lastReport >= 250L) {
+                                        lastReport = now
+                                        val elapsed = (now - startedAt) / 1000.0
+                                        val speed = if (elapsed > 0.0) received / elapsed else null
+                                        val eta = if (speed != null && speed > 0.0 && declared != null) {
+                                            max(0.0, (declared - received) / speed)
+                                        } else {
+                                            null
+                                        }
+                                        onProgress(
+                                            DirectDownloadProgress(
+                                                bytesDownloaded = received,
+                                                bytesTotal = declared,
+                                                speedBytesPerSecond = speed,
+                                                etaSeconds = eta,
+                                            ),
+                                        )
+                                    }
                                 }
-                                onProgress(
-                                    DirectDownloadProgress(
-                                        bytesDownloaded = received,
-                                        bytesTotal = declared,
-                                        speedBytesPerSecond = speed,
-                                        etaSeconds = eta,
-                                    ),
-                                )
+                                output.flush()
                             }
                         }
-                        output.flush()
+
+                        if (received == 0L) {
+                            destination.delete()
+                            throw seraError(SeraErrorCode.MEDIA_UNAVAILABLE, detail = "server returned an empty file")
+                        }
+
+                        onProgress(
+                            DirectDownloadProgress(
+                                bytesDownloaded = received,
+                                bytesTotal = declared,
+                            ),
+                        )
+
+                        DirectDownloadResult(
+                            bytes = received,
+                            contentType = response.header("content-type"),
+                            url = opened.finalUrl.toString(),
+                        )
                     }
                 }
-
-                if (received == 0L) {
-                    destination.delete()
-                    throw seraError(SeraErrorCode.MEDIA_UNAVAILABLE, detail = "server returned an empty file")
-                }
-
-                onProgress(
-                    DirectDownloadProgress(
-                        bytesDownloaded = received,
-                        bytesTotal = declared,
-                    ),
-                )
-
-                DirectDownloadResult(
-                    bytes = received,
-                    contentType = response.header("content-type"),
-                    url = opened.finalUrl.toString(),
-                )
             }
         } catch (cancelled: CancellationException) {
             destination.delete()
@@ -334,8 +336,6 @@ class OkHttpFetcher(
             if (isCancelled()) throw seraError(SeraErrorCode.CANCELLED, cause = error)
             if (error is InterruptedIOException) throw seraError(SeraErrorCode.TIMEOUT, cause = error)
             throw seraError(SeraErrorCode.NETWORK_ERROR, detail = error.message ?: "stream to disk failed", cause = error)
-        } finally {
-            cancelHandle?.dispose()
         }
     }
 

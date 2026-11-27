@@ -82,6 +82,7 @@ interface Waiter {
   readonly node: NodeRecord;
   readonly resolve: (task: RemoteTask | undefined) => void;
   readonly timer: NodeJS.Timeout;
+  readonly cleanup?: () => void;
 }
 
 interface NodeRecord {
@@ -359,7 +360,11 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
     networkClass: NetworkClass = 'residential',
     features: readonly string[] = [],
     metadata?: NodeMetadata,
+    signal?: AbortSignal,
   ): Promise<RemoteTask | undefined> {
+    if (signal?.aborted) {
+      return Promise.resolve(undefined);
+    }
     const node = this.register(nodeId, providers, capacity, networkClass, features, metadata);
 
     const ready = this.queue.findIndex((task) => {
@@ -376,22 +381,45 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
       const existing = this.waiting[i]!;
       if (existing.node.id === nodeId) {
         clearTimeout(existing.timer);
+        existing.cleanup?.();
         this.waiting.splice(i, 1);
         existing.resolve(undefined);
       }
     }
 
     return new Promise((resolve) => {
+      let settled = false;
+      const finish = (task: RemoteTask | undefined): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(waiter.timer);
+        cleanup();
+        resolve(task);
+      };
+      const onAbort = (): void => {
+        const index = this.waiting.indexOf(waiter);
+        if (index !== -1) this.waiting.splice(index, 1);
+        finish(undefined);
+      };
+      const cleanup = (): void => {
+        signal?.removeEventListener('abort', onAbort);
+      };
       const waiter: Waiter = {
         node,
-        resolve,
+        resolve: finish,
+        cleanup,
         timer: setTimeout(() => {
           const index = this.waiting.indexOf(waiter);
           if (index !== -1) this.waiting.splice(index, 1);
-          resolve(undefined);
+          finish(undefined);
         }, holdMs),
       };
       waiter.timer.unref();
+      if (signal?.aborted) {
+        finish(undefined);
+        return;
+      }
+      signal?.addEventListener('abort', onAbort, { once: true });
       this.waiting.push(waiter);
     });
   }
@@ -628,9 +656,9 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
     });
   }
 
-  private hasEligibleLiveNode(task: RemoteTask): boolean {
+  private eligibleLiveNodes(task: RemoteTask): NodeRecord[] {
     const needed = requiredFeatures(task);
-    return this.live(task.networkClass).some(
+    return this.live(task.networkClass).filter(
       (node) =>
         nodeSupportsProvider(node.providers, task.providerId) &&
         !task.avoid?.includes(node.id) &&
@@ -638,13 +666,23 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
     );
   }
 
-  private armUnclaimed(pending: Pending): void {
+  private armUnclaimed(pending: Pending, delayMs = this.unclaimedTimeoutMs): void {
     if (pending.unclaimedTimer) clearTimeout(pending.unclaimedTimer);
     if (this.unclaimedTimeoutMs >= this.taskTimeoutMs) return;
     pending.unclaimedTimer = setTimeout(() => {
       pending.unclaimedTimer = undefined;
       if (this.pending.get(pending.task.id) !== pending || pending.claimedBy !== undefined) return;
-      if (this.hasEligibleLiveNode(pending.task)) return;
+      const liveNodes = this.eligibleLiveNodes(pending.task);
+      if (liveNodes.length > 0) {
+        const now = Date.now();
+        const maxRemainingMs = liveNodes.reduce(
+          (max, node) => Math.max(max, this.staleAfterMs - (now - node.seen)),
+          0,
+        );
+        const nextDelayMs = Math.max(25, Math.min(this.unclaimedTimeoutMs, maxRemainingMs + 25));
+        this.armUnclaimed(pending, nextDelayMs);
+        return;
+      }
       const queued = this.queue.indexOf(pending.task);
       if (queued !== -1) this.queue.splice(queued, 1);
       pending.settle({
@@ -652,7 +690,7 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
           detail: `remote: no healthy node claimed task within ${Math.round(this.unclaimedTimeoutMs / 1000)}s`,
         }),
       });
-    }, this.unclaimedTimeoutMs);
+    }, delayMs);
     pending.unclaimedTimer.unref();
   }
 
@@ -758,6 +796,7 @@ export class ExtractionNodeRegistry implements RemoteExtraction {
       const [task] = this.queue.splice(index, 1);
       this.waiting.splice(waiterIndex, 1);
       clearTimeout(waiter.timer);
+      waiter.cleanup?.();
       this.markClaimed(task!, waiter.node.id);
       waiter.resolve(task);
     }

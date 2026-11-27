@@ -162,18 +162,43 @@ describe('Website Legal Pages Content & Compliance', () => {
     expect(downloader).not.toContain('inputMode="numeric"');
     expect(downloader).toContain('getServiceInfo');
     expect(downloader).toContain('nodeAvailability');
+    expect(downloader).toContain("trim.state === 'invalid'");
+    expect(downloader).toContain('onResetImport');
+    expect(downloader).toContain('maxSelectedItems');
 
     const importClient = readFileSync(importClientPath, 'utf8');
     expect(importClient).not.toContain('openImportChannel');
     expect(importClient).not.toContain('window.opener');
+    expect(importClient).toContain('onResetImport');
 
     const healthIndicator = readFileSync(healthIndicatorPath, 'utf8');
     const reportForm = readFileSync(reportFormPath, 'utf8');
     expect(healthIndicator).toContain('createTimeoutSignal');
     expect(healthIndicator).not.toContain('AbortSignal.any');
     expect(healthIndicator).not.toContain('AbortSignal.timeout');
+    expect(healthIndicator).toContain('nextFocus !== null');
     expect(reportForm).toContain('createTimeoutSignal');
     expect(reportForm).not.toContain('AbortSignal.any');
     expect(reportForm).not.toContain('AbortSignal.timeout');
+    expect(reportForm).toContain('setGoodFaithConfirmed(false)');
+
+    const resultPanel = readFileSync(
+      fileURLToPath(new URL('../apps/web/src/components/result-panel.tsx', import.meta.url)),
+      'utf8',
+    );
+    expect(resultPanel).toContain('open={!result.isArchive}');
+
+    const picker = readFileSync(itemPickerPath, 'utf8');
+    expect(picker).toContain('cappedVisible');
+    expect(picker).toContain('Select matches');
+
+    const css = readFileSync(cssPath, 'utf8');
+    const mediaDarkBlock = css.slice(
+      css.indexOf('@media (prefers-color-scheme: dark)'),
+      css.indexOf(":root[data-theme='dark']"),
+    );
+    expect(mediaDarkBlock).toContain('--color-canvas');
+    expect(mediaDarkBlock).toContain('--color-surface');
+    expect(mediaDarkBlock).toContain('--color-ink');
   });
 });

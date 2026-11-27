@@ -180,6 +180,7 @@ export function LegalReportForm({ authoritiesEmail, legalEmail }: LegalReportFor
                 setReceipt(undefined);
                 setTargetUrl('');
                 setExplanation('');
+                setGoodFaithConfirmed(false);
               }}
               className="cursor-pointer rounded-lg border border-[var(--color-line-strong)] bg-[var(--color-surface)] px-4 py-2 text-xs font-medium text-[var(--color-ink)] transition-colors hover:bg-[var(--color-sunken)]"
             >

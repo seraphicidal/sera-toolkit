@@ -325,7 +325,7 @@ export const serviceInfoSchema = z.object({
 
 export const ServiceInfoSchema = serviceInfoSchema;
 
-const httpUrlSchema = z
+export const httpUrlSchema = z
   .string()
   .max(MAX_URL_LENGTH)
   .refine((u) => !/[\x00-\x20\x7f]/.test(u), 'URL contains forbidden characters.')
@@ -680,12 +680,16 @@ export const androidNodeAppUpdateInfoSchema = z.object({
   minVersionCode: z.number().int().positive().optional(),
 });
 
+export const youtubePlayerClientSchema = z.string().regex(/^[a-z0-9_+-]{1,64}$/i);
+
+export const youtubeRemoteComponentSchema = z
+  .string()
+  .regex(/^[a-z0-9][a-z0-9_-]{0,31}:[a-z0-9_.,-]{1,80}$/);
+
 export const youtubeHotConfigSchema = z.object({
-  playerClients: z.array(z.string().regex(/^[a-z0-9_+-]{1,64}$/i)).max(20),
+  playerClients: z.array(youtubePlayerClientSchema).max(20),
   extraArgs: youtubeExtraArgsSchema,
-  remoteComponents: z
-    .array(z.string().regex(/^[a-z0-9][a-z0-9_-]{0,31}:[a-z0-9_.,-]{1,80}$/))
-    .max(20),
+  remoteComponents: z.array(youtubeRemoteComponentSchema).max(20),
   potProviderUrl: httpUrlSchema.optional(),
 });
 

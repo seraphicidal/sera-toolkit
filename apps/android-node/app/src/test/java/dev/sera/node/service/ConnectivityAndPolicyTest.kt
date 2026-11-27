@@ -238,4 +238,25 @@ class ConnectivityAndPolicyTest {
             ),
         )
     }
+
+    @Test
+    fun scalesProgressThrottleWithConcurrencyHandles429BackoffAndStickyStopPolicy() {
+        assertTrue(NodeServicePolicy.PROGRESS_THROTTLE_MS >= 1_000L)
+        assertEquals(1_000L, NodeServicePolicy.effectiveProgressThrottleMs(1))
+        assertEquals(1_000L, NodeServicePolicy.effectiveProgressThrottleMs(4))
+        assertEquals(1_500L, NodeServicePolicy.effectiveProgressThrottleMs(6))
+        assertEquals(2_000L, NodeServicePolicy.effectiveProgressThrottleMs(8))
+
+        val maxReqsPerMinuteAtCap8 = (8 * 60_000L) / NodeServicePolicy.effectiveProgressThrottleMs(8)
+        assertTrue(maxReqsPerMinuteAtCap8 <= 300L)
+
+        assertEquals(2_000L, NodeServicePolicy.computeProgressRateLimitBackoffMs(0L, null))
+        assertEquals(4_000L, NodeServicePolicy.computeProgressRateLimitBackoffMs(2_000L, null))
+        assertEquals(15_000L, NodeServicePolicy.computeProgressRateLimitBackoffMs(12_000L, null))
+        assertEquals(7_000L, NodeServicePolicy.computeProgressRateLimitBackoffMs(0L, 7L))
+        assertEquals(15_000L, NodeServicePolicy.computeProgressRateLimitBackoffMs(0L, 120L))
+
+        assertTrue(NodeServicePolicy.shouldStopOnStickyRestart(serviceEnabled = false))
+        assertFalse(NodeServicePolicy.shouldStopOnStickyRestart(serviceEnabled = true))
+    }
 }

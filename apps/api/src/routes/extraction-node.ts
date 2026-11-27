@@ -101,6 +101,7 @@ const dispatchPollQuerySchema = z.object({
   wait: z.string().max(16).optional(),
   seenStep: z.string().max(120).optional(),
   seenPercent: z.string().max(32).optional(),
+  seenClaimedBy: z.string().max(128).optional(),
 });
 
 const RESOLVED_BODY_LIMIT = 4 * 1024 * 1024;
@@ -385,26 +386,28 @@ export function registerExtractionNodeRoutes(
         return reply;
       }
 
-      const [task, manifestHash] = await Promise.all([
-        extractionNodes.claim(
-          nodeId,
-          providers,
-          capacity,
-          config.extractionNodes.claimHoldMs,
-          networkClass,
-          features,
-          {
-            ...(transport ? { transport } : {}),
-            ...(role ? { role } : {}),
-            ...(priority !== undefined ? { priority } : {}),
-            ...(appVersion ? { appVersion } : {}),
-            ...(ytdlpVersion ? { ytdlpVersion } : {}),
-            ...(ffmpegVersion ? { ffmpegVersion } : {}),
-          },
-        ),
-        updates.currentManifestHash(),
-      ]);
-      void reply.header('x-sera-manifest-hash', manifestHash);
+      const task = await extractionNodes.claim(
+        nodeId,
+        providers,
+        capacity,
+        config.extractionNodes.claimHoldMs,
+        networkClass,
+        features,
+        {
+          ...(transport ? { transport } : {}),
+          ...(role ? { role } : {}),
+          ...(priority !== undefined ? { priority } : {}),
+          ...(appVersion ? { appVersion } : {}),
+          ...(ytdlpVersion ? { ytdlpVersion } : {}),
+          ...(ffmpegVersion ? { ffmpegVersion } : {}),
+        },
+        request.signal,
+      );
+      const manifestHash = await updates.currentManifestHash().catch((err: unknown) => {
+        logger.warn({ err }, 'failed to resolve extraction manifest hash');
+        return undefined;
+      });
+      if (manifestHash) void reply.header('x-sera-manifest-hash', manifestHash);
       if (!task) return reply.status(204).send();
       return reply.send(task);
     });
@@ -967,13 +970,19 @@ export function registerExtractionNodeRoutes(
             query.seenPercent !== undefined ? Number.parseFloat(query.seenPercent) : undefined;
           const seenPercent =
             rawPercent !== undefined && Number.isFinite(rawPercent) ? rawPercent : undefined;
+          const seenClaimedBy = query.seenClaimedBy;
 
-          const isUnchanged = () =>
+          const progressUnchanged = () =>
             entry.progress === undefined
               ? seenStep === undefined && seenPercent === undefined
               : (seenStep !== undefined || seenPercent !== undefined) &&
                 (seenStep === undefined || entry.progress.step === seenStep) &&
                 (seenPercent === undefined || entry.progress.percent === seenPercent);
+
+          const claimedUnchanged = () =>
+            seenClaimedBy === undefined || (entry.claimedBy ?? '') === seenClaimedBy;
+
+          const isUnchanged = () => progressUnchanged() && claimedUnchanged();
 
           if (isUnchanged()) {
             await new Promise<void>((resolve) => {

@@ -12,6 +12,7 @@ export interface YtdlpOptions {
   readonly binary: string;
   readonly ffmpegPath?: string;
   readonly proxy?: string;
+  readonly noProxy?: readonly string[];
 
   readonly timeoutMs: number;
   readonly signal?: AbortSignal;
@@ -94,6 +95,39 @@ function assertHttpUrl(url: string): void {
   }
 }
 
+const POT_BASE_URL_PREFIX = 'youtubepot-bgutilhttp:base_url=';
+
+export function ytdlpNoProxy(
+  options: Pick<YtdlpOptions, 'noProxy' | 'extractorArgs'>,
+): string | undefined {
+  const hosts = new Set<string>();
+  for (const host of options.noProxy ?? []) {
+    const trimmed = host.trim();
+    if (trimmed) hosts.add(trimmed);
+  }
+  for (const arg of options.extractorArgs ?? []) {
+    if (!arg.toLowerCase().startsWith(POT_BASE_URL_PREFIX)) continue;
+    const rawUrl = arg.slice(POT_BASE_URL_PREFIX.length).split(';')[0]?.trim();
+    if (!rawUrl) continue;
+    try {
+      const parsed = new URL(rawUrl);
+      if (parsed.hostname) hosts.add(parsed.hostname);
+    } catch {}
+  }
+  if (!hosts.size) return undefined;
+  const existing = (process.env.NO_PROXY ?? process.env.no_proxy ?? '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  for (const entry of existing) hosts.add(entry);
+  return [...hosts].join(',');
+}
+
+function ytdlpEnv(options: YtdlpOptions): NodeJS.ProcessEnv | undefined {
+  const value = ytdlpNoProxy(options);
+  return value ? { NO_PROXY: value, no_proxy: value } : undefined;
+}
+
 function baseArgs(options: YtdlpOptions): string[] {
   const args = [
     '--ignore-config',
@@ -140,11 +174,13 @@ export async function dumpInfo(
 
   args.push('--dump-single-json', '--', url);
 
+  const env = ytdlpEnv(options);
   const result = await run(options.binary, {
     args,
     timeoutMs: options.timeoutMs,
     captureStdout: true,
     maxStdoutBytes: 16 * 1024 * 1024,
+    ...(env ? { env } : {}),
     ...(options.signal ? { signal: options.signal } : {}),
   });
 
@@ -310,12 +346,14 @@ export async function download(request: DownloadRequest): Promise<void> {
   };
 
   let result;
+  const env = ytdlpEnv(request);
   try {
     result = await run(request.binary, {
       args,
       cwd: request.workdir,
       timeoutMs: request.timeoutMs,
       onStdoutLine: emit,
+      ...(env ? { env } : {}),
       signal: combinedSignal,
     });
   } catch (error) {
@@ -373,10 +411,12 @@ export async function downloadSubtitles(request: SubtitleDownloadRequest): Promi
     request.url,
   );
 
+  const env = ytdlpEnv(request);
   const result = await run(request.binary, {
     args,
     cwd: request.workdir,
     timeoutMs: request.timeoutMs,
+    ...(env ? { env } : {}),
     ...(request.signal ? { signal: request.signal } : {}),
   });
   if (result.code !== 0) throw classifyYtdlpFailure(result.stderrTail, result.code);

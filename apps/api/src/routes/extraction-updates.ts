@@ -4,9 +4,12 @@ import { mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/prom
 import { join, resolve } from 'node:path';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import {
+  httpUrlSchema,
   isSafeYoutubeExtraArgs,
   nodeUpdateManifestSchema,
   youtubeExtraArgsSchema,
+  youtubePlayerClientSchema,
+  youtubeRemoteComponentSchema,
   type AndroidNodeAppUpdateInfo,
   type NodeUpdateManifest,
   type ProviderHotConfig,
@@ -40,13 +43,15 @@ const MAX_YTDLP_BYTES = 64 * 1024 * 1024;
 const MAX_APK_BYTES = 256 * 1024 * 1024;
 const MAX_JSON_MANIFEST_BYTES = 2 * 1024 * 1024;
 
-const httpUrlSchema = z
-  .string()
-  .url()
-  .max(2048)
-  .refine((u) => /^https?:\/\//i.test(u), 'URL must use http or https.');
-
 const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/i);
+
+function safeJsonParse(raw: string): unknown {
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    return undefined;
+  }
+}
 
 const toolsManifestSchema = z.object({
   ytdlp: z.object({
@@ -91,27 +96,9 @@ const manifestOverrideSchema = z.object({
     .object({
       youtube: z
         .object({
-          playerClients: z
-            .array(
-              z
-                .string()
-                .min(1)
-                .max(64)
-                .regex(/^[A-Za-z0-9_+-]+$/),
-            )
-            .max(20)
-            .optional(),
+          playerClients: z.array(youtubePlayerClientSchema).max(20).optional(),
           extraArgs: youtubeExtraArgsSchema.optional(),
-          remoteComponents: z
-            .array(
-              z
-                .string()
-                .min(1)
-                .max(128)
-                .regex(/^[A-Za-z0-9_.:/-]+$/),
-            )
-            .max(20)
-            .optional(),
+          remoteComponents: z.array(youtubeRemoteComponentSchema).max(20).optional(),
           potProviderUrl: httpUrlSchema.optional(),
         })
         .optional(),
@@ -365,9 +352,12 @@ export function createExtractionUpdatesService(
   const rawExtraArgs =
     options.extraYoutubeArgs ?? parseExtraArgs(process.env.SERA_YOUTUBE_EXTRA_ARGS);
   const defaultExtraArgs = isSafeYoutubeExtraArgs(rawExtraArgs) ? rawExtraArgs : [];
-  const defaultRemoteComponents =
+  const rawRemoteComponents =
     options.remoteComponents ??
     parseCsvEnv(process.env.SERA_YOUTUBE_REMOTE_COMPONENTS, ['ejs:github']);
+  const defaultRemoteComponents = rawRemoteComponents
+    .filter((item) => youtubeRemoteComponentSchema.safeParse(item).success)
+    .slice(0, 20);
 
   const updatesDir = config.dataDir ? join(config.dataDir, 'updates') : undefined;
   const cacheDir = updatesDir ? join(updatesDir, 'cache') : undefined;
@@ -710,7 +700,7 @@ export function createExtractionUpdatesService(
     if (response.status >= 400) {
       throw new Error(`github releases returned ${response.status}`);
     }
-    const parsedReleases = z.array(githubReleaseSchema).safeParse(JSON.parse(response.body));
+    const parsedReleases = z.array(githubReleaseSchema).safeParse(safeJsonParse(response.body));
     if (!parsedReleases.success) return undefined;
 
     for (const release of parsedReleases.data) {
@@ -723,7 +713,7 @@ export function createExtractionUpdatesService(
         });
         if (assetRes.status >= 400) continue;
         const parsedManifest = androidReleaseManifestAssetSchema.safeParse(
-          JSON.parse(assetRes.body),
+          safeJsonParse(assetRes.body),
         );
         if (!parsedManifest.success) continue;
         const info = parsedManifest.data;
@@ -782,9 +772,9 @@ export function createExtractionUpdatesService(
     const url = `${githubApiBase}/repos/${repo}/releases/latest`;
     const response = await fetchTextFromUpstream(url, githubHeaders());
     if (response.status >= 400) return undefined;
-    const body = JSON.parse(response.body) as { tag_name?: unknown };
+    const body = safeJsonParse(response.body) as { tag_name?: unknown } | undefined;
     if (
-      typeof body.tag_name === 'string' &&
+      typeof body?.tag_name === 'string' &&
       /^\d{4}\.\d{2}\.\d{2}(?:\.\d+)?$/.test(body.tag_name)
     ) {
       return body.tag_name;
@@ -897,11 +887,14 @@ export function createExtractionUpdatesService(
       ? config.youtube.playerClients
           .split(',')
           .map((item) => item.trim())
-          .filter(Boolean)
+          .filter((item) => youtubePlayerClientSchema.safeParse(item).success)
+          .slice(0, 20)
       : [];
-    const basePot = isPubliclyReachableUrl(config.youtube.potProviderUrl)
-      ? config.youtube.potProviderUrl
-      : undefined;
+    const basePot =
+      isPubliclyReachableUrl(config.youtube.potProviderUrl) &&
+      httpUrlSchema.safeParse(config.youtube.potProviderUrl).success
+        ? config.youtube.potProviderUrl
+        : undefined;
 
     const ytOverride = overrides.manifest?.providerConfig?.youtube;
     const igOverride = overrides.manifest?.providerConfig?.instagram;

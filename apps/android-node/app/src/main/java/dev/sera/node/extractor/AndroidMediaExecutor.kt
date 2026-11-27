@@ -5,10 +5,12 @@ import com.yausername.youtubedl_android.YoutubeDLException
 import com.yausername.youtubedl_android.YoutubeDLRequest
 import dev.sera.node.model.SeraJson
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
@@ -324,22 +326,14 @@ class AndroidMediaExecutor(
 
         return try {
             withTimeout(timeoutMs.coerceAtLeast(5_000L)) {
-                coroutineScope {
-                    val destroyHandle = coroutineContext[Job]?.invokeOnCompletion { cause ->
-                        if (cause != null) {
-                            runCatching { ytdlp.destroyProcessById(processId) }
-                        }
-                    }
-                    val cancelMonitor = launch {
-                        while (isActive) {
-                            if (isCancelled()) {
-                                runCatching { ytdlp.destroyProcessById(processId) }
-                                break
-                            }
-                            delay(100L)
-                        }
-                    }
-                    try {
+                val finished = AtomicBoolean(false)
+                try {
+                    withImmediateCancelHook(
+                        onCancel = {
+                            destroyYtdlpProcessReliably(ytdlp, processId, finished)
+                        },
+                        isCancelled = isCancelled,
+                    ) {
                         withContext(Dispatchers.IO) {
                             val response = ytdlp.execute(request, processId, false, callback)
                             if (isCancelled()) {
@@ -354,11 +348,10 @@ class AndroidMediaExecutor(
                                 stderrTail = response.err.takeLast(4096),
                             )
                         }
-                    } finally {
-                        cancelMonitor.cancel()
-                        destroyHandle?.dispose()
-                        runCatching { ytdlp.destroyProcessById(processId) }
                     }
+                } finally {
+                    finished.set(true)
+                    runCatching { ytdlp.destroyProcessById(processId) }
                 }
             }
         } catch (error: TimeoutCancellationException) {
@@ -438,14 +431,16 @@ class AndroidMediaExecutor(
             pb.environment().putAll(env)
 
             val process = pb.start()
-            val destroyHandle = currentCoroutineContext()[Job]?.invokeOnCompletion { cause ->
-                if (cause != null && process.isAlive) {
-                    process.destroyForcibly()
-                }
-            }
 
             try {
-                coroutineScope {
+                withImmediateCancelHook(
+                    onCancel = {
+                        if (process.isAlive) {
+                            process.destroyForcibly()
+                        }
+                    },
+                    isCancelled = isCancelled,
+                ) {
                     val stderrJob = async(Dispatchers.IO) {
                         val stderrTail = StringBuilder()
                         try {
@@ -511,9 +506,66 @@ class AndroidMediaExecutor(
                     )
                 }
             } finally {
-                destroyHandle?.dispose()
                 if (process.isAlive) process.destroyForcibly()
             }
+        }
+    }
+}
+
+internal fun destroyYtdlpProcessReliably(
+    ytdlp: YoutubeDL,
+    processId: String,
+    finished: AtomicBoolean,
+) {
+    for (attempt in 0 until 20) {
+        val destroyed = runCatching { ytdlp.destroyProcessById(processId) }.getOrDefault(false)
+        if (destroyed || finished.get()) return
+        try {
+            Thread.sleep(25L)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            return
+        }
+    }
+}
+
+internal suspend fun <T> withImmediateCancelHook(
+    onCancel: () -> Unit,
+    isCancelled: (() -> Boolean)? = null,
+    block: suspend CoroutineScope.() -> T,
+): T {
+    val completed = AtomicBoolean(false)
+    val triggered = AtomicBoolean(false)
+    val triggerCancel = {
+        if (triggered.compareAndSet(false, true)) {
+            runCatching { onCancel() }
+        }
+    }
+    return coroutineScope {
+        val watcher = launch(Dispatchers.Default, start = CoroutineStart.UNDISPATCHED) {
+            try {
+                if (isCancelled != null) {
+                    while (isActive) {
+                        if (isCancelled()) {
+                            triggerCancel()
+                            return@launch
+                        }
+                        delay(100L)
+                    }
+                } else {
+                    awaitCancellation()
+                }
+            } finally {
+                if (!completed.get()) {
+                    triggerCancel()
+                }
+            }
+        }
+        try {
+            block()
+        } finally {
+            completed.set(true)
+            watcher.cancel()
         }
     }
 }

@@ -9,11 +9,11 @@ import android.os.Build
 import android.provider.Settings
 import dev.sera.node.data.NodeLogStore
 import dev.sera.node.data.NodeSettings
+import dev.sera.node.extractor.withImmediateCancelHook
 import dev.sera.node.model.AndroidAppUpdateInfo
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -189,10 +189,7 @@ class AppSelfUpdater(
         for (target in targets) {
             currentCoroutineContext().ensureActive()
             partFile.delete()
-            var call: Call? = null
-            val cancelHandle = currentCoroutineContext()[Job]?.invokeOnCompletion { cause ->
-                if (cause != null) call?.cancel()
-            }
+            var activeCall: Call? = null
             try {
                 logStore.info("UPDATER", "Downloading APK update v${info.versionName} (${info.versionCode}) from ${target.url}")
                 val reqBuilder = Request.Builder().url(target.url).get()
@@ -202,69 +199,76 @@ class AppSelfUpdater(
                         reqBuilder.header("Authorization", "Bearer $safeToken")
                     }
                 }
-                val activeCall = downloadClient.newCall(reqBuilder.build())
-                call = activeCall
-                awaitCall(activeCall).use { response ->
-                    if (!response.isSuccessful) {
-                        lastError = "HTTP ${response.code} downloading ${target.url}"
-                        logStore.warn("UPDATER", lastError)
-                        return@use
-                    }
-                    val body = response.body ?: run {
-                        lastError = "Empty APK response body"
-                        return@use
-                    }
-                    val totalBytes = body.contentLength().takeIf { it > 0L }
-                    var downloaded = 0L
-                    val digest = MessageDigest.getInstance("SHA-256")
-                    val buffer = ByteArray(65_536)
-
-                    body.byteStream().use { input ->
-                        FileOutputStream(partFile).use { output ->
-                            while (true) {
-                                currentCoroutineContext().ensureActive()
-                                val read = input.read(buffer)
-                                if (read <= 0) break
-                                output.write(buffer, 0, read)
-                                digest.update(buffer, 0, read)
-                                downloaded += read
-                                onProgress(downloaded, totalBytes)
+                val call = downloadClient.newCall(reqBuilder.build())
+                activeCall = call
+                val response = awaitCall(call)
+                val verified = withImmediateCancelHook(onCancel = { call.cancel() }) {
+                    withContext(Dispatchers.IO) {
+                        response.use { res ->
+                            if (!res.isSuccessful) {
+                                lastError = "HTTP ${res.code} downloading ${target.url}"
+                                logStore.warn("UPDATER", lastError)
+                                return@use null
                             }
-                            output.fd.sync()
+                            val body = res.body ?: run {
+                                lastError = "Empty APK response body"
+                                return@use null
+                            }
+                            val totalBytes = body.contentLength().takeIf { it > 0L }
+                            var downloaded = 0L
+                            val digest = MessageDigest.getInstance("SHA-256")
+                            val buffer = ByteArray(65_536)
+
+                            body.byteStream().use { input ->
+                                FileOutputStream(partFile).use { output ->
+                                    while (true) {
+                                        currentCoroutineContext().ensureActive()
+                                        val read = input.read(buffer)
+                                        if (read <= 0) break
+                                        output.write(buffer, 0, read)
+                                        digest.update(buffer, 0, read)
+                                        downloaded += read
+                                        onProgress(downloaded, totalBytes)
+                                    }
+                                    output.fd.sync()
+                                }
+                            }
+
+                            val actualSha = digest.digest().joinToString("") { "%02x".format(it) }
+                            if (actualSha != expectedSha) {
+                                partFile.delete()
+                                lastError = "SHA-256 mismatch for APK (expected $expectedSha, got $actualSha)"
+                                logStore.error("UPDATER", lastError)
+                                return@use null
+                            }
+
+                            if (finalFile.exists()) finalFile.delete()
+                            if (!partFile.renameTo(finalFile)) {
+                                partFile.copyTo(finalFile, overwrite = true)
+                                partFile.delete()
+                            }
+                            cleanupOldApks(updatesDir, keepName = finalFile.name)
+                            logStore.info("UPDATER", "APK SHA-256 verified (${finalFile.length()} bytes)")
+                            ApkDownloadOutcome.Verified(
+                                file = finalFile,
+                                sha256 = actualSha,
+                                sizeBytes = finalFile.length(),
+                                sourceUrl = target.url,
+                            )
                         }
                     }
-
-                    val actualSha = digest.digest().joinToString("") { "%02x".format(it) }
-                    if (actualSha != expectedSha) {
-                        partFile.delete()
-                        lastError = "SHA-256 mismatch for APK (expected $expectedSha, got $actualSha)"
-                        logStore.error("UPDATER", lastError)
-                        return@use
-                    }
-
-                    if (finalFile.exists()) finalFile.delete()
-                    if (!partFile.renameTo(finalFile)) {
-                        partFile.copyTo(finalFile, overwrite = true)
-                        partFile.delete()
-                    }
-                    cleanupOldApks(updatesDir, keepName = finalFile.name)
-                    logStore.info("UPDATER", "APK SHA-256 verified (${finalFile.length()} bytes)")
-                    return@withContext ApkDownloadOutcome.Verified(
-                        file = finalFile,
-                        sha256 = actualSha,
-                        sizeBytes = finalFile.length(),
-                        sourceUrl = target.url,
-                    )
+                }
+                if (verified != null) {
+                    return@withContext verified
                 }
             } catch (cancelled: CancellationException) {
+                activeCall?.cancel()
                 partFile.delete()
                 throw cancelled
             } catch (error: IOException) {
                 partFile.delete()
                 lastError = error.message ?: "Network error downloading APK"
                 logStore.warn("UPDATER", "APK download attempt failed: $lastError")
-            } finally {
-                cancelHandle?.dispose()
             }
         }
 

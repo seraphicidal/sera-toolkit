@@ -1,6 +1,8 @@
 package dev.sera.node.extractor
 
 import dev.sera.node.model.FetchPlan
+import dev.sera.node.model.NodeRuntimeConfig
+import dev.sera.node.model.ProviderHotConfig
 import dev.sera.node.model.ResolvedMedia
 import dev.sera.node.model.ResolvedPlan
 import kotlinx.serialization.json.JsonPrimitive
@@ -38,29 +40,8 @@ class YoutubeExtractor(
         return joined.takeIf { VALID_PLAYER_CLIENTS.matches(it) }
     }
 
-    private fun sanitizePotProviderUrl(raw: String?): String? {
-        val cleaned = raw?.trim()?.trimEnd('/')?.takeIf { it.isNotEmpty() } ?: return null
-        if (hasForbiddenUrlChar(cleaned) || cleaned.contains(';')) return null
-        val parsed = cleaned.toHttpUrlOrNull() ?: return null
-        if (parsed.scheme != "http" && parsed.scheme != "https") return null
-        if (parsed.encodedUsername.isNotEmpty() || parsed.encodedPassword.isNotEmpty()) return null
-        return cleaned.takeIf { it.length <= 160 }
-    }
-
-    private fun configuredPlayerClients(context: ExtractionExecutionContext): String? {
-        val hotClients = context.hotConfig?.youtube?.playerClients.orEmpty()
-            .map { it.trim() }
-            .filter { it.isNotEmpty() && VALID_PLAYER_CLIENT_TOKEN.matches(it) }
-        if (hotClients.isNotEmpty()) {
-            return sanitizePlayerClients(hotClients.joinToString(","))
-        }
-        return sanitizePlayerClients(context.runtimeConfig.youtubePlayerClients)
-    }
-
-    private fun configuredPotProviderUrl(context: ExtractionExecutionContext): String? {
-        val hotPot = sanitizePotProviderUrl(context.hotConfig?.youtube?.potProviderUrl)
-        return hotPot ?: sanitizePotProviderUrl(context.runtimeConfig.youtubePotProviderUrl)
-    }
+    private fun configuredPotProviderUrl(context: ExtractionExecutionContext): String? =
+        configuredPotProviderUrl(context.runtimeConfig, context.hotConfig)
 
     override fun extractorArgs(
         url: HttpUrl,
@@ -69,9 +50,15 @@ class YoutubeExtractor(
         val args = ArrayList<String>()
         val clients = configuredPlayerClients(context)
         if (clients != null) args.add("youtube:player_client=$clients")
-        val provider = configuredPotProviderUrl(context)
-        if (provider != null) args.add("youtubepot-bgutilhttp:base_url=$provider")
         return args
+    }
+
+    override fun localOnlyExtractorArgs(
+        url: HttpUrl,
+        context: ExtractionExecutionContext,
+    ): List<String> {
+        val provider = configuredPotProviderUrl(context) ?: return emptyList()
+        return listOf("youtubepot-bgutilhttp:base_url=$provider")
     }
 
     override fun extraYtdlpArgs(
@@ -139,6 +126,43 @@ class YoutubeExtractor(
         meta["extractionPath"] = JsonPrimitive("direct")
         meta["poTokenStatus"] = JsonPrimitive(potStatus)
         return result.copy(media = withThumb.copy(metadata = meta))
+    }
+
+    private fun configuredPlayerClients(context: ExtractionExecutionContext): String? {
+        val hotClients = context.hotConfig?.youtube?.playerClients.orEmpty()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && VALID_PLAYER_CLIENT_TOKEN.matches(it) }
+        if (hotClients.isNotEmpty()) {
+            return sanitizePlayerClients(hotClients.joinToString(","))
+        }
+        return sanitizePlayerClients(context.runtimeConfig.youtubePlayerClients)
+    }
+
+    companion object {
+        fun sanitizePotProviderUrl(raw: String?): String? {
+            val cleaned = raw?.trim()?.trimEnd('/')?.takeIf { it.isNotEmpty() } ?: return null
+            if (hasForbiddenUrlChar(cleaned) || cleaned.contains(';')) return null
+            val parsed = cleaned.toHttpUrlOrNull() ?: return null
+            if (parsed.scheme != "http" && parsed.scheme != "https") return null
+            if (parsed.encodedUsername.isNotEmpty() || parsed.encodedPassword.isNotEmpty()) return null
+            return cleaned.takeIf { it.length <= 160 }
+        }
+
+        fun configuredPotProviderUrl(
+            config: NodeRuntimeConfig,
+            hotConfig: ProviderHotConfig?,
+        ): String? {
+            val hotPot = sanitizePotProviderUrl(hotConfig?.youtube?.potProviderUrl)
+            return hotPot ?: sanitizePotProviderUrl(config.youtubePotProviderUrl)
+        }
+
+        fun potExtractorArg(
+            config: NodeRuntimeConfig,
+            hotConfig: ProviderHotConfig?,
+        ): String? {
+            val provider = configuredPotProviderUrl(config, hotConfig) ?: return null
+            return "youtubepot-bgutilhttp:base_url=$provider"
+        }
     }
 }
 

@@ -133,6 +133,25 @@ describe('reaper', () => {
     expect(await readdir(root)).toEqual([]);
   });
 
+  it('does not orphan .dl-* or .active lease files when released immediately after acquisition', async () => {
+    const id = jobId(27);
+    await manager.create(id);
+
+    for (let i = 0; i < 10; i += 1) {
+      const release = manager.acquireDownload(id);
+      release();
+      manager.markActive(id);
+      manager.markInactive(id);
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    const entries = await readdir(join(root, id));
+    expect(entries.some((name) => name.startsWith('.dl-') || name === '.active')).toBe(false);
+
+    await age(id, RETENTION_SECONDS + 30);
+    expect(await manager.reap()).toBe(1);
+  });
+
   it('excludes non-workspace directories from usage scans', async () => {
     const reportsDir = join(root, 'reports');
     await mkdir(reportsDir, { recursive: true });

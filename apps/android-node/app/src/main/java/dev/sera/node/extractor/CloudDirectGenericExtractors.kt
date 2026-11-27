@@ -106,12 +106,12 @@ fun classifyDirectMedia(contentType: String, extension: String): String {
     }
     if (ct.startsWith("video/") || (ct.isEmpty() && ext in VIDEO_EXTS)) return "video"
     if (ct.startsWith("audio/") || (ct.isEmpty() && ext in AUDIO_EXTENSIONS)) return "audio"
-    if (ct in ARCHIVE_DOC_MIMES || (ct.isEmpty() && ext in ARCHIVE_DOC_EXTS)) return "image"
+    if (ct in ARCHIVE_DOC_MIMES || (ct.isEmpty() && ext in ARCHIVE_DOC_EXTS)) return "file"
     if (ct == "application/octet-stream" || ct == "binary/octet-stream") {
         if (ext in VIDEO_EXTS) return "video"
         if (ext in AUDIO_EXTENSIONS) return "audio"
         if (ext in IMAGE_EXTENSIONS) return "image"
-        if (ext in ARCHIVE_DOC_EXTS) return "image"
+        if (ext in ARCHIVE_DOC_EXTS) return "file"
     }
     if (ct.contains("mpegurl") || ct.contains("dash+xml")) return "video"
     return "unknown"
@@ -201,7 +201,7 @@ private fun buildCloudMedia(
         ?: downloadUrl.toHttpUrlOrNull()?.let { urlExtension(it) }
         ?: ""
     val classified = classifyDirectMedia(cleanType, fileExt)
-    val kind = if (classified == "unknown") "image" else classified
+    val kind = if (classified == "unknown") "file" else classified
     val container = normalizeDirectContainer(cleanType, fileExt)
     val stem = filename.replace(Regex("""\.[^.]+$"""), "")
     val title = sanitizeStem(stem, providerLabel)

@@ -33,15 +33,17 @@ export type SafeApiPathResult =
   | { readonly ok: true; readonly path: string }
   | { readonly ok: false; readonly status: 404 | 405; readonly allow?: readonly string[] };
 
+function decodePercentHex(value: string): string {
+  return value.replace(/%([0-9a-fA-F]{2})/g, (_match, hex: string) =>
+    String.fromCharCode(Number.parseInt(hex, 16)),
+  );
+}
+
 function isUnsafeSegment(segment: string): boolean {
   if (!segment || segment === '.' || segment === '..') return true;
   if (/[/\\\u0000-\u001f\u007f]/.test(segment)) return true;
-  try {
-    const decoded = decodeURIComponent(segment);
-    if (decoded === '.' || decoded === '..' || /[/\\\u0000-\u001f\u007f]/.test(decoded)) {
-      return true;
-    }
-  } catch {
+  const decoded = decodePercentHex(segment);
+  if (decoded === '.' || decoded === '..' || /[/\\\u0000-\u001f\u007f]/.test(decoded)) {
     return true;
   }
   return false;

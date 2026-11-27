@@ -17,6 +17,7 @@ export function ActiveJobPanel({
   onCancel,
   onReset,
   onDownloadAgain,
+  downloadAgainLabel,
   hasNextInBatch,
   batchNextLabel,
   onNextInBatch,
@@ -29,6 +30,7 @@ export function ActiveJobPanel({
   readonly onCancel: () => void;
   readonly onReset: () => void;
   readonly onDownloadAgain?: () => void;
+  readonly downloadAgainLabel?: string;
   readonly hasNextInBatch?: boolean;
   readonly batchNextLabel?: string;
   readonly onNextInBatch?: () => void;
@@ -59,6 +61,7 @@ export function ActiveJobPanel({
         job={job}
         onReset={onReset}
         onDownloadAgain={onDownloadAgain}
+        downloadAgainLabel={downloadAgainLabel}
         hasNextInBatch={hasNextInBatch}
         batchNextLabel={batchNextLabel}
         onNextInBatch={onNextInBatch}

@@ -66,7 +66,7 @@ function productionEnv(secret, behindTunnel) {
     SERA_RATE_LIMIT_JOBS_PER_MINUTE: '8',
     SERA_MAX_CONCURRENT_JOBS_PER_CLIENT: '2',
 
-    SERA_TRUST_PROXY: behindTunnel ? '1' : 'false',
+    SERA_TRUST_PROXY: behindTunnel || WEB_HOST !== '127.0.0.1' ? '1' : 'false',
 
     LOG_LEVEL: 'info',
   };

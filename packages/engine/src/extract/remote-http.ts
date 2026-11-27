@@ -19,6 +19,7 @@ const VALID_TASK_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
 export class RemoteOverHttp implements RemoteExtraction {
   private nodes: { readonly at: number; readonly value: NodeStatus[] } | undefined;
+  private readonly initialRefresh: Promise<void>;
   private readonly timer: ReturnType<typeof setInterval>;
   private consecutiveFailures = 0;
 
@@ -29,9 +30,25 @@ export class RemoteOverHttp implements RemoteExtraction {
     private readonly statusTtlMs = 5_000,
     private readonly pollIntervalMs = 1_000,
   ) {
-    void this.refresh();
+    this.initialRefresh = this.refresh();
     this.timer = setInterval(() => void this.refresh(), Math.max(1_000, statusTtlMs));
     this.timer.unref();
+  }
+
+  async waitForInitialRefresh(timeoutMs = 5_000): Promise<void> {
+    if (this.nodes !== undefined) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        this.initialRefresh,
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, timeoutMs);
+          timer.unref();
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   close(): void {
@@ -151,6 +168,10 @@ export class RemoteOverHttp implements RemoteExtraction {
       signal?: AbortSignal;
     },
   ): Promise<{ media?: ResolvedMedia; files?: readonly RemoteFile[] }> {
+    if (this.nodes === undefined) {
+      await this.waitForInitialRefresh();
+      if (options.signal?.aborted) throw seraError('CANCELLED');
+    }
     const started = await this.call('POST', '/internal/extraction/dispatch', task, options.signal);
     const { taskId } = await this.readJson<{ taskId?: string }>(
       started,
@@ -165,6 +186,7 @@ export class RemoteOverHttp implements RemoteExtraction {
 
     let seenStep: string | undefined;
     let seenPercent: number | undefined;
+    let seenClaimedBy: string | undefined;
     let settledRemotely = false;
 
     try {
@@ -174,6 +196,7 @@ export class RemoteOverHttp implements RemoteExtraction {
         const query = new URLSearchParams({ wait: '20' });
         if (seenStep !== undefined) query.set('seenStep', seenStep);
         if (seenPercent !== undefined) query.set('seenPercent', String(seenPercent));
+        query.set('seenClaimedBy', seenClaimedBy ?? '');
 
         const reqStart = Date.now();
         const response = await this.call(
@@ -193,7 +216,10 @@ export class RemoteOverHttp implements RemoteExtraction {
           error?: { code: string; message?: string; detail?: string };
         }>(response, 'invalid extraction status response');
 
-        if (state.claimedBy) options.onClaimed?.(state.claimedBy);
+        if (state.claimedBy) {
+          seenClaimedBy = state.claimedBy;
+          options.onClaimed?.(state.claimedBy);
+        }
         if (state.progress) {
           options.onProgress?.(state.progress);
           seenStep = state.progress.step;

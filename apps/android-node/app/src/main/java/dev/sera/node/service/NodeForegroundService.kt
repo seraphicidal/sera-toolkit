@@ -15,6 +15,7 @@ import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import dev.sera.node.BuildConfig
 import dev.sera.node.ServiceLocator
+import dev.sera.node.data.ApiStatusException
 import dev.sera.node.data.ClaimOutcome
 import dev.sera.node.data.FatalAuthException
 import dev.sera.node.data.NodeSettings
@@ -33,6 +34,7 @@ import dev.sera.node.model.TaskProgress
 import dev.sera.node.model.isValidTaskId
 import dev.sera.node.updater.UpdateCoordinator
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -58,12 +60,17 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.math.max
 
 class NodeForegroundService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val isPaused = AtomicBoolean(false)
     private val isCharging = AtomicBoolean(false)
     private val stoppedDueToAuthError = AtomicBoolean(false)
+    private val startupStateReady = CompletableDeferred<Unit>()
+    private val progressBackoffUntilMs = AtomicLong(0L)
+    private val progressBackoffMs = AtomicLong(0L)
+    private val lastRateLimitLogAtMs = AtomicLong(0L)
     private val latestSettingsRef = AtomicReference<NodeSettings?>(null)
     private val activeClaimCall = AtomicReference<Call?>(null)
     private val activeTasks = ConcurrentHashMap<String, Job>()
@@ -120,6 +127,9 @@ class NodeForegroundService : Service() {
         when (intent?.action) {
             ACTION_STOP -> {
                 stoppedDueToAuthError.set(false)
+                isPaused.set(true)
+                activeClaimCall.get()?.cancel()
+                startupStateReady.complete(Unit)
                 serviceScope.launch {
                     val prefs = ServiceLocator.preferences(this@NodeForegroundService)
                     prefs.setServiceEnabled(enabled = false, explicitStop = true)
@@ -131,6 +141,7 @@ class NodeForegroundService : Service() {
 
             ACTION_PAUSE -> {
                 isPaused.set(true)
+                startupStateReady.complete(Unit)
                 serviceScope.launch {
                     ServiceLocator.preferences(this@NodeForegroundService).setServicePaused(true)
                 }
@@ -143,6 +154,7 @@ class NodeForegroundService : Service() {
 
             ACTION_RESUME -> {
                 isPaused.set(false)
+                startupStateReady.complete(Unit)
                 serviceScope.launch {
                     ServiceLocator.preferences(this@NodeForegroundService).setServicePaused(false)
                 }
@@ -154,6 +166,12 @@ class NodeForegroundService : Service() {
 
             ACTION_CHECK_UPDATES -> {
                 serviceScope.launch {
+                    if (!startupStateReady.isCompleted) {
+                        val current = ServiceLocator.preferences(this@NodeForegroundService).current()
+                        latestSettingsRef.set(current)
+                        isPaused.set(current.servicePaused)
+                        startupStateReady.complete(Unit)
+                    }
                     ServiceLocator.updateCoordinator(this@NodeForegroundService)
                         .checkAndApplyUpdates(force = true, allowAppInstall = true)
                     refreshNotification(immediate = true)
@@ -168,9 +186,10 @@ class NodeForegroundService : Service() {
                     val prefs = ServiceLocator.preferences(this@NodeForegroundService)
                     prefs.setServiceEnabled(enabled = true, explicitStop = false)
                     prefs.setServicePaused(false)
+                    startupStateReady.complete(Unit)
+                    signalLoopWake()
+                    refreshNotification(immediate = true)
                 }
-                signalLoopWake()
-                refreshNotification(immediate = true)
                 return START_STICKY
             }
 
@@ -178,7 +197,18 @@ class NodeForegroundService : Service() {
                 serviceScope.launch {
                     val current = ServiceLocator.preferences(this@NodeForegroundService).current()
                     latestSettingsRef.set(current)
+                    if (NodeServicePolicy.shouldStopOnStickyRestart(current.serviceEnabled)) {
+                        isPaused.set(true)
+                        activeClaimCall.get()?.cancel()
+                        startupStateReady.complete(Unit)
+                        stopSelf()
+                        return@launch
+                    }
                     isPaused.set(current.servicePaused)
+                    if (current.servicePaused) {
+                        activeClaimCall.get()?.cancel()
+                    }
+                    startupStateReady.complete(Unit)
                     syncPowerLocks()
                     signalLoopWake()
                     refreshNotification(immediate = true)
@@ -301,6 +331,7 @@ class NodeForegroundService : Service() {
         }
 
         mainLoopJob = serviceScope.launch {
+            startupStateReady.await()
             runCatching { toolsManager.ensureReady() }
                 .onFailure { logStore.warn("YTDLP", "Initial tool setup warning: ${it.message}") }
 
@@ -309,6 +340,10 @@ class NodeForegroundService : Service() {
 
             while (isActive) {
                 val settings = preferences.current()
+                if (NodeServicePolicy.shouldStopOnStickyRestart(settings.serviceEnabled) && activeTasks.isEmpty()) {
+                    stopSelf()
+                    break
+                }
                 val capacity = settings.preferredCapacity.coerceIn(1, 8)
                 if (activeTasks.size >= capacity) {
                     withTimeoutOrNull(2_000L) { wakeSignal.receive() }
@@ -516,11 +551,13 @@ class NodeForegroundService : Service() {
                 etaSeconds: Double?,
             ): Boolean {
                 if (cancelledByServer.get()) return false
+                val now = System.currentTimeMillis()
+                if (now < progressBackoffUntilMs.get()) return true
                 if (!progressInFlight.compareAndSet(false, true)) return true
                 try {
-                    lastProgressSentAt.set(System.currentTimeMillis())
-                    val response = runCatching {
-                        apiClient.reportProgress(
+                    lastProgressSentAt.set(now)
+                    val response = try {
+                        val res = apiClient.reportProgress(
                             baseUrl = settings.apiBaseUrl,
                             token = settings.nodeToken,
                             taskId = task.id,
@@ -533,7 +570,29 @@ class NodeForegroundService : Service() {
                                 etaSeconds = etaSeconds?.takeIf { it.isFinite() && it >= 0.0 },
                             ),
                         )
-                    }.getOrNull()
+                        progressBackoffMs.set(0L)
+                        progressBackoffUntilMs.set(0L)
+                        res
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (statusError: ApiStatusException) {
+                        if (statusError.statusCode == 429) {
+                            val backoff = NodeServicePolicy.computeProgressRateLimitBackoffMs(
+                                previousBackoffMs = progressBackoffMs.get(),
+                                retryAfterSeconds = statusError.retryAfterSeconds,
+                            )
+                            progressBackoffMs.set(backoff)
+                            val backoffNow = System.currentTimeMillis()
+                            progressBackoffUntilMs.set(backoffNow + backoff)
+                            val prevLog = lastRateLimitLogAtMs.get()
+                            if (backoffNow - prevLog >= 10_000L && lastRateLimitLogAtMs.compareAndSet(prevLog, backoffNow)) {
+                                logStore.warn("NODE", "Progress rate-limited (HTTP 429); backing off ${backoff / 1000}s")
+                            }
+                        }
+                        null
+                    } catch (_: Throwable) {
+                        null
+                    }
 
                     if (response?.cancelled == true) {
                         cancelledByServer.set(true)
@@ -549,8 +608,13 @@ class NodeForegroundService : Service() {
 
             val heartbeatJob = launch {
                 while (isActive && !cancelledByServer.get()) {
-                    delay(NodeServicePolicy.PROGRESS_HEARTBEAT_MS)
-                    if (System.currentTimeMillis() - lastProgressSentAt.get() >= NodeServicePolicy.PROGRESS_HEARTBEAT_MS) {
+                    val intervalMs = max(
+                        NodeServicePolicy.PROGRESS_HEARTBEAT_MS,
+                        NodeServicePolicy.effectiveProgressThrottleMs(activeTasks.size),
+                    )
+                    delay(intervalMs)
+                    val now = System.currentTimeMillis()
+                    if (now >= progressBackoffUntilMs.get() && now - lastProgressSentAt.get() >= intervalMs) {
                         pushProgressNow(
                             currentPercent.get(),
                             currentStep.get(),
@@ -590,7 +654,8 @@ class NodeForegroundService : Service() {
                     refreshNotification()
 
                     val now = System.currentTimeMillis()
-                    if (prevStep != update.step || now - lastProgressSentAt.get() >= NodeServicePolicy.PROGRESS_THROTTLE_MS) {
+                    val throttleMs = NodeServicePolicy.effectiveProgressThrottleMs(activeTasks.size)
+                    if (prevStep != update.step || now - lastProgressSentAt.get() >= throttleMs) {
                         pushProgressNow(
                             update.percent,
                             update.step,

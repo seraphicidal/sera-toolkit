@@ -899,4 +899,81 @@ describe('audit pass 2 regressions', () => {
     const m4a = audios.find((a) => a.container === 'm4a');
     expect(m4a?.requiresConversion).toBe(false);
   });
+
+  it('keeps potProviderUrl out of serialized YouTube ResolvedMedia extractorArgs while passing it to probe', async () => {
+    const { YouTubeProvider } = await import('./providers/youtube.js');
+    const { safeExtractorArgSchema } = await import('@sera/contracts');
+    const provider = new YouTubeProvider();
+    let probedArgs: readonly string[] | undefined;
+
+    const config = loadConfig({
+      NODE_ENV: 'test',
+      LOG_LEVEL: 'silent',
+      SERA_YOUTUBE_PLAYER_CLIENTS: 'web_safari',
+      SERA_YOUTUBE_POT_PROVIDER_URL: 'http://potoken:4416',
+    });
+    const resolved = await provider.resolve(
+      new URL('https://www.youtube.com/watch?v=dQw4w9WgXcQ'),
+      testContext({
+        config,
+        probe: (_url, opts) => {
+          probedArgs = opts?.extractorArgs;
+          return Promise.resolve({
+            id: 'dQw4w9WgXcQ',
+            title: 'PO Token Test',
+            ext: 'mp4',
+            formats: [
+              {
+                format_id: '18',
+                ext: 'mp4',
+                vcodec: 'avc1',
+                acodec: 'mp4a',
+                height: 360,
+                width: 640,
+              },
+            ],
+          });
+        },
+      }),
+    );
+
+    expect(probedArgs).toEqual([
+      'youtube:player_client=web_safari',
+      'youtubepot-bgutilhttp:base_url=http://potoken:4416',
+    ]);
+    const plan = resolved.items[0]?.plans[0];
+    expect(plan?.fetch.via).toBe('ytdlp');
+    if (plan?.fetch.via === 'ytdlp') {
+      expect(plan.fetch.extractorArgs).toEqual(['youtube:player_client=web_safari']);
+      for (const arg of plan.fetch.extractorArgs ?? []) {
+        expect(safeExtractorArgSchema.safeParse(arg).success).toBe(true);
+      }
+    }
+  });
+
+  it('matches sparse playlist items by item.index in matchSelection when sourceId is absent', async () => {
+    const { matchSelection } = await import('./jobs/runner.js');
+    const plan = {
+      kind: 'video' as const,
+      container: 'mp4' as const,
+      label: '720p',
+      requiresConversion: false,
+      recommended: true,
+      fetch: { via: 'ytdlp' as const, selector: '22' },
+    };
+    const resolved = {
+      provider: 'youtube',
+      providerLabel: 'YouTube',
+      url: 'https://www.youtube.com/playlist?list=PL123',
+      type: 'playlist' as const,
+      title: 'Sparse Playlist',
+      items: [
+        { index: 0, kind: 'video' as const, title: 'First', plans: [plan] },
+        { index: 3, kind: 'video' as const, title: 'Fourth', plans: [plan] },
+      ],
+    };
+    const matched = matchSelection(resolved, { itemIndex: 3, planKey: 'video/mp4/720p' });
+    expect(matched.item.title).toBe('Fourth');
+    expect(matched.item.index).toBe(3);
+  });
 });

@@ -10,10 +10,8 @@ import dev.sera.node.model.ToolsVersionInfo
 import dev.sera.node.model.YtdlpUpdateInfo
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -25,6 +23,8 @@ import java.io.File
 import java.io.InputStreamReader
 import java.util.UUID
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 private const val VERSION_CACHE_TTL_MS = 10 * 60_000L
 private const val NEGATIVE_VERSION_CACHE_TTL_MS = 60_000L
@@ -293,21 +293,25 @@ class SeraToolsManager(
             val resolved = withContext(Dispatchers.IO) {
                 val processId = "ver-${UUID.randomUUID()}"
                 val ytdlp = YoutubeDL.getInstance()
-                val cancelHandle = currentCoroutineContext()[Job]?.invokeOnCompletion { cause ->
-                    if (cause != null) {
-                        runCatching { ytdlp.destroyProcessById(processId) }
-                    }
-                }
+                val finished = AtomicBoolean(false)
                 val probed = try {
                     withTimeoutOrNull(15_000L) {
-                        runCatching {
-                            val req = YoutubeDLRequest(emptyList()).addOption("--version")
-                            val res = ytdlp.execute(req, processId, false, null)
-                            res.out.trim().lineSequence().firstOrNull()?.trim()?.takeIf { it.isNotEmpty() }
-                        }.getOrNull()
+                        withImmediateCancelHook(
+                            onCancel = {
+                                destroyYtdlpProcessReliably(ytdlp, processId, finished)
+                            },
+                        ) {
+                            withContext(Dispatchers.IO) {
+                                runCatching {
+                                    val req = YoutubeDLRequest(emptyList()).addOption("--version")
+                                    val res = ytdlp.execute(req, processId, false, null)
+                                    res.out.trim().lineSequence().firstOrNull()?.trim()?.takeIf { it.isNotEmpty() }
+                                }.getOrNull()
+                            }
+                        }
                     }
                 } finally {
-                    cancelHandle?.dispose()
+                    finished.set(true)
                     runCatching { ytdlp.destroyProcessById(processId) }
                 }
                 (
@@ -366,19 +370,18 @@ class SeraToolsManager(
 
     private suspend fun runQuickVersionCommand(binary: File, args: List<String>): String? {
         return withContext(Dispatchers.IO) {
-            var proc: Process? = null
-            val cancelHandle = currentCoroutineContext()[Job]?.invokeOnCompletion { cause ->
-                if (cause != null) {
-                    runCatching { proc?.destroyForcibly() }
-                }
-            }
+            val procRef = AtomicReference<Process?>(null)
             try {
                 val pb = ProcessBuilder(listOf(binary.absolutePath) + args)
                 pb.environment().putAll(buildNativeProcessEnv())
                 pb.redirectErrorStream(true)
                 val started = pb.start()
-                proc = started
-                coroutineScope {
+                procRef.set(started)
+                withImmediateCancelHook(
+                    onCancel = {
+                        runCatching { procRef.get()?.destroyForcibly() }
+                    },
+                ) {
                     val readerDeferred = async(Dispatchers.IO) {
                         runCatching {
                             BufferedReader(InputStreamReader(started.inputStream, Charsets.UTF_8)).use { it.readText() }
@@ -396,21 +399,21 @@ class SeraToolsManager(
                     if (!finished) {
                         started.destroyForcibly()
                         readerDeferred.cancel()
-                        return@coroutineScope null
+                        return@withImmediateCancelHook null
                     }
                     val text = withTimeoutOrNull(2_000L) { readerDeferred.await() }
                     if (started.exitValue() == 0) text else null
                 }
             } catch (cancelled: CancellationException) {
-                runCatching { proc?.destroyForcibly() }
+                runCatching { procRef.get()?.destroyForcibly() }
                 throw cancelled
             } catch (_: Throwable) {
-                runCatching { proc?.destroyForcibly() }
+                runCatching { procRef.get()?.destroyForcibly() }
                 null
             } finally {
-                cancelHandle?.dispose()
+                val proc = procRef.get()
                 if (proc?.isAlive == true) {
-                    runCatching { proc?.destroyForcibly() }
+                    runCatching { proc.destroyForcibly() }
                 }
             }
         }

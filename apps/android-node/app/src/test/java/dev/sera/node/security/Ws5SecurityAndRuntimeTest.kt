@@ -6,6 +6,7 @@ import dev.sera.node.data.NodeLogStore
 import dev.sera.node.data.NodePreferences
 import dev.sera.node.data.NodeSettings
 import dev.sera.node.data.SecretCipher
+import dev.sera.node.data.SecretDecryptResult
 import dev.sera.node.data.SeraNodeApiClient
 import dev.sera.node.extractor.DirectDownloadProgress
 import dev.sera.node.extractor.DirectDownloadResult
@@ -27,12 +28,15 @@ import dev.sera.node.extractor.YtdlpDownloadOptions
 import dev.sera.node.extractor.YtdlpProbeOptions
 import dev.sera.node.extractor.YtdlpSubtitleOptions
 import dev.sera.node.extractor.assertPublicUrlForExternalTool
+import dev.sera.node.extractor.classifyDirectMedia
 import dev.sera.node.extractor.isPublicAddress
 import dev.sera.node.extractor.parseUserUrl
 import dev.sera.node.extractor.parseYtdlpInfo
 import dev.sera.node.extractor.sanitizeResolvedMedia
 import dev.sera.node.extractor.seraError
 import dev.sera.node.extractor.stableSourceId
+import dev.sera.node.extractor.withImmediateCancelHook
+import dev.sera.node.ui.EditableSettingsSnapshot
 import dev.sera.node.model.ExtractionToolsManager
 import dev.sera.node.model.FailedRequest
 import dev.sera.node.model.FetchPlan
@@ -57,10 +61,17 @@ import dev.sera.node.service.NodeServiceState
 import dev.sera.node.updater.AppSelfUpdater
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import javax.crypto.KeyGenerator
 import okhttp3.Dns
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -524,20 +535,199 @@ class Ws5SecurityAndRuntimeTest {
     @Test
     fun secretCipherEncryptsDecryptsAndMigratesPlaintextSafely() {
         val secret = "tok_super_secret_value_123"
-        val enc1 = SecretCipher.encrypt(secret)
-        val enc2 = SecretCipher.encrypt(secret)
+        val key = KeyGenerator.getInstance("AES").apply { init(256) }.generateKey()
+        val enc1 = SecretCipher.encryptWithKey(secret, key)
+        val enc2 = SecretCipher.encryptWithKey(secret, key)
 
         assertTrue(SecretCipher.isEncrypted(enc1))
         assertNotEquals(secret, enc1)
         assertNotEquals(enc1, enc2)
-        assertEquals(secret, SecretCipher.decrypt(enc1))
-        assertEquals(secret, SecretCipher.decrypt(enc2))
+        val dec1 = SecretCipher.decryptWithKey(enc1, key)
+        val dec2 = SecretCipher.decryptWithKey(enc2, key)
+        assertFalse(dec1.failed)
+        assertFalse(dec2.failed)
+        assertEquals(secret, dec1.value)
+        assertEquals(secret, dec2.value)
+
+        val wrongKey = KeyGenerator.getInstance("AES").apply { init(256) }.generateKey()
+        val wrongDec = SecretCipher.decryptWithKey(enc1, wrongKey)
+        assertTrue(wrongDec.failed)
+        assertEquals("", wrongDec.value)
+
+        assertFalse(SecretCipher.isKeyStoreAvailable())
+        assertEquals(secret, SecretCipher.encrypt(secret))
 
         assertFalse(SecretCipher.isEncrypted("legacy-plaintext-token"))
         assertEquals("legacy-plaintext-token", SecretCipher.decrypt("legacy-plaintext-token"))
         assertEquals("", SecretCipher.decrypt("enc:v1:not-valid-base64!!!"))
+        assertTrue(SecretCipher.decryptWithStatus("enc:v1:not-valid-base64!!!").failed)
         assertEquals("", SecretCipher.encrypt(""))
         assertEquals("", SecretCipher.decrypt(""))
+    }
+
+    @Test
+    fun preservesEncryptedSecretOnTransientKeystoreFailureAndClearsWhenReadable() {
+        val ciphertext = "enc:v1:opaque_encrypted_blob"
+        val cache = mutableMapOf<String, String>()
+        val unreadable = mutableSetOf<String>()
+
+        assertEquals(
+            "",
+            NodePreferences.resolveDecryptedSecret(ciphertext, cache, unreadable) { "" },
+        )
+        assertTrue(ciphertext in unreadable)
+
+        val preservedOnUnrelatedSave = NodePreferences.resolveSecretForStorage(
+            existingStored = ciphertext,
+            incomingPlaintext = "",
+            unreadableCiphertexts = unreadable,
+            decryptor = { SecretDecryptResult("recovered_after_save", failed = false) },
+            encryptor = { "enc:v1:new_$it" },
+        )
+        assertEquals(ciphertext, preservedOnUnrelatedSave)
+
+        val overwrittenWithNewSecret = NodePreferences.resolveSecretForStorage(
+            existingStored = ciphertext,
+            incomingPlaintext = "new_token_456",
+            unreadableCiphertexts = unreadable,
+            decryptor = { SecretDecryptResult("", failed = true) },
+            encryptor = { "enc:v1:new_$it" },
+        )
+        assertEquals("enc:v1:new_new_token_456", overwrittenWithNewSecret)
+        assertFalse(ciphertext in unreadable)
+
+        val clearedWhenReadable = NodePreferences.resolveSecretForStorage(
+            existingStored = ciphertext,
+            incomingPlaintext = "",
+            unreadableCiphertexts = unreadable,
+            decryptor = { SecretDecryptResult("readable_token", failed = false) },
+            encryptor = { "enc:v1:new_$it" },
+        )
+        assertEquals("", clearedWhenReadable)
+    }
+
+    @Test
+    fun immediateCancelHookUnblocksBlockingWorkOnTimeoutAndCancellation() = runBlocking {
+        val latch = CountDownLatch(1)
+        val cancelInvoked = AtomicBoolean(false)
+        val startedNs = System.nanoTime()
+
+        val timedOut = try {
+            withTimeout(150L) {
+                withImmediateCancelHook(
+                    onCancel = {
+                        cancelInvoked.set(true)
+                        latch.countDown()
+                    },
+                ) {
+                    withContext(Dispatchers.IO) {
+                        latch.await(10, TimeUnit.SECONDS)
+                    }
+                }
+            }
+            false
+        } catch (_: TimeoutCancellationException) {
+            true
+        }
+
+        val elapsedMs = (System.nanoTime() - startedNs) / 1_000_000L
+        assertTrue(timedOut)
+        assertTrue(cancelInvoked.get())
+        assertTrue(elapsedMs < 2_000L)
+    }
+
+    @Test
+    fun parityFixesCoverFileClassificationZeroBitrateExtraArgsAndNormalizedSettingsSnapshot() {
+        assertEquals("file", classifyDirectMedia("application/pdf", "pdf"))
+        assertEquals("file", classifyDirectMedia("application/octet-stream", "zip"))
+        assertEquals("file", classifyDirectMedia("", "7z"))
+        assertEquals("video", classifyDirectMedia("video/mp4", "mp4"))
+
+        val filtered = YtdlpCommandBuilder.filterSafeExtraArgs(
+            listOf(
+                "--no-prefer-free-formats",
+                "--format-sort",
+                "res:1080,ext:mp4",
+                "--throttled-rate",
+                "100K",
+                "--concurrent-fragments",
+                "16",
+                "--concurrent-fragments",
+                "17",
+                "--extractor-args",
+                "youtube:player_client=web_safari",
+                "--extractor-args",
+                "youtubepot-bgutilhttp:base_url=http://127.0.0.1:4416",
+            ),
+        )
+        assertEquals(
+            listOf(
+                "--no-prefer-free-formats",
+                "--format-sort",
+                "res:1080,ext:mp4",
+                "--throttled-rate",
+                "100K",
+                "--concurrent-fragments",
+                "16",
+                "--extractor-args",
+                "youtube:player_client=web_safari",
+            ),
+            filtered,
+        )
+
+        val zeroBitrateMedia = ResolvedMedia(
+            provider = "youtube",
+            providerLabel = "YouTube",
+            url = "https://www.youtube.com/watch?v=abc",
+            type = "single",
+            title = "Bitrate Check",
+            items = listOf(
+                ResolvedItem(
+                    index = 0,
+                    kind = "audio",
+                    plans = listOf(
+                        ResolvedPlan(
+                            kind = "audio",
+                            container = "m4a",
+                            label = "Audio",
+                            audioBitrateKbps = 0.0,
+                            fetch = FetchPlan.Ytdlp(
+                                selector = "bestaudio",
+                                extractorArgs = listOf(
+                                    "youtube:player_client=web",
+                                    "youtubepot-bgutilhttp:base_url=http://127.0.0.1:4416",
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val sanitized = sanitizeResolvedMedia(zeroBitrateMedia)
+        val sanitizedPlan = sanitized.items.single().plans.single()
+        assertNull(sanitizedPlan.audioBitrateKbps)
+        assertEquals(
+            listOf("youtube:player_client=web"),
+            (sanitizedPlan.fetch as FetchPlan.Ytdlp).extractorArgs,
+        )
+
+        val rawDraft = EditableSettingsSnapshot.from(
+            NodeSettings(
+                apiBaseUrl = "api.example.com/api/",
+                nodeToken = "  tok_123  ",
+                nodeId = "   ",
+                youtubePotProviderUrl = "127.0.0.1:4416/",
+                preferredCapacity = 99,
+                githubReleasesRepo = "   ",
+            ),
+        )
+        val normalized = rawDraft.normalized()
+        assertEquals("https://api.example.com", normalized.apiBaseUrl)
+        assertEquals("tok_123", normalized.nodeToken)
+        assertEquals("android-node", normalized.nodeId)
+        assertEquals("http://127.0.0.1:4416", normalized.youtubePotProviderUrl)
+        assertEquals(8, normalized.preferredCapacity)
+        assertEquals(NodeSettings.DEFAULT_GITHUB_REPO, normalized.githubReleasesRepo)
     }
 
     @Test

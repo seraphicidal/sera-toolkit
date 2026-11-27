@@ -14,6 +14,7 @@ import {
   createExtractionUpdatesService,
   registerExtractionUpdateRoutes,
   type ExtractionUpdatesOptions,
+  type ExtractionUpdatesService,
 } from './extraction-updates.js';
 
 const NODE_TOKEN = 'updates-node-token-0123456789';
@@ -30,6 +31,7 @@ async function createUpdatesApp(
   app: FastifyInstance;
   engine: SeraEngine;
   dataDir: string;
+  updates: ExtractionUpdatesService;
 }> {
   const dataDir = await mkdtemp(join(tmpdir(), 'sera-updates-'));
   const engine = await SeraEngine.create({
@@ -57,7 +59,7 @@ async function createUpdatesApp(
   const updates = createExtractionUpdatesService(engine, serviceOptions);
   registerExtractionUpdateRoutes(app, engine, updates);
   await app.ready();
-  return { app, engine, dataDir };
+  return { app, engine, dataDir, updates };
 }
 
 describe('extraction update endpoints', () => {
@@ -554,5 +556,103 @@ describe('extraction update endpoints', () => {
       error: { code: 'PROVIDER_UNAVAILABLE', retryable: true },
     });
     expect(binaryFetchCount).toBe(0);
+  });
+
+  it('never crashes /claim or /manifest on invalid override/env values and skips corrupt release manifest JSON', async () => {
+    const validSha = 'a'.repeat(64);
+    const mockFetch: typeof globalThis.fetch = async (input) => {
+      const url =
+        typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.includes('/releases?per_page=10')) {
+        return new Response(
+          JSON.stringify([
+            {
+              tag_name: 'android-v2.0.0',
+              draft: false,
+              assets: [
+                {
+                  name: 'android-node-manifest.json',
+                  browser_download_url:
+                    'https://github.com/seraphicidal/sera-toolkit/releases/download/v2/android-node-manifest.json',
+                },
+              ],
+            },
+            {
+              tag_name: 'android-v1.9.0',
+              draft: false,
+              assets: [
+                {
+                  name: 'android-node-manifest.json',
+                  browser_download_url:
+                    'https://github.com/seraphicidal/sera-toolkit/releases/download/v1/android-node-manifest.json',
+                },
+                {
+                  name: 'sera-node.apk',
+                  browser_download_url:
+                    'https://github.com/seraphicidal/sera-toolkit/releases/download/v1/sera-node.apk',
+                },
+              ],
+            },
+          ]),
+          { status: 200 },
+        );
+      }
+      if (url.includes('/v2/android-node-manifest.json')) {
+        return new Response('<html>bad gateway</html>', { status: 200 });
+      }
+      if (url.includes('/v1/android-node-manifest.json')) {
+        return new Response(
+          JSON.stringify({
+            versionCode: 19,
+            versionName: '1.9.0',
+            sha256: validSha,
+            assetName: 'sera-node.apk',
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response('not found', { status: 404 });
+    };
+
+    const { app, engine, dataDir, updates } = await createUpdatesApp(
+      {
+        SERA_YOUTUBE_PLAYER_CLIENTS: 'web_safari, bad client!, android',
+      },
+      {
+        fetch: mockFetch,
+        enableRemoteLookup: true,
+        remoteComponents: ['UPPER/BAD', 'ejs:github'],
+      },
+    );
+    cleanups.push(async () => {
+      await app.close();
+      await engine.close();
+      await rm(dataDir, { recursive: true, force: true });
+    });
+
+    await mkdir(join(dataDir, 'updates'), { recursive: true });
+    await writeFile(
+      join(dataDir, 'updates', 'manifest.json'),
+      JSON.stringify({
+        providerConfig: {
+          youtube: {
+            remoteComponents: ['INVALID/UPPER'],
+            potProviderUrl: 'https://user:pass@example.com/pot',
+          },
+        },
+      }),
+    );
+
+    const manifestRes = await app.inject({
+      method: 'GET',
+      url: '/internal/extraction/updates/manifest?refresh=1',
+      headers: { authorization: `Bearer ${NODE_TOKEN}` },
+    });
+    expect(manifestRes.statusCode).toBe(200);
+    const manifest = manifestRes.json<NodeUpdateManifest>();
+    expect(manifest.providerConfig.youtube.playerClients).toEqual(['web_safari', 'android']);
+    expect(manifest.providerConfig.youtube.remoteComponents).toEqual(['ejs:github']);
+    expect(manifest.androidNodeApp?.versionName).toBe('1.9.0');
+    await expect(updates.currentManifestHash()).resolves.toBe(manifest.manifestHash);
   });
 });

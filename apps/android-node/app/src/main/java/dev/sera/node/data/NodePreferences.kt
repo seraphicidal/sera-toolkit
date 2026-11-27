@@ -170,6 +170,7 @@ class NodePreferences(private val context: Context) {
     private var cachedHotConfigEntry: Pair<String, ProviderHotConfig?>? = null
 
     private val decryptedSecretCache = ConcurrentHashMap<String, String>()
+    private val unreadableSecretCiphertexts = ConcurrentHashMap.newKeySet<String>()
 
     private fun decodeHotConfig(rawHotConfig: String?): ProviderHotConfig? {
         if (rawHotConfig.isNullOrBlank()) return null
@@ -183,24 +184,53 @@ class NodePreferences(private val context: Context) {
     }
 
     private fun decryptSecret(stored: String?): String =
-        resolveDecryptedSecret(stored, decryptedSecretCache)
+        resolveDecryptedSecret(stored, decryptedSecretCache, unreadableSecretCiphertexts)
 
     companion object {
         internal fun resolveDecryptedSecret(
             stored: String?,
             cache: MutableMap<String, String>,
+            unreadableCiphertexts: MutableSet<String>? = null,
             decryptor: (String) -> String = SecretCipher::decrypt,
         ): String {
             if (stored.isNullOrEmpty()) return ""
             cache[stored]?.let { return it }
             val decrypted = decryptor(stored).trim()
             if (decrypted.isNotEmpty()) {
+                unreadableCiphertexts?.remove(stored)
                 if (cache.size > 32) {
                     cache.clear()
                 }
                 cache[stored] = decrypted
+            } else if (SecretCipher.isEncrypted(stored) && unreadableCiphertexts != null) {
+                if (unreadableCiphertexts.size > 32) {
+                    unreadableCiphertexts.clear()
+                }
+                unreadableCiphertexts.add(stored)
             }
             return decrypted
+        }
+
+        internal fun resolveSecretForStorage(
+            existingStored: String?,
+            incomingPlaintext: String,
+            unreadableCiphertexts: MutableSet<String>,
+            decryptor: (String) -> SecretDecryptResult = SecretCipher::decryptWithStatus,
+            encryptor: (String) -> String = SecretCipher::encrypt,
+        ): String {
+            val trimmed = incomingPlaintext.trim()
+            if (trimmed.isNotEmpty()) {
+                if (!existingStored.isNullOrEmpty()) {
+                    unreadableCiphertexts.remove(existingStored)
+                }
+                return encryptor(trimmed)
+            }
+            if (!existingStored.isNullOrEmpty() && SecretCipher.isEncrypted(existingStored)) {
+                if (existingStored in unreadableCiphertexts || decryptor(existingStored).failed) {
+                    return existingStored
+                }
+            }
+            return ""
         }
     }
 
@@ -252,11 +282,15 @@ class NodePreferences(private val context: Context) {
     suspend fun current(): NodeSettings = settings.first()
 
     suspend fun migratePlaintextSecretsIfNeeded() {
+        if (!SecretCipher.isKeyStoreAvailable()) return
         context.nodeDataStore.edit { prefs ->
             for (key in listOf(Keys.NODE_TOKEN, Keys.INSTAGRAM_SESSION_ID, Keys.REDDIT_CLIENT_SECRET)) {
                 val raw = prefs[key]
                 if (!raw.isNullOrBlank() && !SecretCipher.isEncrypted(raw)) {
-                    prefs[key] = SecretCipher.encrypt(raw.trim())
+                    val encrypted = SecretCipher.encrypt(raw.trim())
+                    if (SecretCipher.isEncrypted(encrypted)) {
+                        prefs[key] = encrypted
+                    }
                 }
             }
         }
@@ -299,17 +333,29 @@ class NodePreferences(private val context: Context) {
     ) {
         context.nodeDataStore.edit { prefs ->
             prefs[Keys.API_BASE_URL] = NodeSettings.normalizeBaseUrl(apiBaseUrl)
-            prefs[Keys.NODE_TOKEN] = encryptSecret(nodeToken)
+            prefs[Keys.NODE_TOKEN] = resolveSecretForStorage(
+                existingStored = prefs[Keys.NODE_TOKEN],
+                incomingPlaintext = nodeToken,
+                unreadableCiphertexts = unreadableSecretCiphertexts,
+            )
             prefs[Keys.NODE_ID] = nodeId.trim().ifEmpty { "android-node" }.take(64)
             prefs[Keys.NODE_ROLE] = nodeRole.wireValue
             prefs[Keys.ENABLE_YOUTUBE] = enableYoutube
             prefs[Keys.ENABLE_INSTAGRAM] = enableInstagram
             prefs[Keys.ENABLE_ALL_PROVIDERS] = enableAllProviders
-            prefs[Keys.INSTAGRAM_SESSION_ID] = encryptSecret(instagramSessionId)
+            prefs[Keys.INSTAGRAM_SESSION_ID] = resolveSecretForStorage(
+                existingStored = prefs[Keys.INSTAGRAM_SESSION_ID],
+                incomingPlaintext = instagramSessionId,
+                unreadableCiphertexts = unreadableSecretCiphertexts,
+            )
             prefs[Keys.YOUTUBE_PLAYER_CLIENTS] = youtubePlayerClients.trim()
             prefs[Keys.YOUTUBE_POT_PROVIDER_URL] = NodeSettings.normalizePotProviderUrl(youtubePotProviderUrl)
             prefs[Keys.REDDIT_CLIENT_ID] = redditClientId.trim()
-            prefs[Keys.REDDIT_CLIENT_SECRET] = encryptSecret(redditClientSecret)
+            prefs[Keys.REDDIT_CLIENT_SECRET] = resolveSecretForStorage(
+                existingStored = prefs[Keys.REDDIT_CLIENT_SECRET],
+                incomingPlaintext = redditClientSecret,
+                unreadableCiphertexts = unreadableSecretCiphertexts,
+            )
             prefs[Keys.ALLOW_CELLULAR] = allowCellular
             prefs[Keys.ALLOW_WIFI] = allowWifi
             prefs[Keys.ONLY_WHILE_CHARGING] = onlyWhileCharging

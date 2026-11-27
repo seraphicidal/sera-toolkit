@@ -714,4 +714,45 @@ describe('primary over backup scheduling and failover', () => {
     expect(byId.get('old-android')?.role).toBe('backup');
     expect(byId.get('explicit-primary-phone')?.role).toBe('primary');
   });
+
+  it('re-arms unclaimedTimer when a live node crashes and fails once stale instead of hanging until taskTimeout', async () => {
+    const nodes = new ExtractionNodeRegistry(silentLogger(), 90, 10_000, 1000, 30, 0);
+    nodes.register('crashing-pc', ['youtube'], 1, 'residential', [], { role: 'primary' });
+
+    const started = Date.now();
+    await expect(
+      nodes.dispatch({ kind: 'resolve', url: media.url, providerId: 'youtube' }),
+    ).rejects.toMatchObject({ code: 'PROVIDER_UNAVAILABLE' });
+    const elapsed = Date.now() - started;
+    expect(elapsed).toBeGreaterThanOrEqual(80);
+    expect(elapsed).toBeLessThan(1500);
+  });
+
+  it('removes a waiting claim immediately when its AbortSignal aborts so dead waiters never claim tasks', async () => {
+    const nodes = new ExtractionNodeRegistry(silentLogger(), 5000, 5000, 1000, 5000, 0);
+    const deadAbort = new AbortController();
+    const deadClaim = nodes.claim(
+      'dead-node',
+      ['youtube'],
+      1,
+      5000,
+      'residential',
+      [],
+      { role: 'primary' },
+      deadAbort.signal,
+    );
+    const liveClaim = nodes.claim('live-node', ['youtube'], 1, 2000, 'residential', [], {
+      role: 'backup',
+    });
+
+    deadAbort.abort();
+    expect(await deadClaim).toBeUndefined();
+
+    const dispatched = nodes.dispatch({ kind: 'resolve', url: media.url, providerId: 'youtube' });
+    const liveTask = await liveClaim;
+    expect(liveTask).toBeDefined();
+    expect(nodes.claimedBy(liveTask!.id)).toBe('live-node');
+    nodes.completeResolve(liveTask!.id, media);
+    await expect(dispatched).resolves.toMatchObject({ title: 'A video' });
+  });
 });

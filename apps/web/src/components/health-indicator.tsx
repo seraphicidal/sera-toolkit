@@ -127,7 +127,8 @@ export function HealthIndicator() {
       ref={root}
       className="sm:relative"
       onBlur={(event) => {
-        if (open && !root.current?.contains(event.relatedTarget as Node | null)) {
+        const nextFocus = event.relatedTarget as Node | null;
+        if (open && nextFocus !== null && !root.current?.contains(nextFocus)) {
           setOpen(false);
         }
       }}

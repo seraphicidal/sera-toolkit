@@ -160,6 +160,13 @@ class FatalAuthError extends Error {
   }
 }
 
+class NonRetryableUploadError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'NonRetryableUploadError';
+  }
+}
+
 const CLAIM_TIMEOUT_MS = 60_000;
 
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -616,6 +623,7 @@ export class ExtractionNode {
     const fileInfo = await stat(path);
     const totalSize = fileInfo.size;
     let offset = 0;
+    let authoritativeOffset = false;
     let lastError: Error | undefined;
 
     for (let attempt = 0; attempt < MAX_UPLOAD_ATTEMPTS; attempt += 1) {
@@ -624,12 +632,16 @@ export class ExtractionNode {
       if (attempt > 0) {
         await sleep(UPLOAD_RETRY_BASE_MS * attempt);
         if (abort.signal.aborted) throw seraError('CANCELLED');
-        const status = await this.queryUploadedOffset(taskId, name, abort.signal);
-        if (status.complete) {
-          onProgress?.(totalSize);
-          return;
+        if (authoritativeOffset) {
+          authoritativeOffset = false;
+        } else {
+          const status = await this.queryUploadedOffset(taskId, name, abort.signal);
+          if (status.complete) {
+            onProgress?.(totalSize);
+            return;
+          }
+          offset = Math.min(status.sizeBytes, totalSize);
         }
-        offset = Math.min(status.sizeBytes, totalSize);
       }
 
       const query = new URLSearchParams({ name, mime: mimeType });
@@ -691,21 +703,36 @@ export class ExtractionNode {
           continue;
         }
         if (response.status === 416) {
-          const receivedHeader = Number(response.headers.get('x-sera-received-bytes'));
+          const rawReceived = response.headers.get('x-sera-received-bytes');
+          const parsedHeader =
+            rawReceived !== null && rawReceived.trim() !== ''
+              ? Number(rawReceived.trim())
+              : Number.NaN;
           const body416 = (await response.json().catch(() => undefined)) as
             { receivedBytes?: number } | undefined;
-          const serverBytes = Number.isSafeInteger(receivedHeader)
-            ? receivedHeader
-            : typeof body416?.receivedBytes === 'number'
-              ? body416.receivedBytes
-              : 0;
-          offset = Math.max(0, Math.min(serverBytes, totalSize));
+          const serverBytes =
+            Number.isSafeInteger(parsedHeader) && parsedHeader >= 0
+              ? parsedHeader
+              : typeof body416?.receivedBytes === 'number' &&
+                  Number.isSafeInteger(body416.receivedBytes) &&
+                  body416.receivedBytes >= 0
+                ? body416.receivedBytes
+                : undefined;
+          if (serverBytes !== undefined) {
+            offset = Math.max(0, Math.min(serverBytes, totalSize));
+            authoritativeOffset = true;
+          }
           lastError = new Error(`upload offset mismatch for ${name}`);
+          continue;
+        }
+        if (response.status === 429) {
+          await response.body?.cancel().catch(() => undefined);
+          lastError = new Error(`upload of ${name} returned 429`);
           continue;
         }
         if (response.status >= 400 && response.status < 500) {
           await response.body?.cancel().catch(() => undefined);
-          throw new Error(`upload of ${name} returned ${response.status}`);
+          throw new NonRetryableUploadError(`upload of ${name} returned ${response.status}`);
         }
         if (!response.ok) {
           await response.body?.cancel().catch(() => undefined);
@@ -716,11 +743,12 @@ export class ExtractionNode {
           { accepted?: boolean; cancelled?: boolean } | undefined;
         if (payload?.cancelled) throw seraError('CANCELLED');
         if (payload?.accepted === false) {
-          throw new Error(`the server did not accept uploaded file ${name}`);
+          throw new NonRetryableUploadError(`the server did not accept uploaded file ${name}`);
         }
         onProgress?.(totalSize);
         return;
       } catch (error) {
+        if (error instanceof NonRetryableUploadError) throw error;
         if (error instanceof SeraError && error.code === 'CANCELLED') throw error;
         if (abort.signal.aborted) throw seraError('CANCELLED', { cause: error });
         lastError = error instanceof Error ? error : new Error(String(error));

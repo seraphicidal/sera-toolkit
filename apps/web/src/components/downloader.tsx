@@ -81,7 +81,13 @@ function seedFrom(
   return { kind, selectedIds, label: qualityLabels(info, kind, selectedIds)[0] };
 }
 
-export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo } = {}) {
+export function Downloader({
+  initialInfo,
+  onResetImport,
+}: {
+  readonly initialInfo?: MediaInfo;
+  readonly onResetImport?: () => void;
+} = {}) {
   const router = useRouter();
   const importMode = initialInfo !== undefined;
   const [serviceInfo, setServiceInfo] = useState<ServiceInfo | undefined>(undefined);
@@ -148,6 +154,21 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
     };
   }, []);
 
+  useEffect(() => {
+    if (!info) return;
+    setSelectedIds((current) => {
+      if (current.size <= maxSelectedItems) return current;
+      const clamped = new Set<string>();
+      for (const item of info.items) {
+        if (current.has(item.id)) {
+          clamped.add(item.id);
+          if (clamped.size >= maxSelectedItems) break;
+        }
+      }
+      return clamped;
+    });
+  }, [info, maxSelectedItems]);
+
   const updateBatchStatus = useCallback((idx: number, status: BatchItemStatus) => {
     setBatchStatuses((prev) => {
       if (idx < 0 || idx >= prev.length || prev[idx] === status) return prev;
@@ -196,9 +217,28 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
   );
 
   const clearAll = useCallback(() => {
+    if (importMode) {
+      sessionRef.current += 1;
+      analyzeAbort.current?.abort();
+      submitAbort.current?.abort();
+      if (onResetImport) onResetImport();
+      else router.push('/');
+      return;
+    }
     reset(false);
     setUrl('');
-  }, [reset]);
+  }, [importMode, onResetImport, reset, router]);
+
+  const handleNewLink = useCallback(() => {
+    if (importMode) {
+      sessionRef.current += 1;
+      analyzeAbort.current?.abort();
+      submitAbort.current?.abort();
+      router.push('/');
+      return;
+    }
+    clearAll();
+  }, [importMode, clearAll, router]);
 
   const analyze = useCallback(
     async (raw: string, activeBatchIdx?: number) => {
@@ -367,7 +407,24 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
   const trim: TrimSummary = subtitlesRequested ? { state: 'none' } : rawTrim;
 
   const start = useCallback(async () => {
-    if (!info || !selection?.optionIds.length) return;
+    if (!info) return;
+    if (!selection?.optionIds.length) {
+      setError({
+        code: 'VALIDATION_ERROR',
+        message: 'Select at least one item to download.',
+        retryable: false,
+      });
+      return;
+    }
+    if (trim.state === 'invalid') {
+      setShowAdvanced(true);
+      setError({
+        code: 'VALIDATION_ERROR',
+        message: trim.message,
+        retryable: false,
+      });
+      return;
+    }
     const session = ++sessionRef.current;
     submitAbort.current?.abort();
     const controller = new AbortController();
@@ -417,6 +474,7 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
         updateBatchStatus(batchIndexRef.current, 'done');
       }
       if (readyJob.result && info) {
+        const resultFiles = readyJob.result.files;
         addToHistory({
           jobId: readyJob.id,
           title: info.title,
@@ -426,6 +484,20 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
           downloadPath: readyJob.result.downloadPath,
           savedAt: new Date().toISOString(),
           expiresAt: readyJob.result.expiresAt,
+          ...(resultFiles && resultFiles.length > 1
+            ? {
+                fileCount: resultFiles.length,
+                isArchive: readyJob.result.isArchive,
+                ...(!readyJob.result.isArchive
+                  ? {
+                      files: resultFiles.map((file) => ({
+                        name: file.name,
+                        downloadPath: file.downloadPath,
+                      })),
+                    }
+                  : {}),
+              }
+            : {}),
         });
       }
     },
@@ -574,9 +646,12 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
         label: 'Try again',
         primary: true,
         onClick: () => {
-          setError(undefined);
-          if (info) void start();
-          else void analyze(url, batchQueue.length > 1 ? batchIndex : undefined);
+          if (info) {
+            void start();
+          } else {
+            setError(undefined);
+            void analyze(url, batchQueue.length > 1 ? batchIndex : undefined);
+          }
         },
       });
     }
@@ -727,8 +802,9 @@ export function Downloader({ initialInfo }: { readonly initialInfo?: MediaInfo }
               onReady={handleJobReady}
               onFailed={handleJobFailed}
               onCancel={cancel}
-              onReset={clearAll}
-              onDownloadAgain={handleDownloadAgain}
+              onReset={handleNewLink}
+              onDownloadAgain={importMode ? clearAll : handleDownloadAgain}
+              downloadAgainLabel={importMode ? 'Import again' : undefined}
               hasNextInBatch={hasNextInBatch}
               batchNextLabel={batchNextLabel}
               onNextInBatch={handleNextInBatch}

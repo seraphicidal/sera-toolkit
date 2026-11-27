@@ -261,4 +261,26 @@ describe('a worker reaching the node through the API', () => {
       }),
     ).rejects.toMatchObject({ code: 'PROVIDER_UNAVAILABLE' });
   });
+
+  it('awaits initial node list refresh via waitForInitialRefresh so cold-start status is populated', async () => {
+    nodes = [
+      {
+        id: 'cold-start-node',
+        providers: ['*'],
+        networkClass: 'residential',
+        capacity: 1,
+        inFlight: 0,
+        lastSeenMs: 10,
+        healthy: true,
+      },
+    ];
+    const client = clientFor();
+    try {
+      await client.waitForInitialRefresh();
+      expect(client.hasHealthyNode('residential')).toBe(true);
+      expect(client.availableProviders('residential')).toEqual(['*']);
+    } finally {
+      client.close();
+    }
+  });
 });

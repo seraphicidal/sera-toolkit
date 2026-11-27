@@ -48,8 +48,11 @@ import kotlin.coroutines.resumeWithException
 class FatalAuthException(val statusCode: Int) :
     IOException("Extraction node authentication rejected ($statusCode)")
 
-class ApiStatusException(val statusCode: Int, val bodyText: String) :
-    IOException("API returned HTTP $statusCode${if (bodyText.isNotBlank()) ": $bodyText" else ""}")
+class ApiStatusException(
+    val statusCode: Int,
+    val bodyText: String,
+    val retryAfterSeconds: Long? = null,
+) : IOException("API returned HTTP $statusCode${if (bodyText.isNotBlank()) ": $bodyText" else ""}")
 
 class TaskCancelledException : IOException("Task cancelled by server")
 
@@ -260,7 +263,11 @@ class SeraNodeApiClient(
                             val task = SeraJson.decodeFromString<RemoteTask>(raw)
                             ClaimOutcome.Task(task, manifestHash)
                         }
-                        else -> throw ApiStatusException(res.code, res.body?.string().orEmpty().take(500))
+                        else -> throw ApiStatusException(
+                        statusCode = res.code,
+                        bodyText = res.body?.string().orEmpty().take(500),
+                        retryAfterSeconds = res.header("Retry-After")?.trim()?.toLongOrNull()?.takeIf { it > 0L },
+                    )
                     }
                 }
             }
@@ -294,7 +301,11 @@ class SeraNodeApiClient(
                         if (raw.isBlank()) ProgressResponse(false)
                         else SeraJson.decodeFromString<ProgressResponse>(raw)
                     }
-                    else -> throw ApiStatusException(res.code, res.body?.string().orEmpty().take(500))
+                    else -> throw ApiStatusException(
+                        statusCode = res.code,
+                        bodyText = res.body?.string().orEmpty().take(500),
+                        retryAfterSeconds = res.header("Retry-After")?.trim()?.toLongOrNull()?.takeIf { it > 0L },
+                    )
                 }
             }
         }
@@ -329,7 +340,11 @@ class SeraNodeApiClient(
                         }
                         parsed
                     }
-                    else -> throw ApiStatusException(res.code, res.body?.string().orEmpty().take(500))
+                    else -> throw ApiStatusException(
+                        statusCode = res.code,
+                        bodyText = res.body?.string().orEmpty().take(500),
+                        retryAfterSeconds = res.header("Retry-After")?.trim()?.toLongOrNull()?.takeIf { it > 0L },
+                    )
                 }
             }
         }
@@ -457,7 +472,11 @@ class SeraNodeApiClient(
                         }
                         parsed
                     }
-                    else -> throw ApiStatusException(res.code, res.body?.string().orEmpty().take(500))
+                    else -> throw ApiStatusException(
+                        statusCode = res.code,
+                        bodyText = res.body?.string().orEmpty().take(500),
+                        retryAfterSeconds = res.header("Retry-After")?.trim()?.toLongOrNull()?.takeIf { it > 0L },
+                    )
                 }
             }
         }
@@ -491,7 +510,11 @@ class SeraNodeApiClient(
                         }
                         parsed
                     }
-                    else -> throw ApiStatusException(res.code, res.body?.string().orEmpty().take(500))
+                    else -> throw ApiStatusException(
+                        statusCode = res.code,
+                        bodyText = res.body?.string().orEmpty().take(500),
+                        retryAfterSeconds = res.header("Retry-After")?.trim()?.toLongOrNull()?.takeIf { it > 0L },
+                    )
                 }
             }
         }
@@ -543,7 +566,11 @@ class SeraNodeApiClient(
                         val raw = res.body?.string().orEmpty()
                         SeraJson.decodeFromString<NodeUpdateManifest>(raw)
                     }
-                    else -> throw ApiStatusException(res.code, res.body?.string().orEmpty().take(500))
+                    else -> throw ApiStatusException(
+                        statusCode = res.code,
+                        bodyText = res.body?.string().orEmpty().take(500),
+                        retryAfterSeconds = res.header("Retry-After")?.trim()?.toLongOrNull()?.takeIf { it > 0L },
+                    )
                 }
             }
         }

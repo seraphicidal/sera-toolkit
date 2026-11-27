@@ -5,7 +5,6 @@ import dev.sera.node.model.YtdlpUpdateInfo
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -118,95 +117,99 @@ class YtdlpArchiveUpdater(
                 }
             }
             val call = downloadClient.newCall(reqBuilder.build())
-            val cancelHandle = currentCoroutineContext()[Job]?.invokeOnCompletion { cause ->
-                if (cause != null) call.cancel()
-            }
             try {
                 val response = awaitCall(call)
-                response.use { res ->
-                    if (!res.isSuccessful) {
-                        lastError = "HTTP ${res.code} downloading ${target.url}"
-                        return@use
-                    }
-                    val sameOriginFinal = baseOriginUrl != null && isSameOrigin(baseOriginUrl, res.request.url)
-                    val headerSha = if (target.sendAuthHeader && sameOriginFinal) {
-                        res.header("X-Sera-Sha256")?.let { normalizeSha256(it) }
-                            ?.takeIf { SHA256_HEX_REGEX.matches(it) }
-                    } else {
-                        null
-                    }
-                    val expectedSha = manifestSha ?: headerSha
-                    if (expectedSha == null) {
-                        lastError = "Missing yt-dlp SHA-256 verification header"
-                        return@use
-                    }
-                    val body = res.body ?: run {
-                        lastError = "Empty yt-dlp response body"
-                        return@use
-                    }
-                    val digest = MessageDigest.getInstance("SHA-256")
-                    val buffer = ByteArray(65_536)
-                    var totalBytes = 0L
-
-                    body.byteStream().use { input ->
-                        FileOutputStream(staging).use { output ->
-                            while (true) {
-                                currentCoroutineContext().ensureActive()
-                                val read = input.read(buffer)
-                                if (read <= 0) break
-                                output.write(buffer, 0, read)
-                                digest.update(buffer, 0, read)
-                                totalBytes += read
+                val outcome = withImmediateCancelHook(onCancel = { call.cancel() }) {
+                    withContext(Dispatchers.IO) {
+                        response.use { res ->
+                            if (!res.isSuccessful) {
+                                lastError = "HTTP ${res.code} downloading ${target.url}"
+                                return@use null
                             }
-                            output.fd.sync()
+                            val sameOriginFinal = baseOriginUrl != null && isSameOrigin(baseOriginUrl, res.request.url)
+                            val headerSha = if (target.sendAuthHeader && sameOriginFinal) {
+                                res.header("X-Sera-Sha256")?.let { normalizeSha256(it) }
+                                    ?.takeIf { SHA256_HEX_REGEX.matches(it) }
+                            } else {
+                                null
+                            }
+                            val expectedSha = manifestSha ?: headerSha
+                            if (expectedSha == null) {
+                                lastError = "Missing yt-dlp SHA-256 verification header"
+                                return@use null
+                            }
+                            val body = res.body ?: run {
+                                lastError = "Empty yt-dlp response body"
+                                return@use null
+                            }
+                            val digest = MessageDigest.getInstance("SHA-256")
+                            val buffer = ByteArray(65_536)
+                            var totalBytes = 0L
+
+                            body.byteStream().use { input ->
+                                FileOutputStream(staging).use { output ->
+                                    while (true) {
+                                        currentCoroutineContext().ensureActive()
+                                        val read = input.read(buffer)
+                                        if (read <= 0) break
+                                        output.write(buffer, 0, read)
+                                        digest.update(buffer, 0, read)
+                                        totalBytes += read
+                                    }
+                                    output.fd.sync()
+                                }
+                            }
+
+                            if (totalBytes < 100_000L) {
+                                staging.delete()
+                                lastError = "Downloaded yt-dlp payload too small ($totalBytes bytes)"
+                                return@use null
+                            }
+
+                            if (!looksLikeZipappOrExecutable(staging)) {
+                                staging.delete()
+                                lastError = "Downloaded yt-dlp payload is not a valid zipapp"
+                                return@use null
+                            }
+
+                            val actualSha = digest.digest().joinToString("") { "%02x".format(it) }
+                            if (actualSha != expectedSha) {
+                                staging.delete()
+                                lastError = "SHA-256 mismatch for yt-dlp (expected $expectedSha, got $actualSha)"
+                                return@use null
+                            }
+
+                            staging.setExecutable(true, true)
+                            backup.delete()
+                            if (targetBinaryFile.exists()) {
+                                if (!targetBinaryFile.renameTo(backup)) {
+                                    targetBinaryFile.delete()
+                                }
+                            }
+                            if (!staging.renameTo(targetBinaryFile)) {
+                                staging.copyTo(targetBinaryFile, overwrite = true)
+                                staging.delete()
+                            }
+                            targetBinaryFile.setExecutable(true, true)
+                            backup.delete()
+                            versionMarkerFile.writeText("${manifest.version}\n", Charsets.UTF_8)
+
+                            ToolUpdateResult(
+                                updated = true,
+                                previousVersion = knownCurrent,
+                                currentVersion = manifest.version,
+                                sha256Verified = true,
+                                message = if (knownCurrent != null) {
+                                    "Updated yt-dlp $knownCurrent -> ${manifest.version}"
+                                } else {
+                                    "Installed yt-dlp ${manifest.version}"
+                                },
+                            )
                         }
                     }
-
-                    if (totalBytes < 100_000L) {
-                        staging.delete()
-                        lastError = "Downloaded yt-dlp payload too small ($totalBytes bytes)"
-                        return@use
-                    }
-
-                    if (!looksLikeZipappOrExecutable(staging)) {
-                        staging.delete()
-                        lastError = "Downloaded yt-dlp payload is not a valid zipapp"
-                        return@use
-                    }
-
-                    val actualSha = digest.digest().joinToString("") { "%02x".format(it) }
-                    if (actualSha != expectedSha) {
-                        staging.delete()
-                        lastError = "SHA-256 mismatch for yt-dlp (expected $expectedSha, got $actualSha)"
-                        return@use
-                    }
-
-                    staging.setExecutable(true, true)
-                    backup.delete()
-                    if (targetBinaryFile.exists()) {
-                        if (!targetBinaryFile.renameTo(backup)) {
-                            targetBinaryFile.delete()
-                        }
-                    }
-                    if (!staging.renameTo(targetBinaryFile)) {
-                        staging.copyTo(targetBinaryFile, overwrite = true)
-                        staging.delete()
-                    }
-                    targetBinaryFile.setExecutable(true, true)
-                    backup.delete()
-                    versionMarkerFile.writeText("${manifest.version}\n", Charsets.UTF_8)
-
-                    return@withContext ToolUpdateResult(
-                        updated = true,
-                        previousVersion = knownCurrent,
-                        currentVersion = manifest.version,
-                        sha256Verified = true,
-                        message = if (knownCurrent != null) {
-                            "Updated yt-dlp $knownCurrent -> ${manifest.version}"
-                        } else {
-                            "Installed yt-dlp ${manifest.version}"
-                        },
-                    )
+                }
+                if (outcome != null) {
+                    return@withContext outcome
                 }
             } catch (cancelled: CancellationException) {
                 call.cancel()
@@ -215,8 +218,6 @@ class YtdlpArchiveUpdater(
             } catch (error: IOException) {
                 staging.delete()
                 lastError = error.message ?: "Network error downloading yt-dlp"
-            } finally {
-                cancelHandle?.dispose()
             }
         }
 
