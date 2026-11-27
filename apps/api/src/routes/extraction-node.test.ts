@@ -1933,7 +1933,8 @@ describe('PC primary vs phone backup routing, all-websites node default, and con
     expect(autoUpdate).toContain('SERA_REDIS_PASSWORD');
     expect(autoUpdate).toContain('SERA_EXTRACTION_WORKER_TOKEN');
     expect(autoUpdate).toContain('caddy reload');
-    expect(oracleCompose).toContain('- gosu');
+    expect(oracleCompose).toContain('user: redis');
+    expect(oracleCompose).not.toContain('- gosu');
     expect(oracleCompose).not.toContain('- su-exec');
   });
 

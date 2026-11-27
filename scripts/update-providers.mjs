@@ -11,11 +11,14 @@ const DOCKERFILE_PATH = join(ROOT, 'docker', 'api.Dockerfile');
 const write = process.argv.includes('--write');
 
 async function latestRelease(repo) {
+  const token = process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
+  const headers = {
+    'user-agent': 'sera-toolkit/update-providers',
+    accept: 'application/vnd.github+json',
+  };
+  if (token) headers.authorization = `Bearer ${token}`;
   const response = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
-    headers: {
-      'user-agent': 'sera-toolkit/update-providers',
-      accept: 'application/vnd.github+json',
-    },
+    headers,
   });
   if (!response.ok) throw new Error(`GitHub returned ${response.status} for ${repo}`);
   const release = await response.json();
