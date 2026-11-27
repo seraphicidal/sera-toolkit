@@ -204,9 +204,8 @@ services:
 
   redis:
     image: redis:7.4-alpine
+    user: redis
     command:
-      - gosu
-      - redis
       - sh
       - -ec
       - |
@@ -231,9 +230,6 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    cap_add:
-      - SETUID
-      - SETGID
     deploy:
       resources:
         limits:
