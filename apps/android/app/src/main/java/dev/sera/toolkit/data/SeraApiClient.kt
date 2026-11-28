@@ -303,8 +303,8 @@ class SeraApiClient(
             },
         )
 
-        graceJob = launch {
-            sleeper(streamGraceMs)
+        graceJob = launch(ioDispatcher) {
+            delay(streamGraceMs)
             if (!sawStreamEvent.get() && !stopped.get()) {
                 startPolling()
             }

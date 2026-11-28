@@ -134,9 +134,9 @@ fun NodeOfflineBanner(modifier: Modifier = Modifier) {
 @Composable
 fun ErrorCard(
     error: JobError,
+    modifier: Modifier = Modifier,
     onRetry: (() -> Unit)? = null,
     onDismiss: (() -> Unit)? = null,
-    modifier: Modifier = Modifier,
 ) {
     val palette = LocalSeraPalette.current
     Surface(
@@ -282,9 +282,9 @@ fun KindSelectorRow(
     info: MediaInfo,
     availableKinds: List<MediaKind>,
     selectedKind: MediaKind,
-    enabled: Boolean = true,
     onSelectKind: (MediaKind) -> Unit,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
 ) {
     if (availableKinds.size <= 1) return
     val palette = LocalSeraPalette.current
@@ -337,9 +337,9 @@ fun QualityOptionList(
     kind: MediaKind,
     selectedIds: Set<String>,
     selectedLabel: String?,
-    enabled: Boolean = true,
     onSelectLabel: (String) -> Unit,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
 ) {
     val palette = LocalSeraPalette.current
     val effectiveIds = remember(info.items, selectedIds) {

@@ -15,6 +15,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import androidx.annotation.RequiresApi
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
@@ -86,6 +87,7 @@ class DeviceDownloadManager(
         }
     }
 
+    @RequiresApi(Build.VERSION_CODES.Q)
     private suspend fun saveViaMediaStore(
         resolvedUrl: String,
         filename: String,
@@ -104,26 +106,24 @@ class DeviceDownloadManager(
             resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
         } ?: throw IllegalStateException("Could not create MediaStore entry.")
 
-        var pfd: android.os.ParcelFileDescriptor? = null
-        var fos: FileOutputStream? = null
         try {
-            pfd = withContext(Dispatchers.IO) {
+            val writtenBytes = withContext(Dispatchers.IO) {
                 resolver.openFileDescriptor(itemUri, "rw")
+            }?.use { pfd ->
+                FileOutputStream(pfd.fileDescriptor).use { fos ->
+                    val sink = FileChannelSink(fos.channel)
+                    val written = resumableDownloader.downloadToSink(
+                        url = resolvedUrl,
+                        sink = sink,
+                        expectedSizeBytes = expectedSizeBytes,
+                        onProgress = onProgress,
+                    )
+                    withContext(Dispatchers.IO) { fos.flush() }
+                    written
+                }
             } ?: throw IllegalStateException("Could not open MediaStore file descriptor.")
-            fos = FileOutputStream(pfd.fileDescriptor)
-            val sink = FileChannelSink(fos.channel)
-            val writtenBytes = resumableDownloader.downloadToSink(
-                url = resolvedUrl,
-                sink = sink,
-                expectedSizeBytes = expectedSizeBytes,
-                onProgress = onProgress,
-            )
+
             withContext(Dispatchers.IO) {
-                fos.flush()
-                fos.close()
-                fos = null
-                pfd.close()
-                pfd = null
                 val finalizeValues = ContentValues().apply {
                     put(MediaStore.Downloads.IS_PENDING, 0)
                 }
@@ -138,8 +138,6 @@ class DeviceDownloadManager(
             )
         } catch (t: Throwable) {
             withContext(NonCancellable + Dispatchers.IO) {
-                runCatching { fos?.close() }
-                runCatching { pfd?.close() }
                 runCatching { resolver.delete(itemUri, null, null) }
             }
             throw t
@@ -301,7 +299,11 @@ class DeviceDownloadManager(
                 sharePending,
             )
             .build()
-        runCatching { NotificationManagerCompat.from(context).notify(notifId, notification) }
+        try {
+            NotificationManagerCompat.from(context).notify(notifId, notification)
+        } catch (_: SecurityException) {
+            Unit
+        }
     }
 
     fun postFailureNotification(
@@ -331,7 +333,11 @@ class DeviceDownloadManager(
             .setAutoCancel(true)
             .setContentIntent(contentPending)
             .build()
-        runCatching { NotificationManagerCompat.from(context).notify(notifId, notification) }
+        try {
+            NotificationManagerCompat.from(context).notify(notifId, notification)
+        } catch (_: SecurityException) {
+            Unit
+        }
     }
 
     private fun completionNotificationId(taskId: String): Int {

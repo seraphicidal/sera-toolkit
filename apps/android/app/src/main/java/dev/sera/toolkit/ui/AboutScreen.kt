@@ -16,8 +16,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Code
-import androidx.compose.material.icons.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -170,7 +170,7 @@ fun AboutScreen(
                                         shape = RoundedCornerShape(10.dp),
                                     ) {
                                         Icon(
-                                            imageVector = Icons.Rounded.OpenInNew,
+                                            imageVector = Icons.AutoMirrored.Rounded.OpenInNew,
                                             contentDescription = null,
                                             modifier = Modifier.size(16.dp),
                                         )
@@ -252,7 +252,7 @@ private fun LegalLinkRow(
             color = palette.ink,
         )
         Icon(
-            imageVector = Icons.Rounded.OpenInNew,
+            imageVector = Icons.AutoMirrored.Rounded.OpenInNew,
             contentDescription = null,
             tint = palette.inkFaint,
             modifier = Modifier.size(18.dp),

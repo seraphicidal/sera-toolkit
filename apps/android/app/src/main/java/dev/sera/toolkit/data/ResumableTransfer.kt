@@ -132,11 +132,12 @@ class ResumableDownloader(
                                 } else {
                                     -1L
                                 }
-                                bytesWritten = streamBody(
+                                streamBody(
                                     body = body,
                                     sink = sink,
                                     startOffset = bytesWritten,
                                     totalBytes = expectedEnd,
+                                    onBytesWritten = { bytesWritten = it },
                                     onProgress = onProgress,
                                 )
                                 expectedEnd <= 0L || bytesWritten >= expectedEnd
@@ -153,11 +154,12 @@ class ResumableDownloader(
                             if (contentLength > 0L) {
                                 knownTotalBytes = contentLength
                             }
-                            bytesWritten = streamBody(
+                            streamBody(
                                 body = body,
                                 sink = sink,
                                 startOffset = 0L,
                                 totalBytes = knownTotalBytes,
+                                onBytesWritten = { bytesWritten = it },
                                 onProgress = onProgress,
                             )
                             knownTotalBytes <= 0L || bytesWritten >= knownTotalBytes
@@ -219,8 +221,8 @@ class ResumableDownloader(
 
                     override fun onResponse(call: Call, response: Response) {
                         if (cont.isActive) {
-                            cont.resume(response) {
-                                response.close()
+                            cont.resume(response) { _, value, _ ->
+                                value.close()
                             }
                         } else {
                             response.close()
@@ -236,6 +238,7 @@ class ResumableDownloader(
         sink: ResumableByteSink,
         startOffset: Long,
         totalBytes: Long,
+        onBytesWritten: (Long) -> Unit,
         onProgress: suspend (TransferProgress) -> Unit,
     ): Long {
         var bytesWritten = startOffset
@@ -252,6 +255,7 @@ class ResumableDownloader(
                 if (read == -1) break
                 withContext(ioDispatcher) { sink.write(buffer, read) }
                 bytesWritten += read
+                onBytesWritten(bytesWritten)
                 sessionBytes += read
 
                 val now = nowMillis()
