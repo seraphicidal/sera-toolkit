@@ -74,7 +74,7 @@ jobs:
             const codeMatch = /versionCode\s*=[\s\S]*?\?\:\s*(\d+)/.exec(defaultConfigSection);
             const nameMatch = /versionName\s*=[\s\S]*?\?\:\s*"([^"]+)"/.exec(defaultConfigSection);
             const baseCode = codeMatch ? Number.parseInt(codeMatch[1], 10) : 1;
-            const baseName = nameMatch ? nameMatch[1].trim() : "1.8.0";
+            const baseName = nameMatch ? nameMatch[1].trim() : "2.0.0";
 
             const refType = process.env.GITHUB_REF_TYPE || "";
             const refName = process.env.GITHUB_REF_NAME || "";
@@ -92,7 +92,7 @@ jobs:
             if (refType === "tag") {
               const tagMatch = /^android-v([0-9A-Za-z][0-9A-Za-z._-]{0,63})\+([1-9]\d*)$/.exec(refName);
               if (!tagMatch) {
-                console.error("::error::Tag must match android-v<version>+<code>, e.g. android-v1.8.0+1.");
+                console.error("::error::Tag must match android-v<version>+<code>, e.g. android-v2.0.0+1.");
                 process.exit(1);
               }
               versionName = inputName || tagMatch[1];

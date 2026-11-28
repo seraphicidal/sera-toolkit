@@ -1,6 +1,6 @@
 {
   "name": "@sera/extractor",
-  "version": "1.8.0",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
   "main": "dist/index.js",
@@ -11,8 +11,8 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "@sera/contracts": "^1.8.0",
-    "@sera/engine": "^1.8.0"
+    "@sera/contracts": "^2.0.0",
+    "@sera/engine": "^2.0.0"
   },
   "devDependencies": {
     "pino-pretty": "13.1.3"

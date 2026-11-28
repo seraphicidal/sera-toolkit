@@ -69,7 +69,7 @@ android {
         versionName = buildConfigOption(
             listOf("SERA_VERSION_NAME", "SERA_ANDROID_VERSION_NAME"),
             listOf("SERA_ANDROID_VERSION_NAME", "SERA_VERSION_NAME"),
-        ) ?: "1.8.0"
+        ) ?: "2.0.0"
 
         buildConfigField("String", "DEFAULT_SERVER_URL", escapeBuildConfigString(defaultServerUrl))
 

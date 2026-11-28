@@ -8,6 +8,10 @@ coverage
 package-lock.json
 
 apps/web/next-env.d.ts
+apps/android/.gradle
+apps/android/.kotlin
+apps/android/build
+apps/android/app/build
 apps/android-node/.gradle
 apps/android-node/.kotlin
 apps/android-node/build

@@ -11,7 +11,7 @@ import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 
-const val SERA_APP_VERSION = "1.8.0"
+const val SERA_APP_VERSION = "2.0.0"
 
 val SeraJson: Json = Json {
     ignoreUnknownKeys = true
