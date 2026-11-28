@@ -52,6 +52,7 @@ object HealthModel {
                     HealthStatus.OK -> HealthLight.GREEN
                     HealthStatus.DEGRADED -> HealthLight.AMBER
                     HealthStatus.ERROR -> HealthLight.RED
+                    HealthStatus.UNKNOWN -> HealthLight.UNKNOWN
                 },
                 report = observation.report,
                 failures = 0,

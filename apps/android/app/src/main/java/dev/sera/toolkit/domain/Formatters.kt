@@ -3,6 +3,7 @@ package dev.sera.toolkit.domain
 import dev.sera.toolkit.model.DownloadOption
 import dev.sera.toolkit.model.JobState
 import dev.sera.toolkit.model.MediaKind
+import kotlin.math.max
 import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 
@@ -37,6 +38,19 @@ object Formatters {
         return TrimValidator.formatTimecode(seconds)
     }
 
+    fun formatLimitDuration(seconds: Long): String {
+        if (seconds <= 0L) return "0 minutes"
+        if (seconds < 3600L) {
+            return pluralize(max(1, (seconds / 60.0).roundToInt()), "minute")
+        }
+        val hours = seconds / 3600.0
+        if (seconds % 3600L == 0L) {
+            return pluralize((seconds / 3600L).toInt(), "hour")
+        }
+        val rounded = (hours * 10.0).roundToLong() / 10.0
+        return "$rounded ${if (rounded == 1.0) "hour" else "hours"}"
+    }
+
     fun formatEta(seconds: Double?): String {
         if (seconds == null || !seconds.isFinite() || seconds < 0.0) return ""
         if (seconds < 1.0) return "00:00"
@@ -54,6 +68,7 @@ object Formatters {
         MediaKind.AUDIO -> "Audio"
         MediaKind.IMAGE -> "Image"
         MediaKind.GIF -> "GIF"
+        MediaKind.FILE -> "File"
         MediaKind.UNKNOWN -> "Video"
     }
 
@@ -138,7 +153,7 @@ object Formatters {
     private val doneTextPattern = Regex("\\bdone\\b|\\bcomplete|\\bfinished\\b")
     private val tagTextPattern = Regex("tag|metadata|embed|packag|finaliz|zip|archiv")
     private val transcodeTextPattern = Regex("transcod|convert|merg|mux|trim|ffmpeg|re-encod")
-    private val downloadTextPattern = Regex("download|fetch|receiv|stream")
+    private val downloadTextPattern = Regex("download|fetch|receiv|stream|upload")
 
     fun resolvePipelineStepIndex(state: JobState, step: String?): Int {
         val text = (step ?: "").lowercase()
@@ -167,7 +182,8 @@ object Formatters {
         return when {
             Regex("\\.(mp4|webm|mov|mkv)$").containsMatchIn(lower) -> MediaKind.VIDEO
             Regex("\\.(mp3|m4a|aac|opus|ogg|wav|flac)$").containsMatchIn(lower) -> MediaKind.AUDIO
-            Regex("\\.(jpg|jpeg|png|webp|gif)$").containsMatchIn(lower) -> MediaKind.IMAGE
+            Regex("\\.(jpg|jpeg|png|webp|gif|avif)$").containsMatchIn(lower) -> MediaKind.IMAGE
+            Regex("\\.(pdf|zip|tar|7z|apk|epub|iso|dmg|exe|bin)$").containsMatchIn(lower) -> MediaKind.FILE
             else -> null
         }
     }

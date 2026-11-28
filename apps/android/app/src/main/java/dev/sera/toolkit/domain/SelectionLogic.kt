@@ -29,6 +29,7 @@ object SelectionLogic {
         MediaKind.AUDIO,
         MediaKind.IMAGE,
         MediaKind.GIF,
+        MediaKind.FILE,
     )
 
     fun availableKinds(info: MediaInfo, selectedIds: Set<String> = emptySet()): List<MediaKind> {
@@ -79,6 +80,19 @@ object SelectionLogic {
         val first = info.items.firstOrNull()
         val recommended = first?.options?.firstOrNull { it.recommended }
         return recommended?.kind ?: availableKinds(info).firstOrNull() ?: MediaKind.VIDEO
+    }
+
+    fun preferredLabelForKind(
+        info: MediaInfo,
+        kind: MediaKind,
+        selectedIds: Set<String> = emptySet(),
+    ): String? {
+        for (item in info.items) {
+            if (selectedIds.isNotEmpty() && item.id !in selectedIds) continue
+            val recommended = optionsOfKind(item, kind).firstOrNull { it.recommended }
+            if (recommended != null) return recommended.label
+        }
+        return qualityLabels(info, kind, selectedIds).firstOrNull()
     }
 
     fun qualityLabels(

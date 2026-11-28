@@ -8,13 +8,16 @@ import dev.sera.toolkit.model.HealthReport
 import dev.sera.toolkit.model.ImportRequest
 import dev.sera.toolkit.model.Job
 import dev.sera.toolkit.model.JobError
+import dev.sera.toolkit.model.JobProgress
 import dev.sera.toolkit.model.JobState
 import dev.sera.toolkit.model.LegalReportRequest
 import dev.sera.toolkit.model.LegalReportResponse
 import dev.sera.toolkit.model.MediaInfo
 import dev.sera.toolkit.model.ResolveRequest
+import dev.sera.toolkit.model.SeraJson
 import dev.sera.toolkit.model.ServiceInfo
 import dev.sera.toolkit.model.SseJobEvent
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
@@ -24,7 +27,6 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -36,24 +38,32 @@ import okhttp3.sse.EventSourceListener
 import okhttp3.sse.EventSources
 import java.io.IOException
 import java.time.Instant
+import java.time.ZonedDateTime
+import java.time.format.DateTimeFormatter
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.max
 
-class SeraApiException(val apiError: JobError) : Exception(apiError.message)
+class SeraApiException(
+    val apiError: JobError,
+    val httpStatus: Int? = null,
+    val retryAfterSeconds: Long? = null,
+) : Exception(apiError.message)
 
 class SeraApiClient(
     val httpClient: OkHttpClient = defaultHttpClient(),
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val sleeper: suspend (Long) -> Unit = { delay(it) },
+    private val streamGraceMs: Long = STREAM_GRACE_MS,
+    private val pollIntervalMs: Long = POLL_INTERVAL_MS,
+    private val maxRateLimitRetries: Int = DEFAULT_RATE_LIMIT_RETRIES,
 ) {
     private val sseClient: OkHttpClient = httpClient.newBuilder()
         .readTimeout(0, TimeUnit.MILLISECONDS)
         .retryOnConnectionFailure(false)
         .build()
 
-    private val json = Json {
-        ignoreUnknownKeys = true
-        encodeDefaults = false
-        explicitNulls = false
-    }
+    private val json = SeraJson
 
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 
@@ -113,7 +123,7 @@ class SeraApiClient(
 
     suspend fun cancelJob(baseUrl: String, jobId: String): Boolean {
         val safeJobId = jobId.takeIf { JOB_ID_PATTERN.matches(it) } ?: return false
-        return withContext(Dispatchers.IO) {
+        return withContext(ioDispatcher) {
             val request = Request.Builder()
                 .url("${normalizeBaseUrl(baseUrl)}/api/jobs/$safeJobId")
                 .delete()
@@ -190,8 +200,8 @@ class SeraApiClient(
             eventSource?.cancel()
             eventSource = null
 
-            pollJob = launch(Dispatchers.IO) {
-                var currentDelayMs = POLL_INTERVAL_MS
+            pollJob = launch(ioDispatcher) {
+                var currentDelayMs = pollIntervalMs
                 while (isActive && !stopped.get()) {
                     try {
                         val next = applyMonotonic(getJob(baseUrl, safeJobId))
@@ -200,17 +210,22 @@ class SeraApiClient(
                             finishStream()
                             return@launch
                         }
-                        delay(currentDelayMs)
+                        sleeper(currentDelayMs)
                         currentDelayMs = (currentDelayMs * 5L / 4L).coerceAtMost(MAX_POLL_INTERVAL_MS)
                     } catch (e: SeraApiException) {
                         if (!e.apiError.retryable) {
                             val nowIso = Instant.now().toString()
                             val prev = latestJob
+                            val syntheticState = when {
+                                e.apiError.code == ErrorCodes.EXPIRED -> JobState.EXPIRED
+                                e.httpStatus == 404 || e.apiError.code == ErrorCodes.NOT_FOUND -> JobState.EXPIRED
+                                else -> JobState.FAILED
+                            }
                             val synthetic = Job(
                                 id = safeJobId,
-                                state = if (e.apiError.code == ErrorCodes.EXPIRED) JobState.EXPIRED else JobState.FAILED,
-                                step = "Failed",
-                                progress = prev?.progress ?: dev.sera.toolkit.model.JobProgress(percent = 0.0),
+                                state = syntheticState,
+                                step = if (syntheticState == JobState.EXPIRED) "Expired" else "Failed",
+                                progress = prev?.progress ?: JobProgress(percent = 0.0),
                                 provider = prev?.provider ?: "generic",
                                 createdAt = prev?.createdAt ?: nowIso,
                                 updatedAt = nowIso,
@@ -220,11 +235,16 @@ class SeraApiClient(
                             finishStream()
                             return@launch
                         }
-                        currentDelayMs = (currentDelayMs * 2L).coerceAtMost(MAX_POLL_INTERVAL_MS)
-                        delay(currentDelayMs)
+                        val retryMs = e.retryAfterSeconds?.times(1000L)
+                        currentDelayMs = if (retryMs != null && retryMs > 0L) {
+                            retryMs.coerceAtMost(MAX_RETRY_AFTER_MS)
+                        } else {
+                            (currentDelayMs * 2L).coerceAtMost(MAX_POLL_INTERVAL_MS)
+                        }
+                        sleeper(currentDelayMs)
                     } catch (_: Exception) {
                         currentDelayMs = (currentDelayMs * 2L).coerceAtMost(MAX_POLL_INTERVAL_MS)
-                        delay(currentDelayMs)
+                        sleeper(currentDelayMs)
                     }
                 }
             }
@@ -284,7 +304,7 @@ class SeraApiClient(
         )
 
         graceJob = launch {
-            delay(STREAM_GRACE_MS)
+            sleeper(streamGraceMs)
             if (!sawStreamEvent.get() && !stopped.get()) {
                 startPolling()
             }
@@ -299,47 +319,95 @@ class SeraApiClient(
     }
 
     private suspend inline fun <reified T> executeJson(request: Request): T {
-        return withContext(Dispatchers.IO) {
-            val response = try {
-                httpClient.newCall(request).execute()
-            } catch (_: IOException) {
-                throw SeraApiException(NETWORK_FAILURE)
-            }
-            response.use { res ->
-                val rawBody = res.body?.string().orEmpty()
-                if (!res.isSuccessful) {
-                    val parsedError = try {
-                        json.decodeFromString<ApiErrorBody>(rawBody).error
-                    } catch (_: Exception) {
-                        null
-                    }
-                    throw SeraApiException(
-                        parsedError ?: JobError(
-                            code = ErrorCodes.INTERNAL,
-                            message = "Something went wrong on our side (HTTP ${res.code}).",
-                            retryable = res.code >= 500 || res.code == 429,
-                        ),
-                    )
+        var attempt = 0
+        while (true) {
+            val outcome = withContext(ioDispatcher) {
+                val response = try {
+                    httpClient.newCall(request).execute()
+                } catch (_: IOException) {
+                    throw SeraApiException(NETWORK_FAILURE)
                 }
-                try {
-                    json.decodeFromString<T>(rawBody)
-                } catch (_: Exception) {
-                    throw SeraApiException(
-                        JobError(
-                            code = ErrorCodes.INTERNAL,
-                            message = "Received an unexpected response from the server.",
-                            retryable = true,
-                        ),
-                    )
+                response.use { res ->
+                    val rawBody = res.body?.string().orEmpty()
+                    val retryAfter = parseRetryAfterSeconds(res.header("Retry-After"))
+                    if (!res.isSuccessful) {
+                        val parsedError = try {
+                            json.decodeFromString<ApiErrorBody>(rawBody).error
+                        } catch (_: Exception) {
+                            null
+                        }
+                        val fallbackCode = when (res.code) {
+                            404 -> ErrorCodes.NOT_FOUND
+                            429 -> ErrorCodes.RATE_LIMITED
+                            403 -> ErrorCodes.FORBIDDEN
+                            413 -> ErrorCodes.TOO_LARGE
+                            else -> ErrorCodes.INTERNAL
+                        }
+                        val error = parsedError ?: JobError(
+                            code = fallbackCode,
+                            message = when (res.code) {
+                                429 -> "Too many requests. Try again in a moment."
+                                404 -> "That download has expired."
+                                else -> "Something went wrong on our side (HTTP ${res.code})."
+                            },
+                            retryable = res.code >= 500 || res.code == 429,
+                        )
+                        HttpJsonOutcome.Error(
+                            SeraApiException(
+                                apiError = error,
+                                httpStatus = res.code,
+                                retryAfterSeconds = retryAfter,
+                            ),
+                        )
+                    } else {
+                        try {
+                            HttpJsonOutcome.Success(json.decodeFromString<T>(rawBody))
+                        } catch (_: Exception) {
+                            HttpJsonOutcome.Error(
+                                SeraApiException(
+                                    apiError = JobError(
+                                        code = ErrorCodes.INTERNAL,
+                                        message = "Received an unexpected response from the server.",
+                                        retryable = true,
+                                    ),
+                                    httpStatus = res.code,
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+
+            when (outcome) {
+                is HttpJsonOutcome.Success -> return outcome.value
+                is HttpJsonOutcome.Error -> {
+                    val ex = outcome.exception
+                    if (ex.httpStatus == 429 && attempt < maxRateLimitRetries) {
+                        val waitSeconds = (ex.retryAfterSeconds ?: DEFAULT_RETRY_AFTER_SECONDS)
+                            .coerceIn(1L, MAX_AUTO_RETRY_AFTER_SECONDS)
+                        attempt += 1
+                        sleeper(waitSeconds * 1000L)
+                        continue
+                    }
+                    throw ex
                 }
             }
         }
+    }
+
+    private sealed interface HttpJsonOutcome<out T> {
+        data class Success<T>(val value: T) : HttpJsonOutcome<T>
+        data class Error(val exception: SeraApiException) : HttpJsonOutcome<Nothing>
     }
 
     companion object {
         const val STREAM_GRACE_MS = 6_000L
         const val POLL_INTERVAL_MS = 1_500L
         private const val MAX_POLL_INTERVAL_MS = 4_000L
+        private const val DEFAULT_RATE_LIMIT_RETRIES = 2
+        private const val DEFAULT_RETRY_AFTER_SECONDS = 2L
+        private const val MAX_AUTO_RETRY_AFTER_SECONDS = 60L
+        private const val MAX_RETRY_AFTER_MS = 60_000L
         private val JOB_ID_PATTERN = Regex("^[A-Za-z0-9_-]{1,64}$")
 
         private val NETWORK_FAILURE = JobError(
@@ -348,6 +416,21 @@ class SeraApiClient(
             hint = "Check your connection and server URL, then try again.",
             retryable = true,
         )
+
+        fun parseRetryAfterSeconds(
+            headerValue: String?,
+            nowEpochMillis: Long = System.currentTimeMillis(),
+        ): Long? {
+            val trimmed = headerValue?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+            trimmed.toLongOrNull()?.let { seconds ->
+                return max(0L, seconds)
+            }
+            return runCatching {
+                val parsed = ZonedDateTime.parse(trimmed, DateTimeFormatter.RFC_1123_DATE_TIME)
+                val diffMs = parsed.toInstant().toEpochMilli() - nowEpochMillis
+                max(0L, (diffMs + 999L) / 1000L)
+            }.getOrNull()
+        }
 
         private fun requireValidJobId(jobId: String): String {
             val trimmed = jobId.trim()

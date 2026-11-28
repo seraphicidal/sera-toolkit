@@ -18,13 +18,19 @@ data class HistoryEntry(
     val expiresAt: String,
     val localUri: String? = null,
     val mimeType: String? = null,
+    val sizeBytes: Long? = null,
+    val fileCount: Int? = null,
 )
 
 object HistoryModel {
-    const val HISTORY_LIMIT = 10
+    const val HISTORY_LIMIT = 50
 
     fun addEntry(entries: List<HistoryEntry>, entry: HistoryEntry): List<HistoryEntry> {
         return (listOf(entry) + entries.filterNot { it.jobId == entry.jobId }).take(HISTORY_LIMIT)
+    }
+
+    fun removeEntry(entries: List<HistoryEntry>, jobId: String): List<HistoryEntry> {
+        return entries.filterNot { it.jobId == jobId }
     }
 
     fun attachLocalUri(

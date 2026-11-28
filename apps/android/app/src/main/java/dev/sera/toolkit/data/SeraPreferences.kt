@@ -7,13 +7,15 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import dev.sera.toolkit.BuildConfig
 import dev.sera.toolkit.domain.HistoryEntry
 import dev.sera.toolkit.domain.HistoryModel
 import dev.sera.toolkit.model.MediaKind
+import dev.sera.toolkit.model.SeraJson
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
 
 enum class ThemePreference(val storageValue: String, val label: String) {
     LIGHT("light", "Light"),
@@ -32,24 +34,29 @@ data class UserSettings(
     val themePreference: ThemePreference = ThemePreference.SYSTEM,
     val preferredKind: MediaKind? = null,
     val autoSaveToDevice: Boolean = true,
+    val quickDownload: Boolean = false,
+    val wifiOnly: Boolean = false,
+    val notificationsPrompted: Boolean = false,
 )
 
 private val Context.seraDataStore: DataStore<Preferences> by preferencesDataStore(name = "sera_prefs")
 
-const val DEFAULT_SERVER_URL = "http://10.0.2.2:4000"
+val DEFAULT_SERVER_URL: String
+    get() = BuildConfig.DEFAULT_SERVER_URL
 
 class SeraPreferences(private val context: Context) {
-    private val json = Json {
-        ignoreUnknownKeys = true
-        encodeDefaults = true
-    }
+    private val json = SeraJson
 
     private object Keys {
         val SERVER_URL = stringPreferencesKey("sera_server_url")
         val THEME = stringPreferencesKey("sera_theme")
         val PREFERRED_KIND = stringPreferencesKey("sera_preferred_kind")
         val AUTO_SAVE = booleanPreferencesKey("sera_auto_save")
+        val QUICK_DOWNLOAD = booleanPreferencesKey("sera_quick_download")
+        val WIFI_ONLY = booleanPreferencesKey("sera_wifi_only")
+        val NOTIFICATIONS_PROMPTED = booleanPreferencesKey("sera_notifications_prompted")
         val HISTORY = stringPreferencesKey("sera_history")
+        val DOWNLOAD_TASKS = stringPreferencesKey("sera_download_tasks")
     }
 
     val settings: Flow<UserSettings> = context.seraDataStore.data.map { prefs ->
@@ -61,14 +68,21 @@ class SeraPreferences(private val context: Context) {
             "audio" -> MediaKind.AUDIO
             "image" -> MediaKind.IMAGE
             "gif" -> MediaKind.GIF
+            "file" -> MediaKind.FILE
             else -> null
         }
         val autoSave = prefs[Keys.AUTO_SAVE] ?: true
+        val quickDownload = prefs[Keys.QUICK_DOWNLOAD] ?: false
+        val wifiOnly = prefs[Keys.WIFI_ONLY] ?: false
+        val notificationsPrompted = prefs[Keys.NOTIFICATIONS_PROMPTED] ?: false
         UserSettings(
             serverUrl = serverUrl,
             themePreference = theme,
             preferredKind = kind,
             autoSaveToDevice = autoSave,
+            quickDownload = quickDownload,
+            wifiOnly = wifiOnly,
+            notificationsPrompted = notificationsPrompted,
         )
     }
 
@@ -81,10 +95,22 @@ class SeraPreferences(private val context: Context) {
         }
     }
 
+    val downloadTasks: Flow<List<DownloadTaskRecord>> = context.seraDataStore.data.map { prefs ->
+        decodeTasks(prefs[Keys.DOWNLOAD_TASKS])
+    }
+
+    suspend fun currentSettings(): UserSettings = settings.first()
+
     suspend fun setServerUrl(url: String) {
         val normalized = SeraApiClient.normalizeBaseUrl(url)
         context.seraDataStore.edit { prefs ->
             prefs[Keys.SERVER_URL] = normalized
+        }
+    }
+
+    suspend fun resetServerUrl() {
+        context.seraDataStore.edit { prefs ->
+            prefs.remove(Keys.SERVER_URL)
         }
     }
 
@@ -94,16 +120,21 @@ class SeraPreferences(private val context: Context) {
         }
     }
 
-    suspend fun setPreferredKind(kind: MediaKind) {
+    suspend fun setPreferredKind(kind: MediaKind?) {
         val value = when (kind) {
             MediaKind.VIDEO -> "video"
             MediaKind.AUDIO -> "audio"
             MediaKind.IMAGE -> "image"
             MediaKind.GIF -> "gif"
-            MediaKind.UNKNOWN -> return
+            MediaKind.FILE -> "file"
+            MediaKind.UNKNOWN, null -> null
         }
         context.seraDataStore.edit { prefs ->
-            prefs[Keys.PREFERRED_KIND] = value
+            if (value == null) {
+                prefs.remove(Keys.PREFERRED_KIND)
+            } else {
+                prefs[Keys.PREFERRED_KIND] = value
+            }
         }
     }
 
@@ -113,10 +144,36 @@ class SeraPreferences(private val context: Context) {
         }
     }
 
+    suspend fun setQuickDownload(enabled: Boolean) {
+        context.seraDataStore.edit { prefs ->
+            prefs[Keys.QUICK_DOWNLOAD] = enabled
+        }
+    }
+
+    suspend fun setWifiOnly(enabled: Boolean) {
+        context.seraDataStore.edit { prefs ->
+            prefs[Keys.WIFI_ONLY] = enabled
+        }
+    }
+
+    suspend fun setNotificationsPrompted(prompted: Boolean) {
+        context.seraDataStore.edit { prefs ->
+            prefs[Keys.NOTIFICATIONS_PROMPTED] = prompted
+        }
+    }
+
     suspend fun addHistoryEntry(entry: HistoryEntry) {
         context.seraDataStore.edit { prefs ->
             val current = decodeHistory(prefs[Keys.HISTORY])
             val next = HistoryModel.addEntry(current, entry)
+            prefs[Keys.HISTORY] = json.encodeToString(next)
+        }
+    }
+
+    suspend fun removeHistoryEntry(jobId: String) {
+        context.seraDataStore.edit { prefs ->
+            val current = decodeHistory(prefs[Keys.HISTORY])
+            val next = HistoryModel.removeEntry(current, jobId)
             prefs[Keys.HISTORY] = json.encodeToString(next)
         }
     }
@@ -135,6 +192,16 @@ class SeraPreferences(private val context: Context) {
         }
     }
 
+    suspend fun updateDownloadTasks(transform: (List<DownloadTaskRecord>) -> List<DownloadTaskRecord>) {
+        context.seraDataStore.edit { prefs ->
+            val current = decodeTasks(prefs[Keys.DOWNLOAD_TASKS])
+            val updated = transform(current).take(MAX_TRACKED_TASKS)
+            prefs[Keys.DOWNLOAD_TASKS] = json.encodeToString(updated)
+        }
+    }
+
+    suspend fun currentDownloadTasks(): List<DownloadTaskRecord> = downloadTasks.first()
+
     private fun decodeHistory(raw: String?): List<HistoryEntry> {
         if (raw.isNullOrBlank()) return emptyList()
         return try {
@@ -142,5 +209,18 @@ class SeraPreferences(private val context: Context) {
         } catch (_: Exception) {
             emptyList()
         }
+    }
+
+    private fun decodeTasks(raw: String?): List<DownloadTaskRecord> {
+        if (raw.isNullOrBlank()) return emptyList()
+        return try {
+            json.decodeFromString<List<DownloadTaskRecord>>(raw)
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    companion object {
+        private const val MAX_TRACKED_TASKS = 100
     }
 }

@@ -1,65 +1,134 @@
 package dev.sera.toolkit.model
 
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.descriptors.PrimitiveKind
+import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 
 const val SERA_APP_VERSION = "1.8.0"
 
-@Serializable
-enum class MediaKind {
+val SeraJson: Json = Json {
+    ignoreUnknownKeys = true
+    encodeDefaults = false
+    explicitNulls = false
+    coerceInputValues = true
+}
+
+open class FallbackEnumSerializer<T : Enum<T>>(
+    serialName: String,
+    values: Iterable<T>,
+    private val wireValue: (T) -> String,
+    private val fallback: T,
+) : KSerializer<T> {
+    private val byWire: Map<String, T> = values.associateBy { wireValue(it) }
+
+    override val descriptor: SerialDescriptor =
+        PrimitiveSerialDescriptor(serialName, PrimitiveKind.STRING)
+
+    override fun serialize(encoder: Encoder, value: T) {
+        encoder.encodeString(wireValue(value))
+    }
+
+    override fun deserialize(decoder: Decoder): T {
+        val raw = decoder.decodeString()
+        return byWire[raw] ?: fallback
+    }
+}
+
+object MediaKindSerializer : FallbackEnumSerializer<MediaKind>(
+    serialName = "dev.sera.toolkit.model.MediaKind",
+    values = MediaKind.entries,
+    wireValue = { it.wireValue },
+    fallback = MediaKind.UNKNOWN,
+)
+
+@Serializable(with = MediaKindSerializer::class)
+enum class MediaKind(val wireValue: String) {
     @SerialName("video")
-    VIDEO,
+    VIDEO("video"),
     @SerialName("audio")
-    AUDIO,
+    AUDIO("audio"),
     @SerialName("image")
-    IMAGE,
+    IMAGE("image"),
     @SerialName("gif")
-    GIF,
+    GIF("gif"),
+    @SerialName("file")
+    FILE("file"),
     @SerialName("unknown")
-    UNKNOWN,
+    UNKNOWN("unknown"),
 }
 
-@Serializable
-enum class MediaInfoType {
+object MediaInfoTypeSerializer : FallbackEnumSerializer<MediaInfoType>(
+    serialName = "dev.sera.toolkit.model.MediaInfoType",
+    values = MediaInfoType.entries,
+    wireValue = { it.wireValue },
+    fallback = MediaInfoType.UNKNOWN,
+)
+
+@Serializable(with = MediaInfoTypeSerializer::class)
+enum class MediaInfoType(val wireValue: String) {
     @SerialName("single")
-    SINGLE,
+    SINGLE("single"),
     @SerialName("collection")
-    COLLECTION,
+    COLLECTION("collection"),
     @SerialName("playlist")
-    PLAYLIST,
+    PLAYLIST("playlist"),
+    @SerialName("unknown")
+    UNKNOWN("unknown"),
 }
 
-@Serializable
-enum class JobState {
+object JobStateSerializer : FallbackEnumSerializer<JobState>(
+    serialName = "dev.sera.toolkit.model.JobState",
+    values = JobState.entries,
+    wireValue = { it.wireValue },
+    fallback = JobState.UNKNOWN,
+)
+
+@Serializable(with = JobStateSerializer::class)
+enum class JobState(val wireValue: String) {
     @SerialName("queued")
-    QUEUED,
+    QUEUED("queued"),
     @SerialName("resolving")
-    RESOLVING,
+    RESOLVING("resolving"),
     @SerialName("downloading")
-    DOWNLOADING,
+    DOWNLOADING("downloading"),
     @SerialName("merging")
-    MERGING,
+    MERGING("merging"),
     @SerialName("converting")
-    CONVERTING,
+    CONVERTING("converting"),
     @SerialName("packaging")
-    PACKAGING,
+    PACKAGING("packaging"),
     @SerialName("finalizing")
-    FINALIZING,
+    FINALIZING("finalizing"),
     @SerialName("ready")
-    READY,
+    READY("ready"),
     @SerialName("failed")
-    FAILED,
+    FAILED("failed"),
     @SerialName("cancelled")
-    CANCELLED,
+    CANCELLED("cancelled"),
     @SerialName("expired")
-    EXPIRED;
+    EXPIRED("expired"),
+    @SerialName("unknown")
+    UNKNOWN("unknown");
 
     val isTerminal: Boolean
         get() = this == READY || this == FAILED || this == CANCELLED || this == EXPIRED
 }
 
-@Serializable
+object PackagingModeSerializer : FallbackEnumSerializer<PackagingMode>(
+    serialName = "dev.sera.toolkit.model.PackagingMode",
+    values = PackagingMode.entries,
+    wireValue = { it.wireValue },
+    fallback = PackagingMode.AUTO,
+)
+
+@Serializable(with = PackagingModeSerializer::class)
 enum class PackagingMode(val wireValue: String, val label: String) {
     @SerialName("auto")
     AUTO("auto", "Automatic"),
@@ -69,7 +138,14 @@ enum class PackagingMode(val wireValue: String, val label: String) {
     INDIVIDUAL("individual", "Separate files"),
 }
 
-@Serializable
+object SubtitleFormatSerializer : FallbackEnumSerializer<SubtitleFormat>(
+    serialName = "dev.sera.toolkit.model.SubtitleFormat",
+    values = SubtitleFormat.entries,
+    wireValue = { it.wireValue },
+    fallback = SubtitleFormat.SRT,
+)
+
+@Serializable(with = SubtitleFormatSerializer::class)
 enum class SubtitleFormat(val wireValue: String, val label: String) {
     @SerialName("embed")
     EMBED("embed", "In the video"),
@@ -79,7 +155,14 @@ enum class SubtitleFormat(val wireValue: String, val label: String) {
     VTT("vtt", "VTT file"),
 }
 
-@Serializable
+object LegalReportCategorySerializer : FallbackEnumSerializer<LegalReportCategory>(
+    serialName = "dev.sera.toolkit.model.LegalReportCategory",
+    values = LegalReportCategory.entries,
+    wireValue = { it.wireValue },
+    fallback = LegalReportCategory.OTHER,
+)
+
+@Serializable(with = LegalReportCategorySerializer::class)
 enum class LegalReportCategory(val wireValue: String, val label: String) {
     @SerialName("copyright")
     COPYRIGHT("copyright", "Copyright Infringement"),
@@ -91,39 +174,66 @@ enum class LegalReportCategory(val wireValue: String, val label: String) {
     OTHER("other", "Other Policy Violation"),
 }
 
-@Serializable
-enum class ProviderStatus {
+object ProviderStatusSerializer : FallbackEnumSerializer<ProviderStatus>(
+    serialName = "dev.sera.toolkit.model.ProviderStatus",
+    values = ProviderStatus.entries,
+    wireValue = { it.wireValue },
+    fallback = ProviderStatus.UNKNOWN,
+)
+
+@Serializable(with = ProviderStatusSerializer::class)
+enum class ProviderStatus(val wireValue: String) {
     @SerialName("ok")
-    OK,
+    OK("ok"),
     @SerialName("degraded")
-    DEGRADED,
+    DEGRADED("degraded"),
     @SerialName("unavailable")
-    UNAVAILABLE,
+    UNAVAILABLE("unavailable"),
+    @SerialName("unknown")
+    UNKNOWN("unknown"),
 }
 
-@Serializable
-enum class HealthStatus {
+object HealthStatusSerializer : FallbackEnumSerializer<HealthStatus>(
+    serialName = "dev.sera.toolkit.model.HealthStatus",
+    values = HealthStatus.entries,
+    wireValue = { it.wireValue },
+    fallback = HealthStatus.UNKNOWN,
+)
+
+@Serializable(with = HealthStatusSerializer::class)
+enum class HealthStatus(val wireValue: String) {
     @SerialName("ok")
-    OK,
+    OK("ok"),
     @SerialName("degraded")
-    DEGRADED,
+    DEGRADED("degraded"),
     @SerialName("error")
-    ERROR,
+    ERROR("error"),
+    @SerialName("unknown")
+    UNKNOWN("unknown"),
 }
 
-@Serializable
-enum class HealthCheckStatus {
+object HealthCheckStatusSerializer : FallbackEnumSerializer<HealthCheckStatus>(
+    serialName = "dev.sera.toolkit.model.HealthCheckStatus",
+    values = HealthCheckStatus.entries,
+    wireValue = { it.wireValue },
+    fallback = HealthCheckStatus.UNKNOWN,
+)
+
+@Serializable(with = HealthCheckStatusSerializer::class)
+enum class HealthCheckStatus(val wireValue: String) {
     @SerialName("ok")
-    OK,
+    OK("ok"),
     @SerialName("error")
-    ERROR,
+    ERROR("error"),
+    @SerialName("unknown")
+    UNKNOWN("unknown"),
 }
 
 @Serializable
 data class DownloadOption(
     val id: String,
     val itemId: String,
-    val kind: MediaKind,
+    val kind: MediaKind = MediaKind.UNKNOWN,
     val container: String,
     val label: String,
     val detail: String? = null,
@@ -150,7 +260,7 @@ data class SubtitleTrack(
 data class MediaItem(
     val id: String,
     val index: Int,
-    val kind: MediaKind,
+    val kind: MediaKind = MediaKind.UNKNOWN,
     val title: String? = null,
     val thumbnail: String? = null,
     val width: Int? = null,
@@ -169,7 +279,7 @@ data class MediaInfo(
     val provider: String,
     val providerLabel: String,
     val url: String,
-    val type: MediaInfoType,
+    val type: MediaInfoType = MediaInfoType.SINGLE,
     val title: String,
     val description: String? = null,
     val author: String? = null,
@@ -236,12 +346,12 @@ data class JobError(
 @Serializable
 data class Job(
     val id: String,
-    val state: JobState,
-    val step: String,
-    val progress: JobProgress,
-    val provider: String,
-    val createdAt: String,
-    val updatedAt: String,
+    val state: JobState = JobState.UNKNOWN,
+    val step: String = "",
+    val progress: JobProgress = JobProgress(),
+    val provider: String = "",
+    val createdAt: String = "",
+    val updatedAt: String = "",
     val result: JobResult? = null,
     val error: JobError? = null,
 )
@@ -310,8 +420,20 @@ data class ProviderSummary(
     val id: String,
     val label: String,
     val hosts: List<String> = emptyList(),
-    val status: ProviderStatus,
-    val capabilities: ProviderCapabilities,
+    val status: ProviderStatus = ProviderStatus.UNKNOWN,
+    val capabilities: ProviderCapabilities = ProviderCapabilities(),
+)
+
+@Serializable
+data class NodeAvailability(
+    val enabled: Boolean = false,
+    val totalNodes: Int = 0,
+    val healthyNodes: Int = 0,
+    val residentialNodes: Int = 0,
+    val primaryNodes: Int? = null,
+    val backupNodes: Int? = null,
+    val features: List<String> = emptyList(),
+    val providers: List<String> = emptyList(),
 )
 
 @Serializable
@@ -328,20 +450,21 @@ data class ServiceInfo(
     val version: String,
     val providers: List<ProviderSummary> = emptyList(),
     val limits: ServiceLimits,
+    val nodeAvailability: NodeAvailability? = null,
 )
 
 @Serializable
 data class HealthCheck(
     val name: String,
-    val status: HealthCheckStatus,
+    val status: HealthCheckStatus = HealthCheckStatus.UNKNOWN,
     val detail: String? = null,
 )
 
 @Serializable
 data class HealthReport(
-    val status: HealthStatus,
+    val status: HealthStatus = HealthStatus.UNKNOWN,
     val version: String,
-    val uptimeSeconds: Double,
+    val uptimeSeconds: Double = 0.0,
     val checks: List<HealthCheck> = emptyList(),
 )
 
@@ -399,7 +522,10 @@ data class ImportedPostNode(
     data class ImageVersions(val candidates: List<ImportedCandidate>? = null)
 
     @Serializable
-    data class ImportedUser(val username: String? = null, @SerialName("full_name") val fullName: String? = null)
+    data class ImportedUser(
+        val username: String? = null,
+        @SerialName("full_name") val fullName: String? = null,
+    )
 
     @Serializable
     data class ImportedCaption(val text: String? = null)
@@ -413,11 +539,33 @@ data class ImportRequest(
 
 object ErrorCodes {
     const val INVALID_URL = "INVALID_URL"
+    const val VALIDATION_ERROR = "VALIDATION_ERROR"
+    const val FORBIDDEN = "FORBIDDEN"
+    const val UNSUPPORTED_SOURCE = "UNSUPPORTED_SOURCE"
+    const val PRIVATE_CONTENT = "PRIVATE_CONTENT"
+    const val MEDIA_UNAVAILABLE = "MEDIA_UNAVAILABLE"
+    const val GEO_RESTRICTED = "GEO_RESTRICTED"
+    const val AGE_RESTRICTED = "AGE_RESTRICTED"
+    const val LOGIN_REQUIRED = "LOGIN_REQUIRED"
+    const val SOURCE_BLOCKED = "SOURCE_BLOCKED"
     const val PROVIDER_AUTH_REQUIRED = "PROVIDER_AUTH_REQUIRED"
-    const val EXPIRED = "EXPIRED"
+    const val PROVIDER_CONFIGURATION_ERROR = "PROVIDER_CONFIGURATION_ERROR"
+    const val ROBOTS_DISALLOWED = "ROBOTS_DISALLOWED"
+    const val DRM_PROTECTED = "DRM_PROTECTED"
+    const val LIVE_IN_PROGRESS = "LIVE_IN_PROGRESS"
+    const val RATE_LIMITED = "RATE_LIMITED"
+    const val PROVIDER_UNAVAILABLE = "PROVIDER_UNAVAILABLE"
     const val NETWORK_ERROR = "NETWORK_ERROR"
-    const val INTERNAL = "INTERNAL"
+    const val TOO_LARGE = "TOO_LARGE"
+    const val TOO_LONG = "TOO_LONG"
+    const val CONVERSION_FAILED = "CONVERSION_FAILED"
+    const val TIMEOUT = "TIMEOUT"
     const val CANCELLED = "CANCELLED"
+    const val NOT_FOUND = "NOT_FOUND"
+    const val EXPIRED = "EXPIRED"
+    const val BLOCKED_ADDRESS = "BLOCKED_ADDRESS"
+    const val QUEUE_FULL = "QUEUE_FULL"
+    const val INTERNAL = "INTERNAL"
 }
 
 val SUBTITLE_EMBED_CONTAINERS = setOf("mp4", "mkv", "webm")
