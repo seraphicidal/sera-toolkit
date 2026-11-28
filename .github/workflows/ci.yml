@@ -39,27 +39,81 @@ jobs:
           node-version: '24.18.1'
           cache: npm
 
-      - name: Install
-        run: npm ci --ignore-scripts
-
-      - name: Install FFmpeg
+      - name: Resolve FFmpeg cache key
+        id: ffmpeg-cache-key
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ffmpeg
-          ffmpeg -version | head -n 1
+          . /etc/os-release
+          echo "key=ffmpeg-deb-${ID}-${VERSION_ID}-${ImageVersion:-default}-$(uname -m)" >> "$GITHUB_OUTPUT"
 
-      - name: Install yt-dlp
+      - name: Cache FFmpeg packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ~/.cache/apt-ffmpeg
+          key: ${{ steps.ffmpeg-cache-key.outputs.key }}
+
+      - name: Cache yt-dlp binary
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ~/.cache/sera-tools
+          key: ytdlp-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/tools.manifest.json') }}
+
+      - name: Install dependencies and media tools
         run: |
-          VERSION=$(node -p "require('./scripts/tools.manifest.json').ytdlp.version")
-          curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 20 -o /tmp/yt-dlp \
-            "https://github.com/yt-dlp/yt-dlp/releases/download/${VERSION}/yt-dlp_linux"
-          curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 20 -o /tmp/SHA2-256SUMS \
-            "https://github.com/yt-dlp/yt-dlp/releases/download/${VERSION}/SHA2-256SUMS"
-          EXPECTED=$(grep ' yt-dlp_linux$' /tmp/SHA2-256SUMS | cut -d' ' -f1)
-          ACTUAL=$(sha256sum /tmp/yt-dlp | cut -d' ' -f1)
-          test -n "$EXPECTED" && test "$EXPECTED" = "$ACTUAL"
-          sudo install -m 0755 /tmp/yt-dlp /usr/local/bin/yt-dlp
-          yt-dlp --version
+          install_npm() {
+            npm ci --ignore-scripts --no-audit --no-fund --prefer-offline
+          }
+
+          install_ffmpeg() {
+            cache_dir="$HOME/.cache/apt-ffmpeg"
+            if compgen -G "$cache_dir/*.deb" > /dev/null; then
+              sudo DEBIAN_FRONTEND=noninteractive dpkg -i "$cache_dir"/*.deb || {
+                sudo apt-get update
+                sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends -f
+              }
+            else
+              mkdir -p "$cache_dir/partial"
+              sudo apt-get update
+              sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+                -o "Dir::Cache::archives=$cache_dir" \
+                -o APT::Keep-Downloaded-Packages=true \
+                -o APT::Sandbox::User=root \
+                ffmpeg
+              sudo rm -rf "$cache_dir/partial" "$cache_dir/lock"
+              sudo chown -R "$(id -u):$(id -g)" "$cache_dir"
+            fi
+            ffmpeg -version | head -n 1
+          }
+
+          install_ytdlp() {
+            cache_bin="$HOME/.cache/sera-tools/yt-dlp"
+            if [ ! -x "$cache_bin" ]; then
+              mkdir -p "$HOME/.cache/sera-tools"
+              VERSION=$(node -p "require('./scripts/tools.manifest.json').ytdlp.version")
+              curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 20 -o /tmp/yt-dlp \
+                "https://github.com/yt-dlp/yt-dlp/releases/download/${VERSION}/yt-dlp_linux"
+              curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 20 -o /tmp/SHA2-256SUMS \
+                "https://github.com/yt-dlp/yt-dlp/releases/download/${VERSION}/SHA2-256SUMS"
+              EXPECTED=$(grep ' yt-dlp_linux$' /tmp/SHA2-256SUMS | cut -d' ' -f1)
+              ACTUAL=$(sha256sum /tmp/yt-dlp | cut -d' ' -f1)
+              test -n "$EXPECTED" && test "$EXPECTED" = "$ACTUAL"
+              install -m 0755 /tmp/yt-dlp "$cache_bin"
+            fi
+            sudo install -m 0755 "$cache_bin" /usr/local/bin/yt-dlp
+            yt-dlp --version
+          }
+
+          install_npm &
+          pid_npm=$!
+          install_ffmpeg &
+          pid_ffmpeg=$!
+          install_ytdlp &
+          pid_ytdlp=$!
+
+          status=0
+          wait "$pid_npm" || status=1
+          wait "$pid_ffmpeg" || status=1
+          wait "$pid_ytdlp" || status=1
+          exit "$status"
 
       - name: Format
         run: npm run format
