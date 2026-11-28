@@ -608,6 +608,16 @@ jobs:
           java-version: '17'
 
       - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-home-cache-excludes: caches/build-cache-1
+
+      - name: Cache Gradle build cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ~/.gradle/caches/build-cache-1
+          key: gradle-build-cache-${{ runner.os }}-${{ hashFiles('apps/android-node/**') }}
+          restore-keys: |
+            gradle-build-cache-${{ runner.os }}-
 
       - name: Run Android unit tests and build debug APK
         run: |
