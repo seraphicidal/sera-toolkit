@@ -15,21 +15,10 @@ permissions:
   contents: read
 
 jobs:
-  verify:
-    name: Lint, typecheck, test, build
+  verify-lint:
+    name: Lint, format, and config checks
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-
-    services:
-      redis:
-        image: redis:7.4-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 10
+    timeout-minutes: 10
 
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
@@ -40,43 +29,13 @@ jobs:
           cache: npm
 
       - name: Install
-        run: npm ci --ignore-scripts
-
-      - name: Install FFmpeg
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ffmpeg
-          ffmpeg -version | head -n 1
-
-      - name: Install yt-dlp
-        run: |
-          VERSION=$(node -p "require('./scripts/tools.manifest.json').ytdlp.version")
-          curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 20 -o /tmp/yt-dlp \
-            "https://github.com/yt-dlp/yt-dlp/releases/download/${VERSION}/yt-dlp_linux"
-          curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 20 -o /tmp/SHA2-256SUMS \
-            "https://github.com/yt-dlp/yt-dlp/releases/download/${VERSION}/SHA2-256SUMS"
-          EXPECTED=$(grep ' yt-dlp_linux$' /tmp/SHA2-256SUMS | cut -d' ' -f1)
-          ACTUAL=$(sha256sum /tmp/yt-dlp | cut -d' ' -f1)
-          test -n "$EXPECTED" && test "$EXPECTED" = "$ACTUAL"
-          sudo install -m 0755 /tmp/yt-dlp /usr/local/bin/yt-dlp
-          yt-dlp --version
+        run: npm ci --ignore-scripts --no-audit --no-fund --prefer-offline
 
       - name: Format
         run: npm run format
 
       - name: Lint
         run: npm run lint
-
-      - name: Typecheck
-        run: npm run typecheck
-
-      - name: Test
-        run: npm test
-        env:
-          SERA_TEST_REDIS_URL: redis://127.0.0.1:6379
-
-      - name: Build
-        run: npm run build
 
       - name: Lint the deploy scripts
         run: shellcheck -e SC1091 deploy/*.sh deploy/node-android/*.sh
@@ -170,36 +129,180 @@ jobs:
             docker run --rm -e SERA_DOMAIN=example.test -v "$PWD/deploy/Caddyfile:/etc/caddy/Caddyfile:ro" -v "$globals:/etc/caddy/globals:ro" -v "$PWD/deploy/caddy.sites:/etc/caddy/sites:ro" caddy:2.11-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
           done
 
-  images:
-    name: Build container images
+  verify-build:
+    name: Typecheck and build
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-    needs: verify
-    permissions:
-      contents: read
-      packages: write
-
-    env:
-      IMAGE_API: ghcr.io/${{ github.repository_owner }}/sera-api
-      IMAGE_WEB: ghcr.io/${{ github.repository_owner }}/sera-web
-      PUSH: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+    timeout-minutes: 10
 
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
 
-      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
-          platforms: arm64
+          node-version: '24.18.1'
+          cache: npm
+
+      - name: Cache Next.js build
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: apps/web/.next/cache
+          key: next-${{ runner.os }}-${{ hashFiles('package-lock.json', 'packages/contracts/**', 'apps/web/**') }}
+          restore-keys: |
+            next-${{ runner.os }}-
+
+      - name: Install
+        run: npm ci --ignore-scripts --no-audit --no-fund --prefer-offline
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+  verify-test:
+    name: Test (shard ${{ matrix.shard }}/2)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+
+    services:
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '24.18.1'
+          cache: npm
+
+      - name: Resolve FFmpeg cache key
+        id: ffmpeg-cache-key
+        run: |
+          . /etc/os-release
+          echo "key=ffmpeg-deb-${ID}-${VERSION_ID}-${ImageVersion:-default}-$(uname -m)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache FFmpeg packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ~/.cache/apt-ffmpeg
+          key: ${{ steps.ffmpeg-cache-key.outputs.key }}
+
+      - name: Cache yt-dlp binary
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ~/.cache/sera-tools
+          key: ytdlp-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/tools.manifest.json') }}
+
+      - name: Install dependencies and media tools
+        run: |
+          install_npm() {
+            npm ci --ignore-scripts --no-audit --no-fund --prefer-offline
+          }
+
+          install_ffmpeg() {
+            cache_dir="$HOME/.cache/apt-ffmpeg"
+            if compgen -G "$cache_dir/*.deb" > /dev/null; then
+              sudo DEBIAN_FRONTEND=noninteractive dpkg -i "$cache_dir"/*.deb || {
+                sudo apt-get update
+                sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends -f
+              }
+            else
+              mkdir -p "$cache_dir/partial"
+              sudo apt-get update
+              sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+                -o "Dir::Cache::archives=$cache_dir" \
+                -o APT::Keep-Downloaded-Packages=true \
+                -o APT::Sandbox::User=root \
+                ffmpeg
+              sudo rm -rf "$cache_dir/partial" "$cache_dir/lock"
+              sudo chown -R "$(id -u):$(id -g)" "$cache_dir"
+            fi
+            ffmpeg -version | head -n 1
+          }
+
+          install_ytdlp() {
+            cache_bin="$HOME/.cache/sera-tools/yt-dlp"
+            if [ ! -x "$cache_bin" ]; then
+              mkdir -p "$HOME/.cache/sera-tools"
+              VERSION=$(node -p "require('./scripts/tools.manifest.json').ytdlp.version")
+              curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 20 -o /tmp/yt-dlp \
+                "https://github.com/yt-dlp/yt-dlp/releases/download/${VERSION}/yt-dlp_linux"
+              curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 20 -o /tmp/SHA2-256SUMS \
+                "https://github.com/yt-dlp/yt-dlp/releases/download/${VERSION}/SHA2-256SUMS"
+              EXPECTED=$(grep ' yt-dlp_linux$' /tmp/SHA2-256SUMS | cut -d' ' -f1)
+              ACTUAL=$(sha256sum /tmp/yt-dlp | cut -d' ' -f1)
+              test -n "$EXPECTED" && test "$EXPECTED" = "$ACTUAL"
+              install -m 0755 /tmp/yt-dlp "$cache_bin"
+            fi
+            sudo install -m 0755 "$cache_bin" /usr/local/bin/yt-dlp
+            yt-dlp --version
+          }
+
+          install_npm &
+          pid_npm=$!
+          install_ffmpeg &
+          pid_ffmpeg=$!
+          install_ytdlp &
+          pid_ytdlp=$!
+
+          status=0
+          wait "$pid_npm" || status=1
+          wait "$pid_ffmpeg" || status=1
+          wait "$pid_ytdlp" || status=1
+          exit "$status"
+
+      - name: Build extractor node
+        run: npm run build:node
+
+      - name: Test
+        run: npx vitest run --shard=${{ matrix.shard }}/2
+        env:
+          SERA_TEST_REDIS_URL: redis://127.0.0.1:6379
+
+  verify:
+    name: Lint, typecheck, test, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [verify-lint, verify-build, verify-test]
+    if: always()
+
+    steps:
+      - name: Check verification jobs
+        env:
+          LINT_RESULT: ${{ needs.verify-lint.result }}
+          BUILD_RESULT: ${{ needs.verify-build.result }}
+          TEST_RESULT: ${{ needs.verify-test.result }}
+        run: |
+          test "$LINT_RESULT" = "success" || { echo "verify-lint: $LINT_RESULT"; exit 1; }
+          test "$BUILD_RESULT" = "success" || { echo "verify-build: $BUILD_RESULT"; exit 1; }
+          test "$TEST_RESULT" = "success" || { echo "verify-test: $TEST_RESULT"; exit 1; }
+
+  images-verify:
+    name: Verify container images
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      IMAGE_API: ghcr.io/${{ github.repository_owner }}/sera-api
+      IMAGE_WEB: ghcr.io/${{ github.repository_owner }}/sera-web
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
 
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
-
-      - name: Log in to GitHub Container Registry
-        if: env.PUSH == 'true'
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Read pinned tool versions
         id: tools
@@ -217,8 +320,8 @@ jobs:
           build-args: |
             YTDLP_VERSION=${{ steps.tools.outputs.ytdlp }}
           tags: ${{ env.IMAGE_API }}:verify
-          cache-from: type=gha,scope=api
-          cache-to: type=gha,mode=max,scope=api
+          cache-from: type=gha,scope=api-amd64
+          cache-to: type=gha,mode=max,scope=api-amd64
 
       - name: Verify the API image has working media tools
         run: |
@@ -231,13 +334,15 @@ jobs:
           docker network create sera-ci >/dev/null
           docker run -d --name sera-redis-ci --network sera-ci redis:7.4-alpine >/dev/null
 
-          common="-e NODE_ENV=production
+          common=(
+            -e NODE_ENV=production
             -e SERA_SECRET=ci-smoke-secret-not-used-in-production
             -e SERA_QUEUE_DRIVER=redis
-            -e SERA_REDIS_URL=redis://sera-redis-ci:6379"
+            -e SERA_REDIS_URL=redis://sera-redis-ci:6379
+          )
 
-                    docker run -d --name sera-api-ci --network sera-ci $common -e SERA_EMBEDDED_WORKER=false -p 4000:4000 "$IMAGE_API:verify" >/dev/null
-                    docker run -d --name sera-worker-ci --network sera-ci $common "$IMAGE_API:verify" node apps/worker/dist/index.js >/dev/null
+          docker run -d --name sera-api-ci --network sera-ci "${common[@]}" -e SERA_EMBEDDED_WORKER=false -p 4000:4000 "$IMAGE_API:verify" >/dev/null
+          docker run -d --name sera-worker-ci --network sera-ci "${common[@]}" "$IMAGE_API:verify" node apps/worker/dist/index.js >/dev/null
 
           for _ in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:4000/health >/dev/null 2>&1; then break; fi
@@ -273,8 +378,8 @@ jobs:
           load: true
           push: false
           tags: ${{ env.IMAGE_WEB }}:verify
-          cache-from: type=gha,scope=web
-          cache-to: type=gha,mode=max,scope=web
+          cache-from: type=gha,scope=web-amd64
+          cache-to: type=gha,mode=max,scope=web-amd64
 
       - name: Verify the web image boots and proxies to the API
         run: |
@@ -309,54 +414,186 @@ jobs:
           docker rm -f sera-web-ci sera-api-web-ci sera-redis-web-ci >/dev/null
           docker network rm sera-web-ci >/dev/null
 
-      - name: Publish API image
-        if: env.PUSH == 'true'
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
-        with:
-          context: .
-          file: docker/api.Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          build-args: |
-            YTDLP_VERSION=${{ steps.tools.outputs.ytdlp }}
-          tags: ${{ env.IMAGE_API }}:${{ github.sha }}
-          cache-from: type=gha,scope=api
-          cache-to: type=gha,mode=max,scope=api
+  images-publish:
+    name: Publish ${{ matrix.target }} image (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    needs: [verify, images-verify]
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    permissions:
+      contents: read
+      packages: write
 
-      - name: Publish web image
-        if: env.PUSH == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: api
+            dockerfile: docker/api.Dockerfile
+            platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-latest
+          - target: api
+            dockerfile: docker/api.Dockerfile
+            platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+          - target: web
+            dockerfile: docker/web.Dockerfile
+            platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-latest
+          - target: web
+            dockerfile: docker/web.Dockerfile
+            platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Read pinned tool versions
+        id: tools
+        if: matrix.target == 'api'
+        run: |
+          echo "ytdlp=$(node -p "require('./scripts/tools.manifest.json').ytdlp.version")" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push image by digest
+        id: build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
         with:
           context: .
-          file: docker/web.Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ env.IMAGE_WEB }}:${{ github.sha }}
-          cache-from: type=gha,scope=web
-          cache-to: type=gha,mode=max,scope=web
+          file: ${{ matrix.dockerfile }}
+          platforms: ${{ matrix.platform }}
+          build-args: ${{ matrix.target == 'api' && format('YTDLP_VERSION={0}', steps.tools.outputs.ytdlp) || '' }}
+          outputs: type=image,name=ghcr.io/${{ github.repository_owner }}/sera-${{ matrix.target }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.target }}-${{ matrix.arch }}
+          cache-to: ${{ matrix.arch == 'arm64' && format('type=gha,mode=max,scope={0}-{1}', matrix.target, matrix.arch) || '' }}
+
+      - name: Export image digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p /tmp/digests
+          digest="${DIGEST#sha256:}"
+          test -n "$digest" && test "$digest" != "$DIGEST"
+          touch "/tmp/digests/$digest"
+
+      - name: Upload image digest
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: digests-${{ matrix.target }}-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  images-promote:
+    name: Promote latest container images
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [verify, images-verify, images-publish]
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    permissions:
+      contents: read
+      packages: write
+
+    env:
+      IMAGE_API: ghcr.io/${{ github.repository_owner }}/sera-api
+      IMAGE_WEB: ghcr.io/${{ github.repository_owner }}/sera-web
+
+    steps:
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download API image digests
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          pattern: digests-api-*
+          path: /tmp/digests/api
+          merge-multiple: true
+
+      - name: Download web image digests
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          pattern: digests-web-*
+          path: /tmp/digests/web
+          merge-multiple: true
+
+      - name: Create multi-arch manifests
+        env:
+          REPO_OWNER: ${{ github.repository_owner }}
+        run: |
+          for target in api web; do
+            image="ghcr.io/${REPO_OWNER}/sera-${target}"
+            sources=()
+            for file in "/tmp/digests/${target}"/*; do
+              test -f "$file"
+              sources+=("${image}@sha256:$(basename "$file")")
+            done
+            test "${#sources[@]}" -eq 2 || { echo "expected 2 arch digests for $target, got ${#sources[@]}"; exit 1; }
+            docker buildx imagetools create --tag "${image}:${GITHUB_SHA}" "${sources[@]}"
+          done
 
       - name: Move latest to this commit, for both images together
-        if: env.PUSH == 'true'
         run: |
           for image in "$IMAGE_API" "$IMAGE_WEB"; do
             docker buildx imagetools create --tag "$image:latest" "$image:$GITHUB_SHA"
           done
 
       - name: Confirm both architectures were published
-        if: env.PUSH == 'true'
         run: |
           for image in "$IMAGE_API" "$IMAGE_WEB"; do
             echo "== $image"
-            docker buildx imagetools inspect "$image:latest" \
-              | grep -E "Platform|Name:" | head -n 8
-            docker buildx imagetools inspect "$image:latest" | grep -q "linux/arm64" \
+            inspect=$(docker buildx imagetools inspect "$image:latest")
+            printf '%s\n' "$inspect" | grep -E "Platform|Name:" | head -n 8
+            printf '%s\n' "$inspect" | grep -q "linux/amd64" \
+              || { echo "amd64 missing from $image"; exit 1; }
+            printf '%s\n' "$inspect" | grep -q "linux/arm64" \
               || { echo "arm64 missing from $image"; exit 1; }
           done
+
+  images:
+    name: Build container images
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [verify, images-verify, images-publish, images-promote]
+    if: always()
+
+    steps:
+      - name: Check container image jobs
+        env:
+          VERIFY_RESULT: ${{ needs.verify.result }}
+          IMAGES_VERIFY_RESULT: ${{ needs.images-verify.result }}
+          PUBLISH_RESULT: ${{ needs.images-publish.result }}
+          PROMOTE_RESULT: ${{ needs.images-promote.result }}
+          SHOULD_PUSH: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+        run: |
+          test "$VERIFY_RESULT" = "success" || { echo "verify: $VERIFY_RESULT"; exit 1; }
+          test "$IMAGES_VERIFY_RESULT" = "success" || { echo "images-verify: $IMAGES_VERIFY_RESULT"; exit 1; }
+          if [ "$SHOULD_PUSH" = "true" ]; then
+            test "$PUBLISH_RESULT" = "success" || { echo "images-publish: $PUBLISH_RESULT"; exit 1; }
+            test "$PROMOTE_RESULT" = "success" || { echo "images-promote: $PROMOTE_RESULT"; exit 1; }
+          fi
 
   android-node:
     name: Test and build Android node
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
 
     defaults:
       run:
@@ -371,11 +608,18 @@ jobs:
           java-version: '17'
 
       - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-home-cache-excludes: caches/build-cache-1
 
-      - name: Run Android unit tests
+      - name: Cache Gradle build cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ~/.gradle/caches/build-cache-1
+          key: gradle-build-cache-${{ runner.os }}-${{ hashFiles('apps/android-node/**') }}
+          restore-keys: |
+            gradle-build-cache-${{ runner.os }}-
+
+      - name: Run Android unit tests and build debug APK
         run: |
           chmod +x gradlew
-          ./gradlew :app:testDebugUnitTest --stacktrace
-
-      - name: Build Android debug APK
-        run: ./gradlew :app:assembleDebug --stacktrace
+          ./gradlew :app:testDebugUnitTest --rerun :app:assembleDebug --build-cache --parallel --stacktrace
