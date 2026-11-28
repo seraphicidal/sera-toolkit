@@ -290,36 +290,19 @@ jobs:
           test "$BUILD_RESULT" = "success" || { echo "verify-build: $BUILD_RESULT"; exit 1; }
           test "$TEST_RESULT" = "success" || { echo "verify-test: $TEST_RESULT"; exit 1; }
 
-  images:
-    name: Build container images
+  images-verify:
+    name: Verify container images
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-    needs: verify
-    permissions:
-      contents: read
-      packages: write
+    timeout-minutes: 15
 
     env:
       IMAGE_API: ghcr.io/${{ github.repository_owner }}/sera-api
       IMAGE_WEB: ghcr.io/${{ github.repository_owner }}/sera-web
-      PUSH: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
 
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
 
-      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130
-        with:
-          platforms: arm64
-
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
-
-      - name: Log in to GitHub Container Registry
-        if: env.PUSH == 'true'
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Read pinned tool versions
         id: tools
@@ -337,8 +320,8 @@ jobs:
           build-args: |
             YTDLP_VERSION=${{ steps.tools.outputs.ytdlp }}
           tags: ${{ env.IMAGE_API }}:verify
-          cache-from: type=gha,scope=api
-          cache-to: type=gha,mode=max,scope=api
+          cache-from: type=gha,scope=api-amd64
+          cache-to: type=gha,mode=max,scope=api-amd64
 
       - name: Verify the API image has working media tools
         run: |
@@ -351,13 +334,15 @@ jobs:
           docker network create sera-ci >/dev/null
           docker run -d --name sera-redis-ci --network sera-ci redis:7.4-alpine >/dev/null
 
-          common="-e NODE_ENV=production
+          common=(
+            -e NODE_ENV=production
             -e SERA_SECRET=ci-smoke-secret-not-used-in-production
             -e SERA_QUEUE_DRIVER=redis
-            -e SERA_REDIS_URL=redis://sera-redis-ci:6379"
+            -e SERA_REDIS_URL=redis://sera-redis-ci:6379
+          )
 
-                    docker run -d --name sera-api-ci --network sera-ci $common -e SERA_EMBEDDED_WORKER=false -p 4000:4000 "$IMAGE_API:verify" >/dev/null
-                    docker run -d --name sera-worker-ci --network sera-ci $common "$IMAGE_API:verify" node apps/worker/dist/index.js >/dev/null
+          docker run -d --name sera-api-ci --network sera-ci "${common[@]}" -e SERA_EMBEDDED_WORKER=false -p 4000:4000 "$IMAGE_API:verify" >/dev/null
+          docker run -d --name sera-worker-ci --network sera-ci "${common[@]}" "$IMAGE_API:verify" node apps/worker/dist/index.js >/dev/null
 
           for _ in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:4000/health >/dev/null 2>&1; then break; fi
@@ -393,8 +378,8 @@ jobs:
           load: true
           push: false
           tags: ${{ env.IMAGE_WEB }}:verify
-          cache-from: type=gha,scope=web
-          cache-to: type=gha,mode=max,scope=web
+          cache-from: type=gha,scope=web-amd64
+          cache-to: type=gha,mode=max,scope=web-amd64
 
       - name: Verify the web image boots and proxies to the API
         run: |
@@ -429,49 +414,125 @@ jobs:
           docker rm -f sera-web-ci sera-api-web-ci sera-redis-web-ci >/dev/null
           docker network rm sera-web-ci >/dev/null
 
-      - name: Publish API image
-        if: env.PUSH == 'true'
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
-        with:
-          context: .
-          file: docker/api.Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          build-args: |
-            YTDLP_VERSION=${{ steps.tools.outputs.ytdlp }}
-          tags: ${{ env.IMAGE_API }}:${{ github.sha }}
-          cache-from: type=gha,scope=api
-          cache-to: type=gha,mode=max,scope=api
+  images-publish:
+    name: Publish ${{ matrix.target }} image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [verify, images-verify]
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    permissions:
+      contents: read
+      packages: write
 
-      - name: Publish web image
-        if: env.PUSH == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: api
+            dockerfile: docker/api.Dockerfile
+          - target: web
+            dockerfile: docker/web.Dockerfile
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130
+        with:
+          platforms: arm64
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Read pinned tool versions
+        id: tools
+        if: matrix.target == 'api'
+        run: |
+          echo "ytdlp=$(node -p "require('./scripts/tools.manifest.json').ytdlp.version")" >> "$GITHUB_OUTPUT"
+
+      - name: Publish image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
         with:
           context: .
-          file: docker/web.Dockerfile
+          file: ${{ matrix.dockerfile }}
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ env.IMAGE_WEB }}:${{ github.sha }}
-          cache-from: type=gha,scope=web
-          cache-to: type=gha,mode=max,scope=web
+          build-args: ${{ matrix.target == 'api' && format('YTDLP_VERSION={0}', steps.tools.outputs.ytdlp) || '' }}
+          tags: ghcr.io/${{ github.repository_owner }}/sera-${{ matrix.target }}:${{ github.sha }}
+          cache-from: |
+            type=gha,scope=${{ matrix.target }}-multi
+            type=gha,scope=${{ matrix.target }}-amd64
+          cache-to: type=gha,mode=max,scope=${{ matrix.target }}-multi
+
+  images-promote:
+    name: Promote latest container images
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [verify, images-verify, images-publish]
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    permissions:
+      contents: read
+      packages: write
+
+    env:
+      IMAGE_API: ghcr.io/${{ github.repository_owner }}/sera-api
+      IMAGE_WEB: ghcr.io/${{ github.repository_owner }}/sera-web
+
+    steps:
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Move latest to this commit, for both images together
-        if: env.PUSH == 'true'
         run: |
           for image in "$IMAGE_API" "$IMAGE_WEB"; do
             docker buildx imagetools create --tag "$image:latest" "$image:$GITHUB_SHA"
           done
 
       - name: Confirm both architectures were published
-        if: env.PUSH == 'true'
         run: |
           for image in "$IMAGE_API" "$IMAGE_WEB"; do
             echo "== $image"
-            docker buildx imagetools inspect "$image:latest" \
-              | grep -E "Platform|Name:" | head -n 8
-            docker buildx imagetools inspect "$image:latest" | grep -q "linux/arm64" \
+            inspect=$(docker buildx imagetools inspect "$image:latest")
+            printf '%s\n' "$inspect" | grep -E "Platform|Name:" | head -n 8
+            printf '%s\n' "$inspect" | grep -q "linux/amd64" \
+              || { echo "amd64 missing from $image"; exit 1; }
+            printf '%s\n' "$inspect" | grep -q "linux/arm64" \
               || { echo "arm64 missing from $image"; exit 1; }
           done
+
+  images:
+    name: Build container images
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [verify, images-verify, images-publish, images-promote]
+    if: always()
+
+    steps:
+      - name: Check container image jobs
+        env:
+          VERIFY_RESULT: ${{ needs.verify.result }}
+          IMAGES_VERIFY_RESULT: ${{ needs.images-verify.result }}
+          PUBLISH_RESULT: ${{ needs.images-publish.result }}
+          PROMOTE_RESULT: ${{ needs.images-promote.result }}
+          SHOULD_PUSH: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+        run: |
+          test "$VERIFY_RESULT" = "success" || { echo "verify: $VERIFY_RESULT"; exit 1; }
+          test "$IMAGES_VERIFY_RESULT" = "success" || { echo "images-verify: $IMAGES_VERIFY_RESULT"; exit 1; }
+          if [ "$SHOULD_PUSH" = "true" ]; then
+            test "$PUBLISH_RESULT" = "success" || { echo "images-publish: $PUBLISH_RESULT"; exit 1; }
+            test "$PROMOTE_RESULT" = "success" || { echo "images-promote: $PROMOTE_RESULT"; exit 1; }
+          fi
 
   android-node:
     name: Test and build Android node
