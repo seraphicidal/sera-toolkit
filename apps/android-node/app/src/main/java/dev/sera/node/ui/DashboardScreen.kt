@@ -858,7 +858,7 @@ private fun ActiveTasksCard(
                     settings.nodeRole == NodeRole.BACKUP &&
                     snapshot.serviceState == NodeServiceState.IDLE_POLLING
                 ) {
-                    "Standing by as backup node — ready if PC node is offline"
+                    "Standing by as backup node, ready if PC node is offline"
                 } else {
                     "No active extraction tasks"
                 }

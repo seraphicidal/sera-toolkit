@@ -19,10 +19,13 @@ export function ShareRedirect() {
   }, []);
 
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-3 pb-14 text-center">
+    <section className="flex flex-1 flex-col items-center justify-center gap-3 pb-14 text-center">
       {missing ? (
         <>
-          <p className="text-[0.9375rem]">There was no link in what was shared.</p>
+          <h1 className="text-base font-medium text-[var(--color-ink)]">No link shared</h1>
+          <p className="text-sm text-[var(--color-ink-muted)]">
+            There was no link in what was shared.
+          </p>
           <Link
             href="/"
             className="text-sm font-medium text-[var(--color-accent)] transition-opacity hover:opacity-75"
@@ -31,10 +34,10 @@ export function ShareRedirect() {
           </Link>
         </>
       ) : (
-        <p className="text-sm text-[var(--color-ink-muted)]" role="status">
-          Opening the shared link…
-        </p>
+        <h1 className="text-sm font-normal text-[var(--color-ink-muted)]" role="status">
+          Opening link…
+        </h1>
       )}
-    </div>
+    </section>
   );
 }

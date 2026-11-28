@@ -698,7 +698,7 @@ export function Downloader({
           role="status"
           className="rounded-xl border border-[var(--color-line)] bg-[var(--color-sunken)] px-3.5 py-2.5 text-center text-xs text-[var(--color-ink-muted)]"
         >
-          Residential extraction nodes are currently offline — some sites may be temporarily
+          Residential extraction nodes are currently offline. Some sites may be temporarily
           unavailable.
         </p>
       )}

@@ -7,10 +7,10 @@ SERA.toolkit is a universal media toolkit for resolving, downloading, trimming, 
 - **Runtime & Tooling**: Node.js `>=22.12.0` (`24.18.1` in CI/Docker), npm workspaces, TypeScript `6.0.3`, Vitest `5.0.0`, ESLint `10.12.0`, Prettier `3.9.6` (`prettier-plugin-tailwindcss` `0.8.1`).
 - **Backend (`@sera/api`, `@sera/worker`, `@sera/extractor`, `@sera/engine`, `@sera/contracts`)**: Fastify `^5.12.8`, BullMQ `6.3.11`, `ioredis` `6.0.0`, Zod `^4.6.7`, `undici` `^8.12.4`, `cheerio` `1.2.0`, `yazl` `3.3.1`, `pino` `10.4.0`.
 - **Web (`@sera/web`)**: Next.js `16.4.5` (App Router, `output: 'standalone'`), React `19.3.0`, Tailwind CSS `4.3.3`.
-- **Media Binaries**: Pinned in `scripts/tools.manifest.json` — `yt-dlp` `2026.10.26`, `ffmpeg`/`ffprobe` `n8.1.3-32-g760d10603e`, optional `gallery-dl`.
+- **Media Binaries**: Pinned in `scripts/tools.manifest.json`: `yt-dlp` `2026.10.26`, `ffmpeg`/`ffprobe` `n8.1.3-32-g760d10603e`, optional `gallery-dl`.
 - **Android (`apps/android`, untracked WIP)**: Kotlin `2.0.21`, AGP `8.7.3`, Jetpack Compose BOM `2024.12.01`, OkHttp `4.12.0`, DataStore `1.1.1`, Media3 `1.5.1`.
 
-## Commands (unverified — inspect `package.json` / `.github/workflows/ci.yml`)
+## Commands (unverified; inspect `package.json` / `.github/workflows/ci.yml`)
 
 - **Install & fetch media tools**: `npm ci --ignore-scripts && npm run tools:fetch` (or `npm install`)
 - **Run locally (dev)**: `npm run dev` (runs `tsc --watch`, API on `:4000`, web on `:3200`; pass `-- --worker` for external worker), or individually `npm run dev:api`, `npm run dev:web`, `npm run dev:worker`

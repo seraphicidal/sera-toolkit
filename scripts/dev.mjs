@@ -81,4 +81,4 @@ const readyTimer = setInterval(() => {
 
 start('web', NPM, ['run', 'dev', '--workspace', '@sera/web'], '35');
 
-console.log('SERA.toolkit dev — API on :4000, web on :3200. Ctrl-C to stop.\n');
+console.log('SERA.toolkit dev: API on :4000, web on :3200. Ctrl-C to stop.\n');

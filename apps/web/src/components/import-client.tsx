@@ -173,9 +173,7 @@ export function ImportClient() {
 function HowItWorks() {
   return (
     <section className="animate-fade-up mx-auto flex w-full max-w-[34rem] flex-1 flex-col justify-center gap-5 py-10 sm:py-12">
-      <h1 className="text-lg font-medium text-[var(--color-ink)]">
-        Send an Instagram post to SERA
-      </h1>
+      <h1 className="text-lg font-medium text-[var(--color-ink)]">Import from Instagram</h1>
       <p className="text-[0.9375rem] leading-relaxed text-[var(--color-ink-muted)]">
         Instagram serves photos only to a signed-in browser, so SERA cannot fetch them for you from
         its own server. This page takes the other route: your own browser, already signed in, reads
@@ -184,7 +182,7 @@ function HowItWorks() {
 
       <div className="rounded-[var(--radius-panel)] border border-[var(--color-accent)]/40 bg-[var(--color-accent)]/8 px-4 py-3.5">
         <p className="text-[0.9375rem] leading-relaxed text-[var(--color-ink)]">
-          <span className="font-semibold">First — sign in to instagram.com in this browser.</span>{' '}
+          <span className="font-semibold">First, sign in to instagram.com in this browser.</span>{' '}
           <span className="text-[var(--color-ink-muted)]">
             The Instagram app’s login doesn’t carry over; you have to be logged in on the website
             itself, in the same browser you run SERA from. From the app, tap Share → Copy link and
@@ -233,7 +231,7 @@ function HowItWorks() {
       </ol>
 
       <p className="text-[0.8125rem] text-[var(--color-ink-faint)]">
-        Reels and videos need none of this — paste their link on the{' '}
+        Reels and videos need none of this. Paste their link on the{' '}
         <Link href="/" className="text-[var(--color-accent)] hover:opacity-75">
           home page
         </Link>

@@ -33,7 +33,7 @@ describe('readImportFragment', () => {
     ).toEqual({ ok: true, request: image('https://instagram.xx.fbcdn.net/v/a.mp4') });
   });
 
-  it('admits a post with no media URLs — the server decides it is empty, it is not an abuse vector', () => {
+  it('admits a post with no media URLs; the server decides it is empty, not an abuse vector', () => {
     expect(readImportFragment(windowWith(frag(noMedia)).win)).toEqual({
       ok: true,
       request: noMedia,

@@ -12,13 +12,13 @@ describe('buildBookmarklet', () => {
     expect(source).not.toMatch(/import\s+[\w{*]|\brequire\(|createElement\(['"]script/);
   });
 
-  it('loads no code and evaluates nothing — the whole trust boundary', () => {
+  it('loads no code and evaluates nothing (the whole trust boundary)', () => {
     expect(source).not.toMatch(
       /\beval\s*\(|\bnew\s+Function\b|\bFunction\s*\(|\bimport\s*\(|importScripts|document\.write|inner(HTML|Text)|outerHTML|insertAdjacent|\bsrc\s*=|setTimeout\s*\(\s*['"]|setInterval\s*\(\s*['"]/,
     );
   });
 
-  it('opens no popup and posts no message — it navigates the same tab', () => {
+  it('opens no popup and posts no message; it navigates the same tab', () => {
     expect(source).not.toMatch(/window\.open|\.postMessage|addEventListener\(\s*['"]message/);
   });
 

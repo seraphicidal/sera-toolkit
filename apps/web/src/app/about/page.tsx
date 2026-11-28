@@ -21,7 +21,7 @@ function formatGigabytes(bytes: number): string {
 
 function formatNodeAvailability(nodeAvailability: NodeAvailability): string {
   if (nodeAvailability.healthyNodes <= 0) {
-    return 'Extraction nodes: no healthy residential nodes currently online — sources requiring a home connection may fail.';
+    return 'Extraction nodes: no healthy residential nodes currently online. Sources requiring a home connection may fail.';
   }
   const details: string[] = [];
   if (nodeAvailability.primaryNodes !== undefined || nodeAvailability.backupNodes !== undefined) {
@@ -157,8 +157,8 @@ export default async function AboutPage() {
 
       <Section title="Formats">
         <p>
-          Video comes back as MP4, WebM or MOV — whichever the source can be put into without
-          re-encoding — at whatever resolutions the site actually publishes. Audio can be extracted
+          Video comes back as MP4, WebM or MOV (whichever the source can be put into without
+          re-encoding) at whatever resolutions the site actually publishes. Audio can be extracted
           as MP3, M4A, Opus, WAV or FLAC. Images come back untouched, and short videos can be
           converted to GIF.
         </p>
@@ -203,8 +203,8 @@ export default async function AboutPage() {
         <p>
           To see which sites work, the server keeps daily totals per site: how many links were
           looked up and how many downloads were made, how many of each failed and with which error,
-          and how many bytes were sent. That is all that is counted — never your address, the link,
-          your browser or anything else about you — and each day&apos;s totals are deleted after 90
+          and how many bytes were sent. That is all that is counted (never your address, the link,
+          your browser or anything else about you), and each day&apos;s totals are deleted after 90
           days.
         </p>
       </Section>
@@ -253,7 +253,7 @@ export default async function AboutPage() {
         </p>
         <p>
           SERA only handles media that is already publicly accessible. It does not defeat DRM, sign
-          in on your behalf, bypass paywalls, or reach content behind an access control — if a post
+          in on your behalf, bypass paywalls, or reach content behind an access control. If a post
           is private, SERA will tell you so rather than trying to get around it.
         </p>
       </Section>
@@ -267,37 +267,6 @@ export default async function AboutPage() {
         <p className="text-[0.875rem] text-[var(--color-ink-faint)]">
           Run it yourself with Docker, or from source.
         </p>
-      </Section>
-
-      <Section title="Patch notes">
-        <ul className="flex flex-col gap-1.5 text-[0.875rem]">
-          <Limit
-            label="Latest update"
-            value="Per-Node Isolation, Short-Link Resolution, Redis Memory Safety & Upload Concurrency"
-          />
-          <Limit
-            label="Total changes"
-            value="6 releases · 177 file touches · 7,071 lines changed"
-          />
-        </ul>
-        <ul className="mt-1 list-disc space-y-1.5 pl-5 text-[0.875rem]">
-          <li>
-            Enforced strict per-node token isolation and bounded upload concurrency across remote
-            extraction workers.
-          </li>
-          <li>
-            Introduced loopback EgressGuard proxy ensuring yt-dlp and FFmpeg network requests
-            resolve strictly to public IPs with SSRF protection.
-          </li>
-          <li>
-            Streamlined queue memory footprint by pruning resolved media metadata and converted
-            Redis updates to atomic Lua scripts.
-          </li>
-          <li>
-            Accelerated media downloads with concurrent yt-dlp fragments, auto-threaded FFmpeg
-            transcoding, and native in-browser media previews.
-          </li>
-        </ul>
       </Section>
 
       <p className="border-t border-[var(--color-line)] pt-6">

@@ -198,6 +198,9 @@ export default async function PrivacyPage() {
         </p>
         <div className="overflow-x-auto rounded-[var(--radius-panel)] border border-[var(--color-line)] bg-[var(--color-surface)]">
           <table className="w-full text-left text-[0.875rem]">
+            <caption className="sr-only">
+              Strictly necessary localStorage keys stored by SERA.toolkit
+            </caption>
             <thead className="border-b border-[var(--color-line)] bg-[var(--color-sunken)] text-xs text-[var(--color-ink-faint)] uppercase">
               <tr>
                 <th scope="col" className="px-4 py-2.5 font-medium">

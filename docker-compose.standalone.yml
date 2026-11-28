@@ -47,7 +47,7 @@ services:
       dockerfile: docker/api.Dockerfile
     environment:
       NODE_ENV: production
-      SERA_SECRET: ${SERA_SECRET:?set SERA_SECRET in .env — see .env.example}
+      SERA_SECRET: ${SERA_SECRET:?set SERA_SECRET in .env (see .env.example)}
       SERA_CORS_ORIGINS: ${SERA_CORS_ORIGINS:-}
       SERA_QUEUE_DRIVER: memory
       SERA_WORKER_CONCURRENCY: ${SERA_WORKER_CONCURRENCY:-2}

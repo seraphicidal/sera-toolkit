@@ -14,7 +14,7 @@ describe('sanitizeStem', () => {
     expect(sanitizeStem('My Great Video')).toBe('My Great Video');
     expect(sanitizeStem('Track 01 - Intro')).toBe('Track 01 - Intro');
     expect(sanitizeStem('日本語のタイトル')).toBe('日本語のタイトル');
-    expect(sanitizeStem('Café — naïve')).toBe('Café — naïve');
+    expect(sanitizeStem('Café, naïve')).toBe('Café, naïve');
   });
 
   it('removes every path separator rather than escaping it', () => {

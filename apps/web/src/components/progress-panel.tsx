@@ -112,7 +112,7 @@ export function ProgressPanel({
         </ol>
 
         <span role="status" aria-live="polite" className="sr-only">
-          Step {activeStepIndex + 1} of {PIPELINE_STEPS.length}: {activeStepLabel} — {job.step}
+          Step {activeStepIndex + 1} of {PIPELINE_STEPS.length}: {activeStepLabel}, {job.step}
         </span>
       </div>
 
@@ -139,7 +139,7 @@ export function ProgressPanel({
           aria-live="polite"
           className="mt-2.5 text-xs text-[var(--color-ink-muted)]"
         >
-          Connection interrupted — reconnecting…
+          Connection interrupted, reconnecting…
         </p>
       )}
 

@@ -150,7 +150,7 @@ export function ResultPanel({
       copiedMainTimer.current = setTimeout(() => setCopiedMain(false), 2000);
     } else {
       announceCopy(
-        "Couldn't copy automatically — right-click the Download button to copy the link.",
+        "Couldn't copy automatically. Right-click the Download button to copy the link.",
         true,
       );
     }
@@ -234,7 +234,7 @@ export function ResultPanel({
         <div className="mt-3">
           {previewError ? (
             <p className="rounded-xl border border-[var(--color-line)] bg-[var(--color-sunken)] px-3.5 py-3 text-[0.8125rem] text-[var(--color-ink-muted)]">
-              In-browser preview isn&apos;t supported for this format — use Download instead.
+              In-browser preview isn&apos;t supported for this format. Use Download instead.
             </p>
           ) : previewKind === 'video' ? (
             <div className="overflow-hidden rounded-xl border border-[var(--color-line)] bg-black">

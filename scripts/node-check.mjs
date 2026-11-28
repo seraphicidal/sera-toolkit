@@ -102,7 +102,7 @@ try {
   ).json();
   if (info.error) throw new Error(`resolve failed: ${JSON.stringify(info.error)}`);
   const option = info.items[0].options[0];
-  console.log(`resolved ${info.title} — ${option.label} ${option.detail ?? ''}`);
+  console.log(`resolved ${info.title}: ${option.label} ${option.detail ?? ''}`);
 
   const created = await (
     await fetch(`http://127.0.0.1:${port}/api/jobs`, {

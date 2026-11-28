@@ -97,7 +97,7 @@ export function BookmarkletLink() {
 
       {manual && (
         <label className="flex flex-col gap-1 text-[0.75rem] text-[var(--color-ink-faint)]">
-          Couldn’t copy automatically — long-press to select, then Copy:
+          Couldn’t copy automatically. Long-press to select, then Copy:
           <textarea
             ref={manualRef}
             readOnly
@@ -112,7 +112,7 @@ export function BookmarkletLink() {
       {source && (
         <details className="text-[0.75rem] text-[var(--color-ink-faint)]">
           <summary className="cursor-pointer transition-colors select-none hover:text-[var(--color-ink-muted)]">
-            What this runs — it fetches only Instagram, and evaluates nothing
+            What this runs: it fetches only Instagram, and evaluates nothing
           </summary>
           <pre className="mt-2 max-h-72 overflow-auto rounded-lg border border-[var(--color-line)] bg-[var(--color-canvas)] p-3 text-[0.6875rem] leading-relaxed text-[var(--color-ink-muted)]">
             <code>{source}</code>

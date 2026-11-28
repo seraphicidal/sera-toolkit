@@ -9,7 +9,7 @@ import '@/styles/globals.css';
 
 export const metadata: Metadata = {
   title: {
-    default: 'SERA.toolkit — universal media toolkit',
+    default: 'SERA.toolkit - universal media toolkit',
     template: '%s · SERA.toolkit',
   },
   description:
@@ -98,7 +98,9 @@ export default async function RootLayout({ children }: { readonly children: Reac
               >
                 Report Abuse
               </Link>
-              <span className="text-[var(--color-line-strong)]">·</span>
+              <span aria-hidden="true" className="text-[var(--color-line-strong)]">
+                ·
+              </span>
               <Link
                 href="/about"
                 className="rounded-md transition-colors hover:text-[var(--color-ink-muted)]"

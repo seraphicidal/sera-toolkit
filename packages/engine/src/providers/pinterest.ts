@@ -9,7 +9,7 @@ export class PinterestProvider extends YtdlpProvider {
   override readonly priority = 30;
 
   override readonly capabilities: ProviderCapabilities = declare({
-    authRequiredFor: ['photo pins — Pinterest asks crawlers not to read its pages'],
+    authRequiredFor: ['photo pins (Pinterest asks crawlers not to read its pages)'],
   });
 
   override normalize(url: URL): URL {

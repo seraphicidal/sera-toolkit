@@ -37,6 +37,9 @@ describe('Website Legal Pages Content & Compliance', () => {
   const healthIndicatorPath = fileURLToPath(
     new URL('../apps/web/src/components/health-indicator.tsx', import.meta.url),
   );
+  const shareRedirectPath = fileURLToPath(
+    new URL('../apps/web/src/components/share-redirect.tsx', import.meta.url),
+  );
   const apiRoutePath = fileURLToPath(
     new URL('../apps/web/src/app/api/[...path]/route.ts', import.meta.url),
   );
@@ -64,6 +67,7 @@ describe('Website Legal Pages Content & Compliance', () => {
     expect(content).toContain('30 minutes');
     expect(content).toContain('loadServiceInfo');
     expect(content).toContain('scope="col"');
+    expect(content).toContain('<caption');
     expect(content).toContain('thumbnail');
     expect(content).toContain('/api/thumb/:token');
     expect(content).toContain('sera-theme');
@@ -107,9 +111,7 @@ describe('Website Legal Pages Content & Compliance', () => {
     expect(content).toContain('sera-preferred-kind');
     expect(content).toContain('sera-history');
     expect(content).toContain('ClearHistoryButton');
-    expect(content).toContain('Per-Node Isolation');
-    expect(content).toContain('6 releases');
-    expect(content).toContain('7,071 lines changed');
+    expect(content).not.toContain('Patch notes');
     expect(content).toContain('nodeAvailability');
     expect(content).toContain('primaryNodes');
     expect(content).toContain('backupNodes');
@@ -122,6 +124,7 @@ describe('Website Legal Pages Content & Compliance', () => {
     expect(content).toContain('/legal/notice');
     expect(content).toContain('/legal/report');
     expect(content).toContain('NONCE_PATTERN');
+    expect(content).toContain('aria-hidden="true"');
     expect(content).not.toContain('text-[var(--color-ink-faint)]/70');
   });
 
@@ -136,8 +139,10 @@ describe('Website Legal Pages Content & Compliance', () => {
     expect(css).toContain('color-scheme: dark');
     expect(css).toContain('prefers-color-scheme: dark');
     expect(css).toContain('forced-colors: active');
+    expect(css).toContain('--color-warning: oklch(0.62 0.15 75);');
     expect(existsSync(errorBoundaryPath)).toBe(true);
     expect(existsSync(notFoundPath)).toBe(true);
+    expect(readFileSync(shareRedirectPath, 'utf8')).toContain('<h1');
   });
 
   it('verifies item picker removes numeric range bar and gates filter on larger collections', () => {

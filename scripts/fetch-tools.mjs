@@ -92,7 +92,7 @@ function bsdtar() {
   const system32 = join(process.env.SYSTEMROOT ?? 'C:\\Windows', 'System32', 'tar.exe');
   if (existsSync(system32)) return system32;
   fail(
-    'bsdtar not found at System32\\tar.exe — install Windows 10 1803+ or extract FFmpeg manually',
+    'bsdtar not found at System32\\tar.exe; install Windows 10 1803+ or extract FFmpeg manually',
   );
   return 'tar';
 }
@@ -167,7 +167,7 @@ async function fetchYtdlp() {
   const versionFile = join(TOOLS_DIR, 'yt-dlp.version');
   const installed = existsSync(versionFile) ? readFileSync(versionFile, 'utf8').trim() : undefined;
   if (existsSync(target) && !FORCE && installed === spec.version) {
-    log(`yt-dlp ${installed} already present — skipping`);
+    log(`yt-dlp ${installed} already present, skipping`);
     return;
   }
 
@@ -211,14 +211,14 @@ async function fetchFfmpeg() {
   const spec = MANIFEST.ffmpeg;
   const asset = spec.assets[PLATFORM_KEY];
   if (!asset) {
-    log(`no pinned FFmpeg build for ${PLATFORM_KEY} — install ffmpeg and ffprobe yourself`);
+    log(`no pinned FFmpeg build for ${PLATFORM_KEY}; install ffmpeg and ffprobe yourself`);
     return;
   }
 
   const ffmpegTarget = join(TOOLS_DIR, `ffmpeg${EXE}`);
   const ffprobeTarget = join(TOOLS_DIR, `ffprobe${EXE}`);
   if (existsSync(ffmpegTarget) && existsSync(ffprobeTarget) && !FORCE) {
-    log('ffmpeg and ffprobe already present — skipping');
+    log('ffmpeg and ffprobe already present, skipping');
     return;
   }
 
@@ -268,7 +268,7 @@ async function main() {
   if (!ONLY || ONLY === 'ytdlp') await fetchYtdlp();
   if (!ONLY || ONLY === 'ffmpeg') await fetchFfmpeg();
 
-  log('done. The API auto-detects .tools/ — no configuration needed.');
+  log('done. The API auto-detects .tools/ with no configuration needed.');
 }
 
 main().catch((error) => {

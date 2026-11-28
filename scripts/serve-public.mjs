@@ -120,7 +120,7 @@ function supervise(label, command, argsFor, envFor, colour, onLine) {
 
       if (crashes.length > MAX_RESTARTS) {
         process.stdout.write(
-          `${prefix}crashed ${crashes.length} times in a minute — not restarting\n`,
+          `${prefix}crashed ${crashes.length} times in a minute, not restarting\n`,
         );
         shutdown(code ?? 1);
         return;

@@ -49,10 +49,10 @@ services:
       dockerfile: docker/api.Dockerfile
     environment:
       NODE_ENV: production
-      SERA_SECRET: ${SERA_SECRET:?set SERA_SECRET in .env — see .env.example}
+      SERA_SECRET: ${SERA_SECRET:?set SERA_SECRET in .env (see .env.example)}
       SERA_CORS_ORIGINS: ${SERA_CORS_ORIGINS:-}
       SERA_QUEUE_DRIVER: redis
-      SERA_REDIS_URL: ${SERA_REDIS_URL:-redis://:${SERA_REDIS_PASSWORD:?set SERA_REDIS_PASSWORD in .env — see .env.example}@redis:6379}
+      SERA_REDIS_URL: ${SERA_REDIS_URL:-redis://:${SERA_REDIS_PASSWORD:?set SERA_REDIS_PASSWORD in .env (see .env.example)}@redis:6379}
       SERA_EMBEDDED_WORKER: 'false'
       SERA_DATA_DIR: /data
       SERA_RETENTION_SECONDS: ${SERA_RETENTION_SECONDS:-1800}
@@ -140,9 +140,9 @@ services:
       retries: 3
     environment:
       NODE_ENV: production
-      SERA_SECRET: ${SERA_SECRET:?set SERA_SECRET in .env — see .env.example}
+      SERA_SECRET: ${SERA_SECRET:?set SERA_SECRET in .env (see .env.example)}
       SERA_QUEUE_DRIVER: redis
-      SERA_REDIS_URL: ${SERA_REDIS_URL:-redis://:${SERA_REDIS_PASSWORD:?set SERA_REDIS_PASSWORD in .env — see .env.example}@redis:6379}
+      SERA_REDIS_URL: ${SERA_REDIS_URL:-redis://:${SERA_REDIS_PASSWORD:?set SERA_REDIS_PASSWORD in .env (see .env.example)}@redis:6379}
       SERA_DATA_DIR: /data
       SERA_API_URL: http://api:4000
       SERA_WORKER_CONCURRENCY: ${SERA_WORKER_CONCURRENCY:-2}
@@ -214,7 +214,7 @@ services:
         printf 'requirepass "%s"\n' "$$escaped" > /tmp/redis.conf
         exec redis-server /tmp/redis.conf --save '' --appendonly no --maxmemory 256mb --maxmemory-policy noeviction
     environment:
-      REDISCLI_AUTH: ${SERA_REDIS_PASSWORD:?set SERA_REDIS_PASSWORD in .env — see .env.example}
+      REDISCLI_AUTH: ${SERA_REDIS_PASSWORD:?set SERA_REDIS_PASSWORD in .env (see .env.example)}
     healthcheck:
       test: ['CMD', 'redis-cli', 'ping']
       interval: 10s
