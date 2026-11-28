@@ -15,10 +15,159 @@ permissions:
   contents: read
 
 jobs:
-  verify:
-    name: Lint, typecheck, test, build
+  verify-lint:
+    name: Lint, format, and config checks
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '24.18.1'
+          cache: npm
+
+      - name: Install
+        run: npm ci --ignore-scripts --no-audit --no-fund --prefer-offline
+
+      - name: Format
+        run: npm run format
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Lint the deploy scripts
+        run: shellcheck -e SC1091 deploy/*.sh deploy/node-android/*.sh
+
+      - name: Check the API URL is the same at build time and run time
+        run: |
+          baked=$(sed -n 's/^ARG SERA_API_URL=//p' docker/web.Dockerfile)
+          runtime=$(sed -n 's/^[[:space:]]*SERA_API_URL:[[:space:]]*//p' deploy/docker-compose.oracle.yml | head -n 1)
+          echo "built with: $baked"
+          echo "run with:   $runtime"
+          test -n "$baked" && test "$baked" = "$runtime"
+
+      - name: Check Redis cannot evict the queue
+        run: |
+          status=0
+          files=$(git ls-files '*compose*.yml' '*compose*.yaml')
+          test -n "$files"
+          for file in $files; do
+            caps=$(grep -c -- '--maxmemory[[:space:]]' "$file" || true)
+            policies=$(grep -o -- '--maxmemory-policy[[:space:]]*[^[:space:]]*' "$file" | awk '{print $2}' || true)
+            echo "$file: maxmemory x$caps, policy: ${policies:-none}"
+            for policy in $policies; do
+              test "$policy" = noeviction || { echo "::error file=$file::maxmemory-policy $policy can evict queued jobs"; status=1; }
+            done
+            if [ "$caps" -gt 0 ] && [ -z "$policies" ]; then
+              echo "::error file=$file::--maxmemory without an explicit --maxmemory-policy noeviction"
+              status=1
+            fi
+          done
+          exit $status
+
+      - name: Check every documented setting still exists
+        run: |
+          node --input-type=module -e '
+            import { readFileSync } from "node:fs";
+            import { execSync } from "node:child_process";
+
+            const schema = readFileSync("packages/engine/src/config.ts", "utf8");
+            const notAppConfig = new Set([
+              "SERA_API_URL",
+              "SERA_NODE_ID",
+              "SERA_NODE_PROVIDERS",
+              "SERA_NODE_NETWORK_CLASS",
+              "SERA_REDIS_PASSWORD",
+              "SERA_WEB_PORT",
+              "SERA_WORKER_CPUS",
+              "SERA_WORKER_MEMORY",
+              "SERA_IMAGE_API",
+              "SERA_IMAGE_WEB",
+              "SERA_DOMAIN",
+              "SERA_TLS_EMAIL",
+              "SERA_REPO",
+              "SERA_DIR",
+              "SERA_PUBLIC_IP",
+              "SERA_ALERT_NTFY_TOPIC",
+              "SERA_ALERT_REPO",
+              "SERA_NODE_DIR",
+              "SERA_NODE_CHECK_SECONDS",
+            ]);
+            const files = execSync(
+              "git ls-files .env.example deploy docker",
+              { encoding: "utf8" },
+            ).split("\n").filter(Boolean);
+
+            const unknown = new Map();
+            for (const file of files) {
+              for (const [, name] of readFileSync(file, "utf8").matchAll(/\b(SERA_[A-Z0-9_]+)\b/g)) {
+                if (notAppConfig.has(name)) continue;
+                if (schema.includes(name)) continue;
+                if (!unknown.has(name)) unknown.set(name, new Set());
+                unknown.get(name).add(file);
+              }
+            }
+
+            if (unknown.size) {
+              for (const [name, where] of unknown) {
+                console.error(name + "  <- " + [...where].join(", "));
+              }
+              console.error("\nThese are named outside the code but are not in the config schema.");
+              process.exit(1);
+            }
+            console.log("every documented SERA_* setting exists in the schema");
+          '
+
+      - name: Validate the Caddyfile
+        run: |
+          mkdir -p /tmp/globals-none /tmp/globals-email
+          echo 'email ci@example.test' > /tmp/globals-email/email.caddy
+          for globals in /tmp/globals-none /tmp/globals-email; do
+            echo "== globals: $globals"
+            docker run --rm -e SERA_DOMAIN=example.test -v "$PWD/deploy/Caddyfile:/etc/caddy/Caddyfile:ro" -v "$globals:/etc/caddy/globals:ro" -v "$PWD/deploy/caddy.sites:/etc/caddy/sites:ro" caddy:2.11-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+          done
+
+  verify-build:
+    name: Typecheck and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '24.18.1'
+          cache: npm
+
+      - name: Cache Next.js build
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: apps/web/.next/cache
+          key: next-${{ runner.os }}-${{ hashFiles('package-lock.json', 'packages/contracts/**', 'apps/web/**') }}
+          restore-keys: |
+            next-${{ runner.os }}-
+
+      - name: Install
+        run: npm ci --ignore-scripts --no-audit --no-fund --prefer-offline
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+  verify-test:
+    name: Test (shard ${{ matrix.shard }}/2)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
 
     services:
       redis:
@@ -115,114 +264,31 @@ jobs:
           wait "$pid_ytdlp" || status=1
           exit "$status"
 
-      - name: Format
-        run: npm run format
-
-      - name: Lint
-        run: npm run lint
-
-      - name: Typecheck
-        run: npm run typecheck
+      - name: Build extractor node
+        run: npm run build:node
 
       - name: Test
-        run: npm test
+        run: npx vitest run --shard=${{ matrix.shard }}/2
         env:
           SERA_TEST_REDIS_URL: redis://127.0.0.1:6379
 
-      - name: Build
-        run: npm run build
+  verify:
+    name: Lint, typecheck, test, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [verify-lint, verify-build, verify-test]
+    if: always()
 
-      - name: Lint the deploy scripts
-        run: shellcheck -e SC1091 deploy/*.sh deploy/node-android/*.sh
-
-      - name: Check the API URL is the same at build time and run time
+    steps:
+      - name: Check verification jobs
+        env:
+          LINT_RESULT: ${{ needs.verify-lint.result }}
+          BUILD_RESULT: ${{ needs.verify-build.result }}
+          TEST_RESULT: ${{ needs.verify-test.result }}
         run: |
-          baked=$(sed -n 's/^ARG SERA_API_URL=//p' docker/web.Dockerfile)
-          runtime=$(sed -n 's/^[[:space:]]*SERA_API_URL:[[:space:]]*//p' deploy/docker-compose.oracle.yml | head -n 1)
-          echo "built with: $baked"
-          echo "run with:   $runtime"
-          test -n "$baked" && test "$baked" = "$runtime"
-
-      - name: Check Redis cannot evict the queue
-        run: |
-          status=0
-          files=$(git ls-files '*compose*.yml' '*compose*.yaml')
-          test -n "$files"
-          for file in $files; do
-            caps=$(grep -c -- '--maxmemory[[:space:]]' "$file" || true)
-            policies=$(grep -o -- '--maxmemory-policy[[:space:]]*[^[:space:]]*' "$file" | awk '{print $2}' || true)
-            echo "$file: maxmemory x$caps, policy: ${policies:-none}"
-            for policy in $policies; do
-              test "$policy" = noeviction || { echo "::error file=$file::maxmemory-policy $policy can evict queued jobs"; status=1; }
-            done
-            if [ "$caps" -gt 0 ] && [ -z "$policies" ]; then
-              echo "::error file=$file::--maxmemory without an explicit --maxmemory-policy noeviction"
-              status=1
-            fi
-          done
-          exit $status
-
-      - name: Check every documented setting still exists
-        run: |
-          node --input-type=module -e '
-            import { readFileSync } from "node:fs";
-            import { execSync } from "node:child_process";
-
-            const schema = readFileSync("packages/engine/src/config.ts", "utf8");
-            const notAppConfig = new Set([
-              "SERA_API_URL",
-              "SERA_NODE_ID",
-              "SERA_NODE_PROVIDERS",
-              "SERA_NODE_NETWORK_CLASS",
-              "SERA_REDIS_PASSWORD",
-              "SERA_WEB_PORT",
-              "SERA_WORKER_CPUS",
-              "SERA_WORKER_MEMORY",
-              "SERA_IMAGE_API",
-              "SERA_IMAGE_WEB",
-              "SERA_DOMAIN",
-              "SERA_TLS_EMAIL",
-              "SERA_REPO",
-              "SERA_DIR",
-              "SERA_PUBLIC_IP",
-              "SERA_ALERT_NTFY_TOPIC",
-              "SERA_ALERT_REPO",
-              "SERA_NODE_DIR",
-              "SERA_NODE_CHECK_SECONDS",
-            ]);
-            const files = execSync(
-              "git ls-files .env.example deploy docker",
-              { encoding: "utf8" },
-            ).split("\n").filter(Boolean);
-
-            const unknown = new Map();
-            for (const file of files) {
-              for (const [, name] of readFileSync(file, "utf8").matchAll(/\b(SERA_[A-Z0-9_]+)\b/g)) {
-                if (notAppConfig.has(name)) continue;
-                if (schema.includes(name)) continue;
-                if (!unknown.has(name)) unknown.set(name, new Set());
-                unknown.get(name).add(file);
-              }
-            }
-
-            if (unknown.size) {
-              for (const [name, where] of unknown) {
-                console.error(name + "  <- " + [...where].join(", "));
-              }
-              console.error("\nThese are named outside the code but are not in the config schema.");
-              process.exit(1);
-            }
-            console.log("every documented SERA_* setting exists in the schema");
-          '
-
-      - name: Validate the Caddyfile
-        run: |
-          mkdir -p /tmp/globals-none /tmp/globals-email
-          echo 'email ci@example.test' > /tmp/globals-email/email.caddy
-          for globals in /tmp/globals-none /tmp/globals-email; do
-            echo "== globals: $globals"
-            docker run --rm -e SERA_DOMAIN=example.test -v "$PWD/deploy/Caddyfile:/etc/caddy/Caddyfile:ro" -v "$globals:/etc/caddy/globals:ro" -v "$PWD/deploy/caddy.sites:/etc/caddy/sites:ro" caddy:2.11-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
-          done
+          test "$LINT_RESULT" = "success" || { echo "verify-lint: $LINT_RESULT"; exit 1; }
+          test "$BUILD_RESULT" = "success" || { echo "verify-build: $BUILD_RESULT"; exit 1; }
+          test "$TEST_RESULT" = "success" || { echo "verify-test: $TEST_RESULT"; exit 1; }
 
   images:
     name: Build container images
