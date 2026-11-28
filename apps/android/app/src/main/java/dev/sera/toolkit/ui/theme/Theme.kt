@@ -120,16 +120,21 @@ private val SeraTypography = Typography(
 )
 
 @Composable
-fun SeraTheme(
-    preference: ThemePreference = ThemePreference.SYSTEM,
-    content: @Composable () -> Unit,
-) {
+fun isSeraDarkTheme(preference: ThemePreference): Boolean {
     val systemDark = isSystemInDarkTheme()
-    val useDark = when (preference) {
+    return when (preference) {
         ThemePreference.LIGHT -> false
         ThemePreference.DARK -> true
         ThemePreference.SYSTEM -> systemDark
     }
+}
+
+@Composable
+fun SeraTheme(
+    preference: ThemePreference = ThemePreference.SYSTEM,
+    content: @Composable () -> Unit,
+) {
+    val useDark = isSeraDarkTheme(preference)
     val palette = if (useDark) DarkSeraPalette else LightSeraPalette
 
     val colorScheme = if (useDark) {
