@@ -8,7 +8,7 @@ SERA.toolkit is a universal media toolkit for resolving, downloading, trimming, 
 - **Backend (`@sera/api`, `@sera/worker`, `@sera/extractor`, `@sera/engine`, `@sera/contracts`)**: Fastify `^5.12.8`, BullMQ `6.3.11`, `ioredis` `6.0.0`, Zod `^4.6.7`, `undici` `^8.12.4`, `cheerio` `1.2.0`, `yazl` `3.3.1`, `pino` `10.4.0`.
 - **Web (`@sera/web`)**: Next.js `16.4.5` (App Router, `output: 'standalone'`), React `19.3.0`, Tailwind CSS `4.3.3`.
 - **Media Binaries**: Pinned in `scripts/tools.manifest.json`: `yt-dlp` `2026.10.26`, `ffmpeg`/`ffprobe` `n8.1.3-32-g760d10603e`, optional `gallery-dl`.
-- **Android (`apps/android`, untracked WIP)**: Kotlin `2.0.21`, AGP `8.7.3`, Jetpack Compose BOM `2024.12.01`, OkHttp `4.12.0`, DataStore `1.1.1`, Media3 `1.5.1`.
+- **Android (`apps/android`)**: Kotlin `2.0.21`, AGP `8.7.3`, Jetpack Compose BOM `2024.12.01`, Navigation Compose `2.8.5`, WorkManager `2.10.0`, OkHttp `4.12.0`, DataStore `1.1.1`, Coil `2.7.0`, Media3 `1.5.1`.
 
 ## Commands (unverified; inspect `package.json` / `.github/workflows/ci.yml`)
 
@@ -19,6 +19,7 @@ SERA.toolkit is a universal media toolkit for resolving, downloading, trimming, 
 - **Test**: `npm test` (`vitest run`) | `npm run test:watch` | `npm run test:coverage`
 - **Format, Lint, Typecheck, Verify**: `npm run format` / `npm run format:fix`, `npm run lint` / `npm run lint:fix`, `npm run typecheck`, `npm run verify` (all 5 checks)
 - **Live / Integration Checks**: `node scripts/smoke-live.mjs`, `npm run check:providers`, `npm run check:split`, `npm run check:node`, `npm run update-providers`
+- **Android app checks (verified in `apps/android`)**: `./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug` (Windows: `.\gradlew.bat :app:testDebugUnitTest --rerun :app:lintDebug :app:assembleDebug --stacktrace`)
 - **Deploy**: `docker compose up -d` (`docker-compose.yml` or `docker-compose.standalone.yml`), or on a fresh Linux VPS `sudo bash deploy/provision.sh` (`deploy/docker-compose.oracle.yml` + `deploy/Caddyfile` + systemd timers)
 
 ## Directory Map
@@ -29,11 +30,11 @@ SERA.toolkit is a universal media toolkit for resolving, downloading, trimming, 
 - `apps/worker/`: Standalone BullMQ worker process for Redis-backed deployments (`SERA_QUEUE_DRIVER=redis`).
 - `apps/extractor/`: Remote residential extraction node agent that long-polls `/internal/extraction/claim` and uploads outputs.
 - `apps/web/`: Next.js frontend, runtime `/api`+`/health`+`/ready` backend proxy, CSP nonce proxy (`src/proxy.ts`), Tailwind v4 OKLCH theme.
-- `apps/android/`: Untracked WIP Kotlin/Compose Android client (`dev.sera.toolkit`, missing `MainActivity` & UI screens).
+- `apps/android/`: Native Kotlin/Compose Android client (`dev.sera.toolkit`, `MainActivity` + translucent `ShareActivity`, foreground WorkManager downloads, resumable `Range`/`If-Range` transfers).
 - `test/`: Cross-package integration, security, EU compliance, trim, subtitle, audio-tag, and website tests.
 - `scripts/`: Dev runner, pinned binary downloader (`fetch-tools.mjs`), provider checks, split-node E2E checks, and local tunnel server.
 - `docker/` & `deploy/`: Dockerfiles (`api`, `web`), Compose stacks, Caddy config, Oracle VPS provisioning, systemd timers, and Android/Windows node supervisors.
-- `.github/workflows/`: CI verification/image build (`ci.yml`) and daily `yt-dlp` auto-pin PR workflow (`update-ytdlp.yml`).
+- `.github/workflows/`: CI verification/image/Android builds (`ci.yml`), Android client release (`android-release.yml`), Android node release (`android-node-release.yml`), and daily `yt-dlp` auto-pin PR workflow (`update-ytdlp.yml`).
 
 ## How Apps Relate
 
@@ -42,7 +43,7 @@ SERA.toolkit is a universal media toolkit for resolving, downloading, trimming, 
 - `apps/web` never talks to Redis or `yt-dlp`; its Next.js Route Handlers (`apps/web/src/app/api/[...path]/route.ts`, `health/route.ts`, `ready/route.ts`) proxy requests at runtime to `SERA_API_URL` (`@sera/api`).
 - `apps/api` and `apps/worker` share one Docker image (`docker/api.Dockerfile`), Redis (`SERA_REDIS_URL`), and the `media:/data` volume (`SERA_DATA_DIR`).
 - `apps/extractor` connects only to `apps/api` over HTTPS via `/internal/extraction/*`; `apps/worker` dispatches remote tasks to `apps/api` via `RemoteOverHttp`.
-- `apps/android` (when completed) connects directly to `apps/api` endpoints (`/health`, `/api/info`, `/api/media/*`, `/api/jobs/*`, `/api/legal/report`).
+- `apps/android` connects directly to `apps/api` endpoints (`/health`, `/api/info`, `/api/media/*`, `/api/jobs/*`, `/api/legal/report`) and opens `/legal/*` pages on the configured server.
 
 ## Entry Points & Where to Start
 
@@ -66,7 +67,6 @@ SERA.toolkit is a universal media toolkit for resolving, downloading, trimming, 
 - **Shell/CI drift in `docker/web.Dockerfile`**: Working-tree changes moved `SERA_API_URL` from build `ARG` to runtime `ENV` + Route Handlers, so `.github/workflows/ci.yml` (`Check the API URL is the same at build time and run time` grepping `ARG SERA_API_URL=`) will fail unless updated or reconciled.
 - **Redis Lua empty-array quirk**: `PATCH_LUA` in `packages/engine/src/queue/redis.ts` uses `cjson`, which encodes empty Lua tables as `{}`; always decode Redis job records through `parseRedisRecord()` and strip `resolvedMedia`/`rawInfoJson` in patches to keep Redis memory small.
 - **Redis `noeviction` invariant**: CI enforces `--maxmemory-policy noeviction` on all compose files so BullMQ job keys are never evicted.
-- **`apps/android` is incomplete**: Untracked WIP without `MainActivity.kt`, Compose screens, or `gradlew`; `apps/android/app/src/main/AndroidManifest.xml` references `.MainActivity`, so it does not build as-is.
 - **SSRF & `EgressGuard`**: `yt-dlp` and `ffmpeg` are routed through `EgressGuard`'s loopback proxy (`packages/engine/src/security/egress.ts`); `SERA_ALLOW_PRIVATE_ADDRESSES=true` throws `ConfigError` in production.
 - **Dynamic route mounting**: `/api/admin/*` mounts only when `SERA_ADMIN_TOKEN` is non-empty; `/internal/extraction/*` mounts only when `SERA_EXTRACTION_NODE_TOKENS` or `SERA_EXTRACTION_NODE_TOKEN` is set.
 - **Token/CSP coupling**: `apps/web/src/lib/csp.ts` hashes `themeScript` (`themeScriptHash`) for static headers and uses per-request nonces in `apps/web/src/proxy.ts`; changing `themeScript` requires keeping both in sync.
