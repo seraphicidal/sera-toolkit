@@ -476,7 +476,7 @@ jobs:
   android-node:
     name: Test and build Android node
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
 
     defaults:
       run:
@@ -492,10 +492,7 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      - name: Run Android unit tests
+      - name: Run Android unit tests and build debug APK
         run: |
           chmod +x gradlew
-          ./gradlew :app:testDebugUnitTest --stacktrace
-
-      - name: Build Android debug APK
-        run: ./gradlew :app:assembleDebug --stacktrace
+          ./gradlew :app:testDebugUnitTest --rerun :app:assembleDebug --build-cache --parallel --stacktrace
